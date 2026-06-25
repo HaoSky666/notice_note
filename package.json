@@ -1,0 +1,68 @@
+{
+  "name": "notice-note",
+  "version": "0.1.0",
+  "description": "支持 Markdown 笔记和多时间提醒的桌面应用",
+  "main": "src/main.js",
+  "scripts": {
+    "start": "electron .",
+    "lint": "node --check src/main.js && node --check src/preload.js && node --check src/renderer.js",
+    "bundle:editor": "vite build --config vite.editor.config.js",
+    "dist": "npm run bundle:editor && electron-builder --win nsis --x64"
+  },
+  "keywords": [
+    "markdown",
+    "note",
+    "reminder",
+    "electron"
+  ],
+  "author": "",
+  "license": "MIT",
+  "build": {
+    "appId": "com.notice-note.app",
+    "productName": "Notice Note",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "src/**/*",
+      "node_modules/**/*",
+      "package.json"
+    ],
+    "win": {
+      "signAndEditExecutable": false,
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "artifactName": "Notice Note Setup ${version}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Notice Note"
+    }
+  },
+  "dependencies": {
+    "@codemirror/commands": "^6.10.0",
+    "@codemirror/lang-markdown": "^6.5.0",
+    "@codemirror/language": "^6.11.3",
+    "@codemirror/state": "^6.5.2",
+    "@codemirror/view": "^6.39.8",
+    "@lezer/highlight": "^1.2.3"
+  },
+  "overrides": {
+    "dompurify": "^3.3.4"
+  },
+  "devDependencies": {
+    "electron": "^42.3.0",
+    "electron-builder": "^26.0.12",
+    "vite": "^7.2.7"
+  }
+}

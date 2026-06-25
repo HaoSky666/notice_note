@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Notice Note</title>
+    <link rel="stylesheet" href="./styles.css">
+  </head>
+  <body>
+    <aside class="sidebar" id="sidebar">
+      <div class="brand">
+        <div>
+          <h1>Notice Note</h1>
+          <p>Markdown 笔记与提醒</p>
+        </div>
+        <div class="brand-actions">
+          <button id="toggleSidebarButton" class="panel-toggle sidebar-toggle" type="button" title="隐藏笔记列表" aria-label="隐藏笔记列表"></button>
+          <button id="newNoteButton" class="icon-button" title="新建笔记">+</button>
+        </div>
+      </div>
+      <div class="note-list-toolbar">
+        <label>
+          <span>排序</span>
+          <select id="noteSortSelect">
+            <option value="created">创建时间</option>
+            <option value="updated">修改时间</option>
+            <option value="reminder">提醒日期</option>
+          </select>
+        </label>
+        <label>
+          <span>顺序</span>
+          <select id="noteSortOrderSelect">
+            <option value="desc">倒序</option>
+            <option value="asc">顺序</option>
+          </select>
+        </label>
+      </div>
+      <div id="noteList" class="note-list"></div>
+      <section class="storage-panel">
+        <div class="storage-title">保存位置</div>
+        <div id="storagePath" class="storage-path">读取中...</div>
+        <div class="storage-actions">
+          <button id="chooseStorageButton" class="secondary-button">更改位置</button>
+          <button id="resetStorageButton" class="text-button">默认</button>
+        </div>
+      </section>
+      <button id="showSidebarButton" class="panel-toggle sidebar-toggle collapsed-sidebar-button" type="button" title="显示笔记列表" aria-label="显示笔记列表"></button>
+    </aside>
+
+    <main class="workspace">
+      <section class="editor-panel">
+        <div class="topbar">
+          <input id="titleInput" class="title-input" placeholder="笔记标题">
+          <span id="saveStatus">已就绪</span>
+          <button id="insertImageButton" class="secondary-button">插入图片</button>
+          <button id="deleteNoteButton" class="secondary-button">删除</button>
+          <button id="saveButton" class="primary-button">保存</button>
+        </div>
+
+        <div id="contentShell" class="content-shell">
+          <div id="editorRoot" class="live-editor"></div>
+        </div>
+
+        <section class="reminder-panel">
+          <div class="section-heading">
+            <h2>提醒日期</h2>
+            <div class="section-actions">
+              <button id="toggleReminderButton" class="panel-toggle reminder-toggle" type="button" title="隐藏提醒日期" aria-label="隐藏提醒日期"></button>
+              <button id="openReminderConfigButton" class="secondary-button">配置</button>
+            </div>
+          </div>
+          <div id="reminderList" class="reminder-list"></div>
+        </section>
+        <button id="showReminderButton" class="panel-toggle reminder-toggle collapsed-reminder-button" type="button" title="显示提醒日期" aria-label="显示提醒日期"></button>
+      </section>
+    </main>
+
+    <dialog id="reminderDialog" class="reminder-dialog">
+      <form method="dialog" class="dialog-card">
+        <div class="dialog-heading">
+          <h2>提醒配置</h2>
+          <button id="closeReminderDialogButton" class="text-button" type="button">关闭</button>
+        </div>
+        <div class="dialog-section">
+          <label for="reminderInput">添加提醒日期</label>
+          <div class="reminder-form">
+            <input id="reminderInput" type="date">
+            <button id="addReminderButton" class="secondary-button" type="button">添加</button>
+          </div>
+        </div>
+        <div class="dialog-section">
+          <label class="auto-reminder-option">
+            <input id="autoReminderCheckbox" type="checkbox">
+            <span>自动添加明天、下周、下个月三次提醒</span>
+          </label>
+        </div>
+      </form>
+    </dialog>
+    <div id="toastRoot" class="toast-root"></div>
+
+    <script src="./vendor/editor.bundle.js"></script>
+    <script src="./renderer.js"></script>
+  </body>
+</html>
