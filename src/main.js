@@ -3,8 +3,10 @@ const path = require('node:path');
 const fs = require('node:fs/promises');
 const { randomUUID } = require('node:crypto');
 const { pathToFileURL } = require('node:url');
+const matter = require('gray-matter');
 
-const NOTE_FILE_NAME = 'notes.json';
+const NOTES_DIR_NAME = 'notes';
+const OLD_NOTE_FILE_NAME = 'notes.json';
 const CONFIG_FILE_NAME = 'config.json';
 const REMINDER_CHECK_INTERVAL = 30 * 1000;
 const DAILY_REMINDER_TIMES = ['09:30', '15:00'];
@@ -16,6 +18,7 @@ let notes = [];
 let reminderTimer;
 let notesPath;
 let isQuitting = false;
+let noteFileMap = new Map(); // noteId -> filePath
 
 if (process.platform === 'win32') {
   app.setAppUserModelId('com.notice-note.app');
@@ -89,12 +92,99 @@ function createTray() {
   tray.on('double-click', showMainWindow);
 }
 
+function createAppMenu() {
+  const isMac = process.platform === 'darwin';
+
+  const template = [
+    ...(isMac ? [{
+      label: app.name,
+      submenu: [
+        { role: 'about' },
+        { type: 'separator' },
+        { role: 'services' },
+        { type: 'separator' },
+        { role: 'hide' },
+        { role: 'hideOthers' },
+        { role: 'unhide' },
+        { type: 'separator' },
+        { role: 'quit' }
+      ]
+    }] : []),
+    {
+      label: 'File',
+      submenu: [
+        {
+          label: '更改保存位置',
+          click: () => chooseNotesPath()
+        },
+        {
+          label: '恢复默认位置',
+          click: () => resetNotesPath(),
+          enabled: getNotesPath() !== getDefaultNotesPath()
+        },
+        { type: 'separator' },
+        {
+          label: `保存位置: ${getNotesPath()}`,
+          enabled: false
+        },
+        { type: 'separator' },
+        isMac ? { role: 'close' } : { role: 'quit' }
+      ]
+    },
+    {
+      label: 'Edit',
+      submenu: [
+        { role: 'undo' },
+        { role: 'redo' },
+        { type: 'separator' },
+        { role: 'cut' },
+        { role: 'copy' },
+        { role: 'paste' },
+        { role: 'selectAll' }
+      ]
+    },
+    {
+      label: 'View',
+      submenu: [
+        { role: 'reload' },
+        { role: 'forceReload' },
+        { role: 'toggleDevTools' },
+        { type: 'separator' },
+        { role: 'resetZoom' },
+        { role: 'zoomIn' },
+        { role: 'zoomOut' },
+        { type: 'separator' },
+        { role: 'togglefullscreen' }
+      ]
+    },
+    {
+      label: 'Window',
+      submenu: [
+        { role: 'minimize' },
+        { role: 'zoom' },
+        ...(isMac ? [
+          { type: 'separator' },
+          { role: 'front' }
+        ] : [
+          { role: 'close' }
+        ])
+      ]
+    }
+  ];
+
+  Menu.setApplicationMenu(Menu.buildFromTemplate(template));
+}
+
 function getNotesPath() {
   return notesPath || getDefaultNotesPath();
 }
 
 function getDefaultNotesPath() {
-  return path.join(app.getPath('userData'), NOTE_FILE_NAME);
+  return path.join(app.getPath('userData'), NOTES_DIR_NAME);
+}
+
+function getOldNotesJsonPath() {
+  return path.join(app.getPath('userData'), OLD_NOTE_FILE_NAME);
 }
 
 function getConfigPath() {
@@ -102,7 +192,7 @@ function getConfigPath() {
 }
 
 function getNoteAssetDir(noteId) {
-  return path.join(path.dirname(getNotesPath()), IMAGE_ASSET_DIR_NAME, noteId);
+  return path.join(getNotesPath(), IMAGE_ASSET_DIR_NAME, noteId);
 }
 
 function sanitizeFileName(fileName) {
@@ -111,6 +201,36 @@ function sanitizeFileName(fileName) {
     .replace(/\s+/g, ' ')
     .trim()
     || 'image';
+}
+
+function sanitizeNoteFilename(title) {
+  let name = String(title || '未命名笔记')
+    .replace(/[<>:"/\\|?*\x00-\x1F]/g, '_')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/\.+$/, '');
+  return name || '未命名笔记';
+}
+
+async function getUniqueFilePath(dir, baseName) {
+  let filePath = path.join(dir, `${baseName}.md`);
+  try {
+    await fs.access(filePath);
+  } catch {
+    return filePath;
+  }
+
+  let counter = 2;
+  while (counter < 1000) {
+    filePath = path.join(dir, `${baseName}(${counter}).md`);
+    try {
+      await fs.access(filePath);
+    } catch {
+      return filePath;
+    }
+    counter++;
+  }
+  return path.join(dir, `${baseName}-${Date.now()}.md`);
 }
 
 function getImageExtension(fileName, mimeType) {
@@ -174,9 +294,16 @@ async function loadConfig() {
   try {
     const raw = await fs.readFile(getConfigPath(), 'utf8');
     const config = JSON.parse(raw);
-    notesPath = typeof config.notesPath === 'string' && config.notesPath
-      ? config.notesPath
-      : getDefaultNotesPath();
+    if (typeof config.notesPath === 'string' && config.notesPath) {
+      // 兼容旧配置：如果路径指向 .json 文件，转换为同级 notes/ 目录
+      if (config.notesPath.endsWith('.json')) {
+        notesPath = path.join(path.dirname(config.notesPath), NOTES_DIR_NAME);
+      } else {
+        notesPath = config.notesPath;
+      }
+    } else {
+      notesPath = getDefaultNotesPath();
+    }
   } catch (error) {
     notesPath = getDefaultNotesPath();
   }
@@ -263,56 +390,129 @@ function normalizeLoadedNote(input) {
 }
 
 async function loadNotes() {
+  const notesDir = getNotesPath();
   let shouldCreateInitialFile = false;
-  let shouldSaveNormalizedNotes = false;
+
+  // 检查是否有旧的 notes.json 需要迁移（默认路径和自定义路径）
+  const oldJsonPaths = [
+    getOldNotesJsonPath(),
+    // 如果自定义路径是从 .json 转换来的，也检查原路径
+    ...(notesPath ? [path.join(path.dirname(notesPath), OLD_NOTE_FILE_NAME)] : [])
+  ];
+  const uniqueOldPaths = [...new Set(oldJsonPaths)];
+
+  for (const oldJsonPath of uniqueOldPaths) {
+    try {
+      await fs.access(oldJsonPath);
+      await migrateFromJson(oldJsonPath, notesDir);
+    } catch {
+      // 旧文件不存在，无需迁移
+    }
+  }
 
   try {
-    const raw = await fs.readFile(getNotesPath(), 'utf8');
-    const parsed = JSON.parse(raw);
-    notes = Array.isArray(parsed) ? parsed.map((note) => {
-      const noteData = note || {};
-      const normalizedNote = normalizeLoadedNote(noteData);
-      const hasLegacyReminder = Array.isArray(noteData.reminders)
-        && noteData.reminders.some((reminder) => reminder && !reminder.date);
-      if (!noteData.createdAt || !noteData.updatedAt || hasLegacyReminder) {
-        shouldSaveNormalizedNotes = true;
+    const files = await fs.readdir(notesDir);
+    const mdFiles = files.filter(f => f.endsWith('.md'));
+
+    notes = [];
+    noteFileMap.clear();
+
+    for (const file of mdFiles) {
+      const filePath = path.join(notesDir, file);
+      try {
+        const raw = await fs.readFile(filePath, 'utf8');
+        const { data, content } = matter(raw);
+        const noteData = { ...data, content };
+        const normalizedNote = normalizeLoadedNote(noteData);
+        notes.push(normalizedNote);
+        noteFileMap.set(normalizedNote.id, filePath);
+      } catch (error) {
+        console.error(`读取笔记文件失败: ${file}`, error);
       }
-      return normalizedNote;
-    }) : [];
+    }
   } catch (error) {
     if (error.code !== 'ENOENT') {
-      dialog.showErrorBox('读取笔记失败', `无法读取本地笔记数据：${error.message}`);
+      dialog.showErrorBox('读取笔记失败', `无法读取笔记目录：${error.message}`);
     } else {
       shouldCreateInitialFile = true;
     }
     notes = [];
+    noteFileMap.clear();
   }
 
   if (notes.length === 0 && shouldCreateInitialFile) {
-    notes.push(createEmptyNote());
-    await saveNotes();
+    const note = createEmptyNote();
+    notes.push(note);
+    await saveNote(note);
   }
 
   if (notes.length === 0) {
-    notes.push(createEmptyNote());
+    const note = createEmptyNote();
+    notes.push(note);
+    await saveNote(note);
   }
 
   sortNotesByCreatedAt();
-  if (shouldSaveNormalizedNotes) {
-    await saveNotes();
-  }
 }
 
-async function saveNotes() {
-  await fs.mkdir(path.dirname(getNotesPath()), { recursive: true });
-  await fs.writeFile(getNotesPath(), JSON.stringify(notes, null, 2), 'utf8');
+async function migrateFromJson(jsonPath, notesDir) {
+  const raw = await fs.readFile(jsonPath, 'utf8');
+  const parsed = JSON.parse(raw);
+  if (!Array.isArray(parsed) || parsed.length === 0) {
+    return;
+  }
+
+  await fs.mkdir(notesDir, { recursive: true });
+
+  for (const noteData of parsed) {
+    if (!noteData) continue;
+    const normalizedNote = normalizeLoadedNote(noteData);
+    const baseName = sanitizeNoteFilename(normalizedNote.title);
+    const filePath = await getUniqueFilePath(notesDir, baseName);
+    const frontmatter = {
+      id: normalizedNote.id,
+      title: normalizedNote.title,
+      createdAt: normalizedNote.createdAt,
+      updatedAt: normalizedNote.updatedAt,
+      reminders: normalizedNote.reminders
+    };
+    const fileContent = matter.stringify(normalizedNote.content || '', frontmatter);
+    await fs.writeFile(filePath, fileContent, 'utf8');
+  }
+
+  // 迁移完成后重命名旧文件
+  const backupPath = jsonPath + '.bak';
+  await fs.rename(jsonPath, backupPath);
+}
+
+async function saveNote(note) {
+  const notesDir = getNotesPath();
+  await fs.mkdir(notesDir, { recursive: true });
+
+  let filePath = noteFileMap.get(note.id);
+  if (!filePath) {
+    const baseName = sanitizeNoteFilename(note.title);
+    filePath = await getUniqueFilePath(notesDir, baseName);
+    noteFileMap.set(note.id, filePath);
+  }
+
+  const frontmatter = {
+    id: note.id,
+    title: note.title,
+    createdAt: note.createdAt,
+    updatedAt: note.updatedAt,
+    reminders: note.reminders
+  };
+  const fileContent = matter.stringify(note.content || '', frontmatter);
+  await fs.writeFile(filePath, fileContent, 'utf8');
 }
 
 function getStorageInfo() {
   return {
     notesPath: getNotesPath(),
     defaultNotesPath: getDefaultNotesPath(),
-    isDefault: getNotesPath() === getDefaultNotesPath()
+    isDefault: getNotesPath() === getDefaultNotesPath(),
+    format: 'markdown'
   };
 }
 
@@ -373,27 +573,55 @@ async function upsertNote(_event, input) {
   const index = notes.findIndex((item) => item.id === note.id);
 
   if (index >= 0) {
-    notes[index] = { ...notes[index], ...note };
+    const oldNote = notes[index];
+    notes[index] = { ...oldNote, ...note };
+
+    // 如果标题改变了，需要重命名文件
+    if (oldNote.title !== note.title) {
+      const oldPath = noteFileMap.get(note.id);
+      if (oldPath) {
+        const baseName = sanitizeNoteFilename(note.title);
+        const newPath = await getUniqueFilePath(getNotesPath(), baseName);
+        try {
+          await fs.rename(oldPath, newPath);
+          noteFileMap.set(note.id, newPath);
+        } catch (error) {
+          console.error('重命名笔记文件失败:', error);
+        }
+      }
+    }
   } else {
     notes.unshift(note);
   }
 
   sortNotesByCreatedAt();
-  await saveNotes();
+  await saveNote(note);
   scheduleReminderCheck();
   sendNotesChanged();
   return note;
 }
 
 async function deleteNote(_event, noteId) {
+  // 删除文件
+  const filePath = noteFileMap.get(noteId);
+  if (filePath) {
+    try {
+      await fs.unlink(filePath);
+    } catch (error) {
+      console.error('删除笔记文件失败:', error);
+    }
+    noteFileMap.delete(noteId);
+  }
+
   notes = notes.filter((note) => note.id !== noteId);
 
   if (notes.length === 0) {
-    notes.push(createEmptyNote());
+    const note = createEmptyNote();
+    notes.push(note);
+    await saveNote(note);
   }
 
   sortNotesByCreatedAt();
-  await saveNotes();
   scheduleReminderCheck();
   sendNotesChanged();
   return notes;
@@ -406,6 +634,7 @@ async function useNotesPath(nextPath) {
   scheduleReminderCheck();
   sendNotesChanged();
   sendStorageChanged();
+  createAppMenu();
   return {
     notes,
     storage: getStorageInfo()
@@ -413,27 +642,17 @@ async function useNotesPath(nextPath) {
 }
 
 async function chooseNotesPath() {
-  const result = await dialog.showSaveDialog(mainWindow, {
-    title: '选择笔记保存位置',
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: '选择笔记保存目录',
     defaultPath: getNotesPath(),
-    filters: [
-      { name: 'JSON 文件', extensions: ['json'] }
-    ],
-    properties: ['showOverwriteConfirmation']
+    properties: ['openDirectory', 'createDirectory']
   });
 
-  if (result.canceled || !result.filePath) {
+  if (result.canceled || !result.filePaths.length) {
     return null;
   }
 
-  try {
-    await fs.access(result.filePath);
-  } catch (error) {
-    await fs.mkdir(path.dirname(result.filePath), { recursive: true });
-    await fs.writeFile(result.filePath, JSON.stringify(notes, null, 2), 'utf8');
-  }
-
-  return useNotesPath(result.filePath);
+  return useNotesPath(result.filePaths[0]);
 }
 
 async function resetNotesPath() {
@@ -494,7 +713,7 @@ async function markReminderSlotFired(noteId, reminderId, slot) {
   reminder.done = reminder.firedSlots.length >= DAILY_REMINDER_TIMES.length;
   reminder.firedAt = new Date().toISOString();
   note.updatedAt = reminder.firedAt;
-  await saveNotes();
+  await saveNote(note);
 }
 
 async function fireDueReminders() {
@@ -579,7 +798,7 @@ app.whenReady().then(async () => {
     const note = createEmptyNote();
     notes.unshift(note);
     sortNotesByCreatedAt();
-    await saveNotes();
+    await saveNote(note);
     sendNotesChanged();
     return note;
   });
@@ -597,6 +816,7 @@ app.whenReady().then(async () => {
 
   createWindow();
   createTray();
+  createAppMenu();
   scheduleReminderCheck();
 
   app.on('activate', () => {

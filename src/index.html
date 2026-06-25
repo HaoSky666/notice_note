@@ -9,14 +9,17 @@
   <body>
     <aside class="sidebar" id="sidebar">
       <div class="brand">
-        <div>
-          <h1>Notice Note</h1>
-          <p>Markdown 笔记与提醒</p>
-        </div>
         <div class="brand-actions">
-          <button id="toggleSidebarButton" class="panel-toggle sidebar-toggle" type="button" title="隐藏笔记列表" aria-label="隐藏笔记列表"></button>
-          <button id="newNoteButton" class="icon-button" title="新建笔记">+</button>
+          <button id="refreshButton" class="toolbar-btn" type="button" title="刷新列表">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M13.65 2.35A8 8 0 1 0 15 8h-2a6 6 0 1 1-1.77-4.23L9 6h6V0l-1.35 2.35z" fill="currentColor"/></svg>
+          </button>
+          <button id="newNoteButton" class="toolbar-btn" type="button" title="新建笔记">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M14 1H2a1 1 0 0 0-1 1v12a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V2a1 1 0 0 0-1-1zM8 11V5M5 8h6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+          </button>
         </div>
+        <button id="toggleSidebarButton" class="toolbar-btn" type="button" title="隐藏笔记列表" aria-label="隐藏笔记列表">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M2 4h12M2 8h12M2 12h12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+        </button>
       </div>
       <div class="note-list-toolbar">
         <label>
@@ -36,14 +39,6 @@
         </label>
       </div>
       <div id="noteList" class="note-list"></div>
-      <section class="storage-panel">
-        <div class="storage-title">保存位置</div>
-        <div id="storagePath" class="storage-path">读取中...</div>
-        <div class="storage-actions">
-          <button id="chooseStorageButton" class="secondary-button">更改位置</button>
-          <button id="resetStorageButton" class="text-button">默认</button>
-        </div>
-      </section>
       <button id="showSidebarButton" class="panel-toggle sidebar-toggle collapsed-sidebar-button" type="button" title="显示笔记列表" aria-label="显示笔记列表"></button>
     </aside>
 
@@ -51,9 +46,9 @@
       <section class="editor-panel">
         <div class="topbar">
           <input id="titleInput" class="title-input" placeholder="笔记标题">
-          <span id="saveStatus">已就绪</span>
+          <button id="openReminderConfigButton" class="secondary-button">提醒</button>
           <button id="insertImageButton" class="secondary-button">插入图片</button>
-          <button id="deleteNoteButton" class="secondary-button">删除</button>
+          <button id="deleteNoteButton" class="secondary-button danger-button">删除</button>
           <button id="saveButton" class="primary-button">保存</button>
         </div>
 
@@ -64,10 +59,7 @@
         <section class="reminder-panel">
           <div class="section-heading">
             <h2>提醒日期</h2>
-            <div class="section-actions">
-              <button id="toggleReminderButton" class="panel-toggle reminder-toggle" type="button" title="隐藏提醒日期" aria-label="隐藏提醒日期"></button>
-              <button id="openReminderConfigButton" class="secondary-button">配置</button>
-            </div>
+            <button id="toggleReminderButton" class="panel-toggle reminder-toggle" type="button" title="隐藏提醒日期" aria-label="隐藏提醒日期"></button>
           </div>
           <div id="reminderList" class="reminder-list"></div>
         </section>

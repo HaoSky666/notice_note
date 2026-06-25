@@ -3,15 +3,11 @@ const titleInput = document.querySelector('#titleInput');
 const reminderInput = document.querySelector('#reminderInput');
 const reminderList = document.querySelector('#reminderList');
 const editorRoot = document.querySelector('#editorRoot');
-const saveStatus = document.querySelector('#saveStatus');
 const insertImageButton = document.querySelector('#insertImageButton');
 const saveButton = document.querySelector('#saveButton');
 const newNoteButton = document.querySelector('#newNoteButton');
 const addReminderButton = document.querySelector('#addReminderButton');
 const deleteNoteButton = document.querySelector('#deleteNoteButton');
-const storagePath = document.querySelector('#storagePath');
-const chooseStorageButton = document.querySelector('#chooseStorageButton');
-const resetStorageButton = document.querySelector('#resetStorageButton');
 const toastRoot = document.querySelector('#toastRoot');
 const autoReminderCheckbox = document.querySelector('#autoReminderCheckbox');
 const reminderDialog = document.querySelector('#reminderDialog');
@@ -25,6 +21,7 @@ const toggleReminderButton = document.querySelector('#toggleReminderButton');
 const showReminderButton = document.querySelector('#showReminderButton');
 const noteSortSelect = document.querySelector('#noteSortSelect');
 const noteSortOrderSelect = document.querySelector('#noteSortOrderSelect');
+const refreshButton = document.querySelector('#refreshButton');
 
 let notes = [];
 let activeNoteId = null;
@@ -298,10 +295,6 @@ async function handlePastedImage(file) {
   return `${result.markdown}\n`;
 }
 
-function setSaveStatus(text) {
-  saveStatus.textContent = text;
-}
-
 function showReminderToast(reminder) {
   const toast = document.createElement('section');
   toast.className = 'reminder-toast';
@@ -334,13 +327,8 @@ function showReminderToast(reminder) {
 
 function renderStorageInfo() {
   if (!storageInfo) {
-    storagePath.textContent = '读取中...';
     return;
   }
-
-  storagePath.textContent = storageInfo.notesPath;
-  storagePath.title = storageInfo.notesPath;
-  resetStorageButton.disabled = storageInfo.isDefault;
 }
 
 function renderNoteList() {
@@ -484,7 +472,7 @@ function createMarkdownEditor() {
     resolveImageSrc: (src) => src,
     onPasteImage: handlePastedImage,
     onError: (error) => {
-      setSaveStatus(`图片处理失败：${error.message}`);
+      console.error('图片处理失败:', error);
     },
     onChange: (value) => {
       if (isRenderingEditor) {
@@ -517,20 +505,17 @@ function replaceNote(updatedNote) {
 
 async function saveActiveNote() {
   const draft = getDraftNote();
-  setSaveStatus('保存中...');
   const savedNote = await window.noticeNote.saveNote(draft);
   replaceNote(savedNote);
   activeNoteId = savedNote.id;
   renderNoteList();
   renderReminders();
-  setSaveStatus('已保存');
 }
 
 function queueSave() {
-  setSaveStatus('有未保存更改');
   clearTimeout(saveTimer);
   saveTimer = setTimeout(() => {
-    saveActiveNote().catch((error) => setSaveStatus(`保存失败：${error.message}`));
+    saveActiveNote().catch(console.error);
   }, 600);
 }
 
@@ -542,12 +527,10 @@ async function addReminder() {
 
   const date = reminderInput.value;
   if (!parseReminderDate(date)) {
-    setSaveStatus('提醒日期无效');
     return;
   }
 
   if (note.reminders.some((reminder) => getReminderDateKey(reminder) === date)) {
-    setSaveStatus('提醒日期已存在');
     return;
   }
 
@@ -575,14 +558,12 @@ async function addAutoReminders() {
     .filter((reminder) => !existingDates.has(reminder.date));
 
   if (nextReminders.length === 0) {
-    setSaveStatus('自动提醒已存在');
     return;
   }
 
   note.reminders.push(...nextReminders);
   await saveActiveNote();
   renderReminders();
-  setSaveStatus(`已自动添加 ${nextReminders.length} 个提醒`);
 }
 
 async function removeReminder(reminderId) {
@@ -600,7 +581,14 @@ async function createNote() {
   notes = sortNotes(notes);
   activeNoteId = note.id;
   renderEditor();
-  setSaveStatus('已新建');
+}
+
+async function refreshNotes() {
+  notes = sortNotes(await window.noticeNote.listNotes());
+  if (!notes.some((note) => note.id === activeNoteId)) {
+    activeNoteId = notes[0]?.id || null;
+  }
+  renderEditor();
 }
 
 async function deleteActiveNote() {
@@ -617,33 +605,6 @@ async function deleteActiveNote() {
   notes = sortNotes(await window.noticeNote.deleteNote(note.id));
   activeNoteId = notes[0]?.id || null;
   renderEditor();
-  setSaveStatus('已删除');
-}
-
-function applyStorageResult(result) {
-  if (!result) {
-    return;
-  }
-
-  notes = sortNotes(result.notes);
-  storageInfo = result.storage;
-  activeNoteId = notes[0]?.id || null;
-  renderStorageInfo();
-  renderEditor();
-}
-
-async function chooseStorage() {
-  const result = await window.noticeNote.chooseStorage();
-  applyStorageResult(result);
-  if (result) {
-    setSaveStatus('已切换保存位置');
-  }
-}
-
-async function resetStorage() {
-  const result = await window.noticeNote.resetStorage();
-  applyStorageResult(result);
-  setSaveStatus('已恢复默认保存位置');
 }
 
 async function boot() {
@@ -672,7 +633,6 @@ async function boot() {
 
   window.noticeNote.onReminderFired((reminder) => {
     showReminderToast(reminder);
-    setSaveStatus('有提醒到了');
   });
 }
 
@@ -686,13 +646,16 @@ titleInput.addEventListener('input', () => {
 });
 
 saveButton.addEventListener('click', () => {
-  saveActiveNote().catch((error) => setSaveStatus(`保存失败：${error.message}`));
+  saveActiveNote().catch(console.error);
 });
 newNoteButton.addEventListener('click', () => {
-  createNote().catch((error) => setSaveStatus(`新建失败：${error.message}`));
+  createNote().catch(console.error);
+});
+refreshButton.addEventListener('click', () => {
+  refreshNotes().catch(console.error);
 });
 addReminderButton.addEventListener('click', () => {
-  addReminder().catch((error) => setSaveStatus(`添加失败：${error.message}`));
+  addReminder().catch(console.error);
 });
 openReminderConfigButton.addEventListener('click', () => {
   reminderDialog.showModal();
@@ -706,22 +669,16 @@ autoReminderCheckbox.addEventListener('change', () => {
   }
 
   addAutoReminders()
-    .catch((error) => setSaveStatus(`自动添加失败：${error.message}`))
+    .catch(console.error)
     .finally(() => {
       autoReminderCheckbox.checked = false;
     });
 });
 deleteNoteButton.addEventListener('click', () => {
-  deleteActiveNote().catch((error) => setSaveStatus(`删除失败：${error.message}`));
-});
-chooseStorageButton.addEventListener('click', () => {
-  chooseStorage().catch((error) => setSaveStatus(`切换失败：${error.message}`));
-});
-resetStorageButton.addEventListener('click', () => {
-  resetStorage().catch((error) => setSaveStatus(`恢复失败：${error.message}`));
+  deleteActiveNote().catch(console.error);
 });
 insertImageButton.addEventListener('click', () => {
-  insertImage().catch((error) => setSaveStatus(`插入图片失败：${error.message}`));
+  insertImage().catch(console.error);
 });
 noteSortSelect.addEventListener('change', () => {
   localStorage.setItem(NOTE_SORT_KEY, getNoteSortMode());
@@ -746,6 +703,4 @@ showReminderButton.addEventListener('click', () => {
   setReminderCollapsed(false);
 });
 
-boot().catch((error) => {
-  setSaveStatus(`启动失败：${error.message}`);
-});
+boot().catch(console.error);

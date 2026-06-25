@@ -11,9 +11,10 @@
 body {
   display: flex;
   min-width: 900px;
-  min-height: 100vh;
+  height: 100vh;
   margin: 0;
   background: #f7f5f0;
+  overflow: hidden;
 }
 
 button,
@@ -27,20 +28,21 @@ button {
 
 .sidebar {
   width: 300px;
+  height: 100vh;
   border-right: 1px solid #dfd8cc;
   background: #ece6da;
   display: flex;
   flex-direction: column;
   position: relative;
   transition: width 160ms ease;
+  overflow: hidden;
 }
 
 .brand {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 16px;
-  padding: 24px;
+  padding: 10px 12px;
   border-bottom: 1px solid #dfd8cc;
 }
 
@@ -48,18 +50,26 @@ button {
 .section-actions {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 4px;
 }
 
-.brand h1 {
-  margin: 0;
-  font-size: 24px;
+.toolbar-btn {
+  width: 30px;
+  height: 30px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #5f594e;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
 }
 
-.brand p {
-  margin: 6px 0 0;
-  color: #756e62;
-  font-size: 14px;
+.toolbar-btn:hover {
+  background: #dfd8cc;
+  color: #25231f;
 }
 
 .icon-button {
@@ -106,6 +116,10 @@ button {
   border-radius: 3px;
 }
 
+.brand .panel-toggle {
+  font-size: 18px;
+}
+
 .sidebar-toggle::after {
   content: "";
   position: absolute;
@@ -140,8 +154,7 @@ button {
 
 .sidebar.is-collapsed .brand,
 .sidebar.is-collapsed .note-list-toolbar,
-.sidebar.is-collapsed .note-list,
-.sidebar.is-collapsed .storage-panel {
+.sidebar.is-collapsed .note-list {
   display: none;
 }
 
@@ -156,6 +169,23 @@ button {
   flex: 1;
   overflow: auto;
   padding: 12px;
+}
+
+.note-list::-webkit-scrollbar {
+  width: 6px;
+}
+
+.note-list::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.note-list::-webkit-scrollbar-thumb {
+  background: #cfc4b2;
+  border-radius: 3px;
+}
+
+.note-list::-webkit-scrollbar-thumb:hover {
+  background: #a99d8b;
 }
 
 .note-list-toolbar {
@@ -189,27 +219,6 @@ button {
 .note-list-toolbar select:focus {
   border-color: #2f6b55;
   box-shadow: 0 0 0 2px rgba(47, 107, 85, 0.12);
-}
-
-.storage-panel {
-  border-top: 1px solid #dfd8cc;
-  padding: 14px 16px 16px;
-  display: grid;
-  gap: 8px;
-}
-
-.storage-title {
-  font-size: 13px;
-  font-weight: 700;
-  color: #5f594e;
-}
-
-.storage-path {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: #756e62;
-  font-size: 12px;
 }
 
 .storage-actions {
@@ -281,7 +290,9 @@ button {
 .workspace {
   flex: 1;
   min-width: 0;
+  height: 100vh;
   display: flex;
+  overflow: hidden;
 }
 
 .editor-panel {
@@ -314,19 +325,23 @@ button {
   outline: none;
 }
 
-#saveStatus {
-  color: #756e62;
-  font-size: 13px;
-  white-space: nowrap;
-}
-
 .primary-button,
 .secondary-button,
 .text-button {
-  border-radius: 8px;
-  border: 1px solid #bfb5a5;
-  padding: 8px 14px;
-  background: #fffaf0;
+  border-radius: 6px;
+  border: 1px solid #dfd8cc;
+  padding: 7px 14px;
+  background: #fffdf8;
+  color: #5f594e;
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+
+.primary-button:hover,
+.secondary-button:hover {
+  background: #f5eee2;
+  border-color: #cfc4b2;
   color: #25231f;
 }
 
@@ -343,6 +358,23 @@ button {
   color: #fff;
 }
 
+.primary-button:hover {
+  background: #245a46;
+  border-color: #245a46;
+  color: #fff;
+}
+
+.danger-button {
+  color: #a94d35;
+  border-color: #e8cbbf;
+}
+
+.danger-button:hover {
+  background: #fceee8;
+  border-color: #d4a99a;
+  color: #8b3a28;
+}
+
 .text-button {
   padding: 4px 8px;
   border-color: transparent;
@@ -355,6 +387,24 @@ button {
   min-height: 0;
   display: flex;
   background: #fffdf8;
+  overflow: auto;
+}
+
+.content-shell::-webkit-scrollbar {
+  width: 6px;
+}
+
+.content-shell::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.content-shell::-webkit-scrollbar-thumb {
+  background: #cfc4b2;
+  border-radius: 3px;
+}
+
+.content-shell::-webkit-scrollbar-thumb:hover {
+  background: #a99d8b;
 }
 
 .live-editor {
