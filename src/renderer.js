@@ -188,9 +188,20 @@ function hasTodayPendingReminder(note) {
   });
 }
 
+function skipWeekend(date) {
+  const day = date.getDay();
+  if (day === 0) {
+    date.setDate(date.getDate() + 1);
+  } else if (day === 6) {
+    date.setDate(date.getDate() + 2);
+  }
+  return date;
+}
+
 function createReminderDate(daysToAdd) {
   const date = new Date();
   date.setDate(date.getDate() + daysToAdd);
+  skipWeekend(date);
   return toLocalDateKey(date);
 }
 
@@ -204,6 +215,7 @@ function createNextMonthReminderDate() {
     targetMonth,
     Math.min(today.getDate(), lastDayOfTargetMonth)
   );
+  skipWeekend(date);
   return toLocalDateKey(date);
 }
 
