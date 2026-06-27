@@ -13,30 +13,35 @@
           <button id="refreshButton" class="toolbar-btn" type="button" title="刷新列表">
             <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M13.65 2.35A8 8 0 1 0 15 8h-2a6 6 0 1 1-1.77-4.23L9 6h6V0l-1.35 2.35z" fill="currentColor"/></svg>
           </button>
-          <button id="newNoteButton" class="toolbar-btn" type="button" title="新建笔记">
-            <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M14 1H2a1 1 0 0 0-1 1v12a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V2a1 1 0 0 0-1-1zM8 11V5M5 8h6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
-          </button>
+          <div class="new-menu">
+            <button id="newNoteButton" class="toolbar-btn" type="button" title="新建">
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M14 1H2a1 1 0 0 0-1 1v12a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V2a1 1 0 0 0-1-1zM8 11V5M5 8h6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+            </button>
+            <div id="newMenuDropdown" class="new-menu-dropdown">
+              <button id="newNoteOption" class="new-menu-item">新建笔记</button>
+              <button id="newFolderOption" class="new-menu-item">新建文件夹</button>
+            </div>
+          </div>
         </div>
         <button id="toggleSidebarButton" class="toolbar-btn" type="button" title="隐藏笔记列表" aria-label="隐藏笔记列表">
           <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M2 4h12M2 8h12M2 12h12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
         </button>
       </div>
       <div class="note-list-toolbar">
-        <label>
-          <span>排序</span>
+        <div class="breadcrumb" id="breadcrumb">
+          <button class="breadcrumb-item active" data-folder-id="">全部笔记</button>
+        </div>
+        <div class="sort-controls">
           <select id="noteSortSelect">
             <option value="created">创建时间</option>
             <option value="updated">修改时间</option>
             <option value="reminder">提醒日期</option>
           </select>
-        </label>
-        <label>
-          <span>顺序</span>
           <select id="noteSortOrderSelect">
             <option value="desc">倒序</option>
             <option value="asc">顺序</option>
           </select>
-        </label>
+        </div>
       </div>
       <div id="noteList" class="note-list"></div>
       <button id="showSidebarButton" class="panel-toggle sidebar-toggle collapsed-sidebar-button" type="button" title="显示笔记列表" aria-label="显示笔记列表"></button>

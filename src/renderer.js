@@ -22,9 +22,15 @@ const showReminderButton = document.querySelector('#showReminderButton');
 const noteSortSelect = document.querySelector('#noteSortSelect');
 const noteSortOrderSelect = document.querySelector('#noteSortOrderSelect');
 const refreshButton = document.querySelector('#refreshButton');
+const newMenuDropdown = document.querySelector('#newMenuDropdown');
+const newNoteOption = document.querySelector('#newNoteOption');
+const newFolderOption = document.querySelector('#newFolderOption');
+const breadcrumb = document.querySelector('#breadcrumb');
 
 let notes = [];
+let folders = [];
 let activeNoteId = null;
+let activeFolderId = null;
 let saveTimer;
 let storageInfo = null;
 let markdownEditor = null;
@@ -179,6 +185,153 @@ function sortNotes(noteItems) {
 
     return direction * (getTimeValue(a.createdAt) - getTimeValue(b.createdAt));
   });
+}
+
+function getFilteredNotes() {
+  return notes.filter(note => note.folderId === activeFolderId);
+}
+
+function getCurrentFolders() {
+  return folders.filter(folder => folder.parentId === activeFolderId);
+}
+
+function renderBreadcrumb() {
+  breadcrumb.innerHTML = '';
+
+  // 调试
+  const debug = document.createElement('div');
+  debug.style.cssText = 'font-size:11px;color:red;';
+  debug.textContent = `f:${folders.length} cf:${folders.filter(f=>f.parentId===activeFolderId).length} aid:${activeFolderId}`;
+  breadcrumb.append(debug);
+
+  const buildPath = (folderId) => {
+    const path = [];
+    let current = folderId ? folders.find(f => f.id === folderId) : null;
+    while (current) {
+      path.unshift(current);
+      current = current.parentId ? folders.find(f => f.id === current.parentId) : null;
+    }
+    return path;
+  };
+
+  const rootBtn = document.createElement('button');
+  rootBtn.className = `breadcrumb-item${activeFolderId === null ? ' active' : ''}`;
+  rootBtn.textContent = '全部笔记';
+  rootBtn.addEventListener('click', () => selectFolder(null));
+  breadcrumb.append(rootBtn);
+
+  const path = buildPath(activeFolderId);
+  for (const folder of path) {
+    const sep = document.createElement('span');
+    sep.className = 'breadcrumb-separator';
+    sep.textContent = '>';
+    breadcrumb.append(sep);
+
+    const btn = document.createElement('button');
+    btn.className = `breadcrumb-item${folder.id === activeFolderId ? ' active' : ''}`;
+    btn.textContent = folder.name;
+    btn.addEventListener('click', () => selectFolder(folder.id));
+    breadcrumb.append(btn);
+  }
+}
+
+function renderNoteList() {
+  if (!noteList) {
+    document.title = 'ERROR: noteList not found';
+    return;
+  }
+
+  const currentFolders = getCurrentFolders();
+  const filteredNotes = getFilteredNotes();
+
+  document.title = `Folders:${currentFolders.length} Notes:${filteredNotes.length}`;
+
+  let html = '';
+  for (const folder of currentFolders) {
+    html += `<div class="note-item" style="background:#fffaf0;border:1px solid #dfd8cc;cursor:pointer;padding:12px;margin-bottom:8px;border-radius:8px;">📁 ${folder.name}</div>`;
+  }
+  for (const note of sortNotes(filteredNotes)) {
+    const isActive = note.id === activeNoteId ? ' active' : '';
+    html += `<div class="note-item${isActive}"><strong>${note.title || '未命名笔记'}</strong></div>`;
+  }
+  noteList.innerHTML = html;
+}
+
+function selectFolder(folderId) {
+  activeFolderId = folderId;
+  renderBreadcrumb();
+  renderNoteList();
+}
+
+async function createFolder() {
+  const name = await showFolderNameDialog();
+  if (!name) return;
+
+  try {
+    await window.noticeNote.createFolder(name);
+  } catch (error) {
+    console.error('创建文件夹失败:', error);
+  }
+}
+
+function showFolderNameDialog() {
+  return new Promise((resolve) => {
+    const dialog = document.createElement('div');
+    dialog.className = 'folder-dialog';
+    dialog.innerHTML = `
+      <div class="folder-dialog-content">
+        <label>文件夹名称</label>
+        <input type="text" id="folderNameInput" placeholder="新建文件夹" autofocus>
+        <div class="folder-dialog-actions">
+          <button class="secondary-button" id="folderDialogCancel">取消</button>
+          <button class="primary-button" id="folderDialogConfirm">确定</button>
+        </div>
+      </div>
+    `;
+    document.body.append(dialog);
+
+    const input = dialog.querySelector('#folderNameInput');
+    const cancelBtn = dialog.querySelector('#folderDialogCancel');
+    const confirmBtn = dialog.querySelector('#folderDialogConfirm');
+
+    input.focus();
+    input.select();
+
+    const close = (value) => {
+      dialog.remove();
+      resolve(value);
+    };
+
+    cancelBtn.addEventListener('click', () => close(null));
+    confirmBtn.addEventListener('click', () => close(input.value.trim()));
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') close(input.value.trim());
+      if (e.key === 'Escape') close(null);
+    });
+  });
+}
+
+async function deleteFolder(folderId) {
+  const folder = folders.find(f => f.id === folderId);
+  if (!folder) return;
+
+  const noteCount = getFolderNoteCount(folderId);
+  const message = noteCount > 0
+    ? `确定删除文件夹「${folder.name}」吗？该文件夹下有 ${noteCount} 个笔记，将会一起删除。`
+    : `确定删除文件夹「${folder.name}」吗？`;
+
+  if (!confirm(message)) return;
+
+  try {
+    await window.noticeNote.deleteFolder(folderId);
+    if (activeFolderId === folderId) {
+      activeFolderId = null;
+      renderBreadcrumb();
+      renderNoteList();
+    }
+  } catch (error) {
+    console.error('删除文件夹失败:', error);
+  }
 }
 
 function hasTodayPendingReminder(note) {
@@ -345,8 +498,9 @@ function renderStorageInfo() {
 
 function renderNoteList() {
   noteList.innerHTML = '';
+  const filteredNotes = getFilteredNotes();
 
-  for (const note of sortNotes(notes)) {
+  for (const note of sortNotes(filteredNotes)) {
     const item = document.createElement('button');
     item.className = `note-item${note.id === activeNoteId ? ' active' : ''}`;
     item.type = 'button';
@@ -586,20 +740,23 @@ async function removeReminder(reminderId) {
 }
 
 async function createNote() {
-  const note = await window.noticeNote.createNote();
+  const note = await window.noticeNote.createNote(activeFolderId);
   if (!notes.some((item) => item.id === note.id)) {
     notes.unshift(note);
   }
   notes = sortNotes(notes);
   activeNoteId = note.id;
   renderEditor();
+  renderBreadcrumb();
 }
 
 async function refreshNotes() {
   notes = sortNotes(await window.noticeNote.listNotes());
+  folders = await window.noticeNote.listFolders();
   if (!notes.some((note) => note.id === activeNoteId)) {
     activeNoteId = notes[0]?.id || null;
   }
+  renderBreadcrumb();
   renderEditor();
 }
 
@@ -628,14 +785,32 @@ async function boot() {
   noteSortOrderSelect.value = getNoteSortOrder();
   createMarkdownEditor();
   notes = sortNotes(await window.noticeNote.listNotes());
+  folders = await window.noticeNote.listFolders();
   storageInfo = await window.noticeNote.getStorage();
   activeNoteId = notes[0]?.id || null;
   reminderInput.value = toLocalDateKey(new Date());
-  renderStorageInfo();
+  renderBreadcrumb();
+  renderNoteList();
   renderEditor();
+
+  // 临时：在品牌区域显示文件夹数
+  const brand = document.querySelector('.brand');
+  if (brand) {
+    const badge = document.createElement('div');
+    badge.style.cssText = 'position:absolute;top:50px;left:10px;background:red;color:white;padding:4px 8px;border-radius:4px;font-size:12px;z-index:999;';
+    badge.textContent = `FOLDERS:${folders.length}`;
+    brand.style.position = 'relative';
+    brand.append(badge);
+  }
 
   window.noticeNote.onNotesChanged((nextNotes) => {
     mergeIncomingNotes(nextNotes);
+  });
+
+  window.noticeNote.onFoldersChanged((nextFolders) => {
+    folders = nextFolders;
+    renderBreadcrumb();
+    renderNoteList();
   });
 
   window.noticeNote.onStorageChanged((nextStorageInfo) => {
@@ -661,10 +836,23 @@ saveButton.addEventListener('click', () => {
   saveActiveNote().catch(console.error);
 });
 newNoteButton.addEventListener('click', () => {
-  createNote().catch(console.error);
+  newMenuDropdown.classList.toggle('is-open');
 });
 refreshButton.addEventListener('click', () => {
   refreshNotes().catch(console.error);
+});
+newNoteOption.addEventListener('click', () => {
+  newMenuDropdown.classList.remove('is-open');
+  createNote().catch(console.error);
+});
+newFolderOption.addEventListener('click', () => {
+  newMenuDropdown.classList.remove('is-open');
+  createFolder().catch(console.error);
+});
+document.addEventListener('click', (e) => {
+  if (!e.target.closest('.new-menu')) {
+    newMenuDropdown.classList.remove('is-open');
+  }
 });
 addReminderButton.addEventListener('click', () => {
   addReminder().catch(console.error);
@@ -715,4 +903,4 @@ showReminderButton.addEventListener('click', () => {
   setReminderCollapsed(false);
 });
 
-boot().catch(console.error);
+  boot().catch(console.error);

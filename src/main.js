@@ -15,6 +15,7 @@ const IMAGE_ASSET_DIR_NAME = 'notice_note_images';
 let mainWindow;
 let tray;
 let notes = [];
+let folders = [];
 let reminderTimer;
 let notesPath;
 let isQuitting = false;
@@ -212,6 +213,28 @@ function sanitizeNoteFilename(title) {
   return name || '未命名笔记';
 }
 
+function sanitizeFolderName(name) {
+  return String(name || '新建文件夹')
+    .replace(/[<>:"/\\|?*\x00-\x1F]/g, '_')
+    .replace(/\s+/g, ' ')
+    .trim()
+    || '新建文件夹';
+}
+
+function getFolderPath(folderId) {
+  if (!folderId) return getNotesPath();
+  const folder = folders.find(f => f.id === folderId);
+  if (!folder) return getNotesPath();
+
+  const parts = [];
+  let current = folder;
+  while (current) {
+    parts.unshift(current.name);
+    current = folders.find(f => f.id === current.parentId);
+  }
+  return path.join(getNotesPath(), ...parts);
+}
+
 async function getUniqueFilePath(dir, baseName) {
   let filePath = path.join(dir, `${baseName}.md`);
   try {
@@ -384,9 +407,142 @@ function normalizeLoadedNote(input) {
         .map(normalizeReminder)
         .filter((item) => item.date)
       : [],
+    folderId: input.folderId || null,
     createdAt,
     updatedAt
   };
+}
+
+async function loadFolders() {
+  const notesDir = getNotesPath();
+  folders = [];
+
+  try {
+    const entries = await fs.readdir(notesDir, { withFileTypes: true });
+    for (const entry of entries) {
+      if (entry.isDirectory() && entry.name !== IMAGE_ASSET_DIR_NAME) {
+        const folderPath = path.join(notesDir, entry.name);
+        const metaPath = path.join(folderPath, '.folder.json');
+        try {
+          const meta = await fs.readFile(metaPath, 'utf8');
+          const data = JSON.parse(meta);
+          folders.push({
+            id: data.id || randomUUID(),
+            name: data.name || entry.name,
+            parentId: data.parentId || null,
+            createdAt: data.createdAt || new Date().toISOString()
+          });
+        } catch {
+          folders.push({
+            id: randomUUID(),
+            name: entry.name,
+            parentId: null,
+            createdAt: new Date().toISOString()
+          });
+        }
+      }
+    }
+  } catch (error) {
+    console.error('读取文件夹失败:', error);
+  }
+
+  return folders;
+}
+
+async function createFolder(_event, name) {
+  const folderName = sanitizeFolderName(name);
+  const notesDir = getNotesPath();
+  const folderPath = path.join(notesDir, folderName);
+
+  try {
+    await fs.access(folderPath);
+    throw new Error('文件夹已存在');
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+  }
+
+  await fs.mkdir(folderPath, { recursive: true });
+
+  const folder = {
+    id: randomUUID(),
+    name: folderName,
+    parentId: null,
+    createdAt: new Date().toISOString()
+  };
+
+  const metaPath = path.join(folderPath, '.folder.json');
+  await fs.writeFile(metaPath, JSON.stringify(folder, null, 2), 'utf8');
+
+  folders.push(folder);
+  sendFoldersChanged();
+  return folder;
+}
+
+async function renameFolder(_event, folderId, newName) {
+  const folder = folders.find(f => f.id === folderId);
+  if (!folder) throw new Error('文件夹不存在');
+
+  const oldPath = getFolderPath(folderId);
+  const newFolderName = sanitizeFolderName(newName);
+  const newPath = path.join(getNotesPath(), ...getFolderPathParts(folder).slice(0, -1), newFolderName);
+
+  await fs.rename(oldPath, newPath);
+
+  folder.name = newFolderName;
+  const metaPath = path.join(newPath, '.folder.json');
+  await fs.writeFile(metaPath, JSON.stringify(folder, null, 2), 'utf8');
+
+  sendFoldersChanged();
+  return folder;
+}
+
+async function deleteFolder(_event, folderId) {
+  const folder = folders.find(f => f.id === folderId);
+  if (!folder) throw new Error('文件夹不存在');
+
+  const folderPath = getFolderPath(folderId);
+  await fs.rm(folderPath, { recursive: true, force: true });
+
+  // 删除该文件夹下的所有笔记
+  const notesToDelete = notes.filter(n => n.folderId === folderId);
+  for (const note of notesToDelete) {
+    noteFileMap.delete(note.id);
+  }
+  notes = notes.filter(n => n.folderId !== folderId);
+
+  // 删除子文件夹
+  const childFolders = folders.filter(f => f.parentId === folderId);
+  for (const child of childFolders) {
+    folders = folders.filter(f => f.id !== child.id);
+  }
+
+  folders = folders.filter(f => f.id !== folderId);
+
+  if (notes.length === 0) {
+    const note = createEmptyNote();
+    notes.push(note);
+    await saveNote(note);
+  }
+
+  sendFoldersChanged();
+  sendNotesChanged();
+  return folders;
+}
+
+function getFolderPathParts(folder) {
+  const parts = [];
+  let current = folder;
+  while (current) {
+    parts.unshift(current.name);
+    current = folders.find(f => f.id === current.parentId);
+  }
+  return parts;
+}
+
+function sendFoldersChanged() {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('folders:changed', folders);
+  }
 }
 
 async function loadNotes() {
@@ -410,26 +566,15 @@ async function loadNotes() {
     }
   }
 
-  try {
-    const files = await fs.readdir(notesDir);
-    const mdFiles = files.filter(f => f.endsWith('.md'));
+  // 加载文件夹
+  await loadFolders();
 
+  try {
     notes = [];
     noteFileMap.clear();
 
-    for (const file of mdFiles) {
-      const filePath = path.join(notesDir, file);
-      try {
-        const raw = await fs.readFile(filePath, 'utf8');
-        const { data, content } = matter(raw);
-        const noteData = { ...data, content };
-        const normalizedNote = normalizeLoadedNote(noteData);
-        notes.push(normalizedNote);
-        noteFileMap.set(normalizedNote.id, filePath);
-      } catch (error) {
-        console.error(`读取笔记文件失败: ${file}`, error);
-      }
-    }
+    // 递归扫描目录
+    await scanDirectory(notesDir, null);
   } catch (error) {
     if (error.code !== 'ENOENT') {
       dialog.showErrorBox('读取笔记失败', `无法读取笔记目录：${error.message}`);
@@ -453,6 +598,33 @@ async function loadNotes() {
   }
 
   sortNotesByCreatedAt();
+}
+
+async function scanDirectory(dirPath, folderId) {
+  const entries = await fs.readdir(dirPath, { withFileTypes: true });
+
+  for (const entry of entries) {
+    const fullPath = path.join(dirPath, entry.name);
+
+    if (entry.isFile() && entry.name.endsWith('.md')) {
+      try {
+        const raw = await fs.readFile(fullPath, 'utf8');
+        const { data, content } = matter(raw);
+        const noteData = { ...data, content, folderId };
+        const normalizedNote = normalizeLoadedNote(noteData);
+        notes.push(normalizedNote);
+        noteFileMap.set(normalizedNote.id, fullPath);
+      } catch (error) {
+        console.error(`读取笔记文件失败: ${entry.name}`, error);
+      }
+    } else if (entry.isDirectory() && entry.name !== IMAGE_ASSET_DIR_NAME) {
+      // 查找对应的文件夹记录
+      const folder = folders.find(f => f.name === entry.name && f.parentId === folderId);
+      if (folder) {
+        await scanDirectory(fullPath, folder.id);
+      }
+    }
+  }
 }
 
 async function migrateFromJson(jsonPath, notesDir) {
@@ -486,13 +658,13 @@ async function migrateFromJson(jsonPath, notesDir) {
 }
 
 async function saveNote(note) {
-  const notesDir = getNotesPath();
-  await fs.mkdir(notesDir, { recursive: true });
+  const targetDir = getFolderPath(note.folderId);
+  await fs.mkdir(targetDir, { recursive: true });
 
   let filePath = noteFileMap.get(note.id);
   if (!filePath) {
     const baseName = sanitizeNoteFilename(note.title);
-    filePath = await getUniqueFilePath(notesDir, baseName);
+    filePath = await getUniqueFilePath(targetDir, baseName);
     noteFileMap.set(note.id, filePath);
   }
 
@@ -501,7 +673,8 @@ async function saveNote(note) {
     title: note.title,
     createdAt: note.createdAt,
     updatedAt: note.updatedAt,
-    reminders: note.reminders
+    reminders: note.reminders,
+    folderId: note.folderId
   };
   const fileContent = matter.stringify(note.content || '', frontmatter);
   await fs.writeFile(filePath, fileContent, 'utf8');
@@ -576,17 +749,19 @@ async function upsertNote(_event, input) {
     const oldNote = notes[index];
     notes[index] = { ...oldNote, ...note };
 
-    // 如果标题改变了，需要重命名文件
-    if (oldNote.title !== note.title) {
+    // 如果标题改变了或文件夹改变了，需要移动/重命名文件
+    if (oldNote.title !== note.title || oldNote.folderId !== note.folderId) {
       const oldPath = noteFileMap.get(note.id);
       if (oldPath) {
+        const targetDir = getFolderPath(note.folderId);
+        await fs.mkdir(targetDir, { recursive: true });
         const baseName = sanitizeNoteFilename(note.title);
-        const newPath = await getUniqueFilePath(getNotesPath(), baseName);
+        const newPath = await getUniqueFilePath(targetDir, baseName);
         try {
           await fs.rename(oldPath, newPath);
           noteFileMap.set(note.id, newPath);
         } catch (error) {
-          console.error('重命名笔记文件失败:', error);
+          console.error('移动/重命名笔记文件失败:', error);
         }
       }
     }
@@ -794,14 +969,39 @@ app.whenReady().then(async () => {
   ipcMain.handle('notes:list', () => notes);
   ipcMain.handle('notes:save', upsertNote);
   ipcMain.handle('notes:delete', deleteNote);
-  ipcMain.handle('notes:create', async () => {
+  ipcMain.handle('notes:create', async (_event, folderId) => {
     const note = createEmptyNote();
+    note.folderId = folderId || null;
     notes.unshift(note);
     sortNotesByCreatedAt();
     await saveNote(note);
     sendNotesChanged();
     return note;
   });
+  ipcMain.handle('notes:move', async (_event, noteId, folderId) => {
+    const note = notes.find(n => n.id === noteId);
+    if (!note) throw new Error('笔记不存在');
+
+    const oldPath = noteFileMap.get(noteId);
+    if (oldPath) {
+      const targetDir = getFolderPath(folderId);
+      await fs.mkdir(targetDir, { recursive: true });
+      const baseName = sanitizeNoteFilename(note.title);
+      const newPath = await getUniqueFilePath(targetDir, baseName);
+      await fs.rename(oldPath, newPath);
+      noteFileMap.set(noteId, newPath);
+    }
+
+    note.folderId = folderId || null;
+    note.updatedAt = new Date().toISOString();
+    await saveNote(note);
+    sendNotesChanged();
+    return note;
+  });
+  ipcMain.handle('folders:list', () => folders);
+  ipcMain.handle('folders:create', createFolder);
+  ipcMain.handle('folders:rename', renameFolder);
+  ipcMain.handle('folders:delete', deleteFolder);
   ipcMain.handle('storage:get', () => getStorageInfo());
   ipcMain.handle('storage:choose', chooseNotesPath);
   ipcMain.handle('storage:reset', resetNotesPath);
