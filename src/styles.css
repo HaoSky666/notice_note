@@ -305,21 +305,137 @@ button {
   display: flex;
   align-items: center;
   gap: 10px;
-  background: #fffaf0;
-  border: 1px solid #dfd8cc;
+  background: #f5f0e6;
+  border: 1px solid #e6ddcc;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
 }
 
-.note-item.folder-item .folder-icon {
+.note-item.folder-item:hover {
+  background: #ece3d0;
+  border-color: #d9ccb5;
+}
+
+.folder-icon {
   flex-shrink: 0;
-  color: #756e62;
+  display: inline-flex;
+  align-items: center;
 }
 
-.note-item.folder-item .folder-name {
+.folder-name {
   flex: 1;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   font-weight: 600;
+  font-size: 14px;
+  color: #3d3830;
+}
+
+.folder-count {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: #a09888;
+  background: #e8e0d0;
+  border-radius: 10px;
+  padding: 1px 7px;
+  line-height: 1.5;
+}
+
+.folder-actions {
+  flex-shrink: 0;
+  display: none;
+  gap: 2px;
+  align-items: center;
+}
+
+.note-item.folder-item:hover .folder-actions {
+  display: flex;
+}
+
+.note-item.folder-item:hover .folder-count {
+  display: none;
+}
+
+.folder-action-btn {
+  width: 24px;
+  height: 24px;
+  border: 0;
+  border-radius: 5px;
+  padding: 0;
+  background: transparent;
+  color: #8c8478;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+}
+
+.folder-action-btn:hover {
+  background: #dfd8cc;
+  color: #3d3830;
+}
+
+.folder-action-btn.folder-action-danger:hover {
+  background: #f5ddd5;
+  color: #a94d35;
+}
+
+.note-item.dragging {
+  opacity: 0.4;
+}
+
+.note-item.folder-item.drag-over {
+  background: #ddd4be;
+  border-color: #c4a86a;
+  box-shadow: inset 0 0 0 2px rgba(200, 170, 100, 0.35);
+}
+
+.breadcrumb-item.drag-over {
+  background: #ddd4be !important;
+  border-color: #c4a86a;
+}
+
+.note-item.drag-over-note {
+  border-top: 2px solid #2f6b55;
+}
+
+.context-menu {
+  position: fixed;
+  z-index: 1001;
+  background: #fffdf8;
+  border: 1px solid #d9ccb5;
+  border-radius: 8px;
+  padding: 4px;
+  box-shadow: 0 8px 24px rgba(37, 35, 31, 0.18);
+  min-width: 160px;
+}
+
+.context-menu-item {
+  width: 100%;
+  border: 0;
+  border-radius: 6px;
+  padding: 8px 12px;
+  background: transparent;
+  color: #3d3830;
+  font-size: 13px;
+  text-align: left;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  transition: background 0.1s;
+}
+
+.context-menu-item:hover {
+  background: #f0ebe0;
+}
+
+.context-menu-item svg {
+  flex-shrink: 0;
+  color: #756e62;
 }
 
 .folder-dialog {

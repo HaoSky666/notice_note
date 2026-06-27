@@ -1002,6 +1002,22 @@ app.whenReady().then(async () => {
   ipcMain.handle('folders:create', createFolder);
   ipcMain.handle('folders:rename', renameFolder);
   ipcMain.handle('folders:delete', deleteFolder);
+  ipcMain.handle('folders:move', async (_event, folderId, targetFolderId) => {
+    const folder = folders.find(f => f.id === folderId);
+    if (!folder) throw new Error('文件夹不存在');
+
+    const oldPath = getFolderPath(folderId);
+    folder.parentId = targetFolderId || null;
+    const newPath = getFolderPath(folderId);
+
+    await fs.rename(oldPath, newPath);
+
+    const metaPath = path.join(newPath, '.folder.json');
+    await fs.writeFile(metaPath, JSON.stringify(folder, null, 2), 'utf8');
+
+    sendFoldersChanged();
+    return folder;
+  });
   ipcMain.handle('storage:get', () => getStorageInfo());
   ipcMain.handle('storage:choose', chooseNotesPath);
   ipcMain.handle('storage:reset', resetNotesPath);

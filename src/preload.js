@@ -10,6 +10,7 @@ contextBridge.exposeInMainWorld('noticeNote', {
   createFolder: (name) => ipcRenderer.invoke('folders:create', name),
   renameFolder: (folderId, newName) => ipcRenderer.invoke('folders:rename', folderId, newName),
   deleteFolder: (folderId) => ipcRenderer.invoke('folders:delete', folderId),
+  moveFolder: (folderId, targetFolderId) => ipcRenderer.invoke('folders:move', folderId, targetFolderId),
   getStorage: () => ipcRenderer.invoke('storage:get'),
   chooseStorage: () => ipcRenderer.invoke('storage:choose'),
   resetStorage: () => ipcRenderer.invoke('storage:reset'),
