@@ -3,6 +3,7 @@ const titleInput = document.querySelector('#titleInput');
 const reminderInput = document.querySelector('#reminderInput');
 const reminderList = document.querySelector('#reminderList');
 const editorRoot = document.querySelector('#editorRoot');
+const contentShell = document.querySelector('#contentShell');
 const insertImageButton = document.querySelector('#insertImageButton');
 const saveButton = document.querySelector('#saveButton');
 const newNoteButton = document.querySelector('#newNoteButton');
@@ -17,10 +18,9 @@ const sidebar = document.querySelector('#sidebar');
 const toggleSidebarButton = document.querySelector('#toggleSidebarButton');
 const showSidebarButton = document.querySelector('#showSidebarButton');
 const editorPanel = document.querySelector('.editor-panel');
+const editorTopbar = document.querySelector('#editorTopbar');
 const toggleReminderButton = document.querySelector('#toggleReminderButton');
 const showReminderButton = document.querySelector('#showReminderButton');
-const noteSortSelect = document.querySelector('#noteSortSelect');
-const noteSortOrderSelect = document.querySelector('#noteSortOrderSelect');
 const refreshButton = document.querySelector('#refreshButton');
 const newMenuDropdown = document.querySelector('#newMenuDropdown');
 const newNoteOption = document.querySelector('#newNoteOption');
@@ -70,9 +70,12 @@ let activeWorkspaceTabKey = null;
 let filePreviewVersion = 0;
 const SIDEBAR_COLLAPSED_KEY = 'notice-note:sidebar-collapsed';
 const REMINDER_COLLAPSED_KEY = 'notice-note:reminder-collapsed';
-const NOTE_SORT_KEY = 'notice-note:note-sort';
-const NOTE_SORT_ORDER_KEY = 'notice-note:note-sort-order';
 const DAILY_REMINDER_SLOTS = ['09:30', '15:00'];
+const editorEmptyState = document.createElement('div');
+editorEmptyState.className = 'editor-empty-state';
+editorEmptyState.hidden = true;
+editorEmptyState.innerHTML = '<h2>欢迎使用 Notice Note</h2><p>从左侧打开一个文件，或点击右上角 + 新建内容。</p>';
+contentShell.append(editorEmptyState);
 
 function readBooleanSetting(key) {
   return localStorage.getItem(key) === 'true';
@@ -172,62 +175,9 @@ function getTimeValue(value) {
   return Date.parse(value) || 0;
 }
 
-function getReminderSortTime(note, order) {
-  const pendingTimes = (note.reminders || [])
-    .filter((reminder) => !reminder.done)
-    .map((reminder) => {
-      const dateKey = getReminderDateKey(reminder);
-      return dateKey ? Date.parse(`${dateKey}T00:00:00`) : NaN;
-    })
-    .filter((time) => Number.isFinite(time));
-
-  if (pendingTimes.length === 0) {
-    return null;
-  }
-
-  return order === 'asc' ? Math.min(...pendingTimes) : Math.max(...pendingTimes);
-}
-
-function getNoteSortMode() {
-  const mode = noteSortSelect.value || 'created';
-  return ['created', 'updated', 'reminder'].includes(mode) ? mode : 'created';
-}
-
-function getNoteSortOrder() {
-  return noteSortOrderSelect.value === 'asc' ? 'asc' : 'desc';
-}
-
 function sortNotes(noteItems) {
-  const mode = getNoteSortMode();
-  const order = getNoteSortOrder();
-  const direction = order === 'asc' ? 1 : -1;
-
   return [...noteItems].sort((a, b) => {
-    if (mode === 'updated') {
-      return direction * (getTimeValue(a.updatedAt) - getTimeValue(b.updatedAt));
-    }
-
-    if (mode === 'reminder') {
-      const timeA = getReminderSortTime(a, order);
-      const timeB = getReminderSortTime(b, order);
-
-      if (timeA === null && timeB === null) {
-        return direction * (getTimeValue(a.updatedAt) - getTimeValue(b.updatedAt));
-      }
-
-      if (timeA === null) {
-        return 1;
-      }
-
-      if (timeB === null) {
-        return -1;
-      }
-
-      return direction * (timeA - timeB)
-        || direction * (getTimeValue(a.updatedAt) - getTimeValue(b.updatedAt));
-    }
-
-    return direction * (getTimeValue(a.createdAt) - getTimeValue(b.createdAt));
+    return getTimeValue(b.createdAt) - getTimeValue(a.createdAt);
   });
 }
 
@@ -251,6 +201,30 @@ function getWorkspaceTabResource(tab) {
     return resourceFiles.find((file) => file.id === tab.id);
   }
   return notes.find((note) => note.id === tab.id);
+}
+
+function findSidebarEntry(selector, datasetKey, value) {
+  return [...noteList.querySelectorAll(selector)]
+    .find((item) => item.dataset[datasetKey] === value) || null;
+}
+
+function syncSidebarToWorkspaceTab(tab) {
+  const resource = getWorkspaceTabResource(tab);
+  if (!resource || !noteList) {
+    return;
+  }
+
+  const nextFolderId = resource.folderId || null;
+  if (activeFolderId !== nextFolderId) {
+    activeFolderId = nextFolderId;
+    renderBreadcrumb();
+    renderNoteList();
+  }
+
+  const target = tab.type === 'note'
+    ? findSidebarEntry('[data-note-id]', 'noteId', tab.id)
+    : findSidebarEntry('[data-file-id]', 'fileId', tab.id);
+  target?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
 
 function renderWorkspaceTabs() {
@@ -320,11 +294,13 @@ function showWorkspaceTab(tab) {
     renderEditor();
   }
   renderWorkspaceTabs();
+  syncSidebarToWorkspaceTab(tab);
 }
 
 async function activateWorkspaceTab(type, id) {
   const tabKey = getWorkspaceTabKey(type, id);
   if (tabKey === activeWorkspaceTabKey) {
+    syncSidebarToWorkspaceTab({ type, id });
     return;
   }
 
@@ -357,13 +333,17 @@ async function closeWorkspaceTab(tabKey) {
     return;
   }
 
-  if (workspaceTabs.length === 0 && notes[0]) {
-    workspaceTabs.push({ type: 'note', id: notes[0].id });
-  }
   const nextTab = workspaceTabs[Math.min(index, workspaceTabs.length - 1)];
   if (nextTab) {
     showWorkspaceTab(nextTab);
+    return;
   }
+
+  activeWorkspaceTabKey = null;
+  activeNoteId = null;
+  activePdfId = null;
+  activeResourceId = null;
+  renderEditor();
 }
 
 function reconcileWorkspaceTabs() {
@@ -373,15 +353,15 @@ function reconcileWorkspaceTabs() {
   });
 
   if (!activeTab) {
-    if (workspaceTabs.length === 0 && notes[0]) {
-      workspaceTabs.push({ type: 'note', id: notes[0].id });
-    }
     activeTab = workspaceTabs[0] || null;
     if (activeTab) {
       showWorkspaceTab(activeTab);
       return true;
     }
     activeWorkspaceTabKey = null;
+    activeNoteId = null;
+    activePdfId = null;
+    activeResourceId = null;
   }
 
   renderWorkspaceTabs();
@@ -426,7 +406,7 @@ function renderBreadcrumb() {
   };
 
   const rootBtn = document.createElement('button');
-  rootBtn.className = `breadcrumb-item${activeFolderId === null ? ' active' : ''}`;
+  rootBtn.className = `breadcrumb-item breadcrumb-root${activeFolderId === null ? ' active' : ''}`;
   rootBtn.textContent = '全部笔记';
   rootBtn.addEventListener('click', () => selectFolder(null));
   makeBreadcrumbDropTarget(rootBtn, null);
@@ -434,14 +414,10 @@ function renderBreadcrumb() {
 
   const path = buildPath(activeFolderId);
   for (const folder of path) {
-    const sep = document.createElement('span');
-    sep.className = 'breadcrumb-separator';
-    sep.textContent = '>';
-    breadcrumb.append(sep);
-
     const btn = document.createElement('button');
-    btn.className = `breadcrumb-item${folder.id === activeFolderId ? ' active' : ''}`;
+    btn.className = `breadcrumb-item breadcrumb-child${folder.id === activeFolderId ? ' active' : ''}`;
     btn.textContent = folder.name;
+    btn.title = folder.name;
     btn.addEventListener('click', () => selectFolder(folder.id));
     makeBreadcrumbDropTarget(btn, folder.id);
     breadcrumb.append(btn);
@@ -563,6 +539,7 @@ function renderNoteList() {
     const item = document.createElement('button');
     item.className = `note-item${!activePdfId && !activeResourceId && note.id === activeNoteId ? ' active' : ''}`;
     item.type = 'button';
+    item.dataset.noteId = note.id;
     item.addEventListener('click', () => selectNote(note.id).catch(console.error));
 
     // Draggable: notes can be dragged into folders
@@ -598,14 +575,23 @@ function renderNoteList() {
 
     item.append(titleRow);
 
-    const timeMeta = document.createElement('span');
+    const timeMeta = document.createElement('div');
     timeMeta.className = 'note-time-meta';
-    timeMeta.textContent = `创建：${formatListDateTime(note.createdAt)} · 修改：${formatListDateTime(note.updatedAt)}`;
+    timeMeta.innerHTML = `
+      <span class="note-meta-line">
+        <span class="note-meta-label">创建</span>
+        <span class="note-meta-value">${formatListDateTime(note.createdAt)}</span>
+      </span>
+      <span class="note-meta-line">
+        <span class="note-meta-label">修改</span>
+        <span class="note-meta-value">${formatListDateTime(note.updatedAt)}</span>
+      </span>
+    `;
     item.append(timeMeta);
 
-    const reminderMeta = document.createElement('span');
-    reminderMeta.className = 'note-reminder-meta';
     const pendingCount = (note.reminders || []).filter((reminder) => !reminder.done).length;
+    const reminderMeta = document.createElement('span');
+    reminderMeta.className = `note-reminder-meta${pendingCount > 0 ? ' has-pending' : ''}`;
     reminderMeta.textContent = pendingCount > 0 ? `${pendingCount} 个待提醒` : '无待提醒';
     item.append(reminderMeta);
 
@@ -619,6 +605,7 @@ function renderNoteList() {
       : file.id === activeResourceId;
     item.className = `note-item resource-item ${file.kind}${isActive ? ' active' : ''}${file.canOpen ? '' : ' is-unopenable'}`;
     item.type = 'button';
+    item.dataset.fileId = file.id;
     if (file.canOpen) {
       item.addEventListener('click', () => selectResourceFile(file.id).catch(console.error));
     } else {
@@ -802,11 +789,14 @@ function createReminder(date) {
 }
 
 function getActiveNote() {
-  return notes.find((note) => note.id === activeNoteId) || notes[0];
+  return notes.find((note) => note.id === activeNoteId) || null;
 }
 
 function getDraftNote() {
   const activeNote = getActiveNote();
+  if (!activeNote) {
+    return null;
+  }
   return {
     ...activeNote,
     title: titleInput.value,
@@ -924,6 +914,14 @@ function renderReminders() {
   const note = getActiveNote();
   reminderList.innerHTML = '';
 
+  if (!note) {
+    const empty = document.createElement('p');
+    empty.className = 'empty-text';
+    empty.textContent = '当前没有打开的笔记。';
+    reminderList.append(empty);
+    return;
+  }
+
   if (!note.reminders.length) {
     const empty = document.createElement('p');
     empty.className = 'empty-text';
@@ -963,9 +961,6 @@ function renderReminders() {
 
 function renderEditor() {
   const activeNote = getActiveNote();
-  if (!activeNote) {
-    return;
-  }
 
   isRenderingEditor = true;
   activePdfId = null;
@@ -975,10 +970,33 @@ function renderEditor() {
   fileViewer.hidden = true;
   filePreviewVersion++;
   destroyPdfPreview();
-  activeNoteId = activeNote.id;
-  titleInput.value = activeNote.title || '';
-  setEditorValue(activeNote.content || '');
-  markdownEditor?.refresh?.();
+
+  if (!activeNote) {
+    activeNoteId = null;
+    titleInput.value = '';
+    editorTopbar.hidden = true;
+    titleInput.disabled = true;
+    openReminderConfigButton.disabled = true;
+    insertImageButton.disabled = true;
+    deleteNoteButton.disabled = true;
+    saveButton.disabled = true;
+    editorRoot.hidden = true;
+    editorEmptyState.hidden = false;
+  } else {
+    activeNoteId = activeNote.id;
+    editorTopbar.hidden = false;
+    titleInput.disabled = false;
+    openReminderConfigButton.disabled = false;
+    insertImageButton.disabled = false;
+    deleteNoteButton.disabled = false;
+    saveButton.disabled = false;
+    editorRoot.hidden = false;
+    editorEmptyState.hidden = true;
+    titleInput.value = activeNote.title || '';
+    setEditorValue(activeNote.content || '');
+    markdownEditor?.refresh?.();
+  }
+
   isRenderingEditor = false;
   renderNoteList();
   renderReminders();
@@ -1026,6 +1044,8 @@ async function renderPdfPages() {
     const pageElement = document.createElement('section');
     pageElement.className = 'pdf-page';
     pageElement.dataset.pageNumber = String(pageNumber);
+    pageElement.style.width = `${Math.floor(viewport.width)}px`;
+    pageElement.style.height = `${Math.floor(viewport.height)}px`;
 
     const canvas = document.createElement('canvas');
     canvas.width = Math.floor(viewport.width * outputScale);
@@ -1033,14 +1053,28 @@ async function renderPdfPages() {
     canvas.style.width = `${Math.floor(viewport.width)}px`;
     canvas.style.height = `${Math.floor(viewport.height)}px`;
     canvas.setAttribute('aria-label', `第 ${pageNumber} 页`);
-    pageElement.append(canvas);
+    const textLayer = document.createElement('div');
+    textLayer.className = 'textLayer';
+    pageElement.append(canvas, textLayer);
     pdfPages.append(pageElement);
 
+    const textContent = await page.getTextContent();
     await page.render({
       canvasContext: canvas.getContext('2d'),
       transform: outputScale === 1 ? null : [outputScale, 0, 0, outputScale, 0, 0],
       viewport
     }).promise;
+
+    if (version !== pdfPageRenderVersion) {
+      return;
+    }
+
+    const layer = new window.noticeNotePdf.TextLayer({
+      textContentSource: textContent,
+      container: textLayer,
+      viewport
+    });
+    await layer.render();
   }
 }
 
@@ -1381,6 +1415,9 @@ async function saveActiveNote() {
   clearTimeout(saveTimer);
   saveTimer = null;
   const draft = getDraftNote();
+  if (!draft) {
+    return;
+  }
   const savedNote = await window.noticeNote.saveNote(draft);
   replaceNote(savedNote);
   if (activeWorkspaceTabKey === getWorkspaceTabKey('note', savedNote.id)) {
@@ -1402,6 +1439,10 @@ async function flushPendingSave() {
 }
 
 function queueSave() {
+  if (!getActiveNote()) {
+    return;
+  }
+
   clearTimeout(saveTimer);
   saveTimer = setTimeout(() => {
     saveTimer = null;
@@ -1498,13 +1539,24 @@ async function deleteActiveNote() {
     return;
   }
 
+  await deleteNoteById(note.id);
+}
+
+async function deleteNoteById(noteId) {
+  const note = notes.find((item) => item.id === noteId);
+  if (!note) {
+    return;
+  }
+
   const confirmed = confirm(`确定删除「${note.title || '未命名笔记'}」吗？`);
   if (!confirmed) {
     return;
   }
 
-  clearTimeout(saveTimer);
-  saveTimer = null;
+  if (note.id === activeNoteId) {
+    clearTimeout(saveTimer);
+    saveTimer = null;
+  }
   const deletedTabKey = getWorkspaceTabKey('note', note.id);
   notes = sortNotes(await window.noticeNote.deleteNote(note.id));
   workspaceTabs = workspaceTabs.filter((tab) => {
@@ -1516,22 +1568,46 @@ async function deleteActiveNote() {
   reconcileWorkspaceTabs();
 }
 
+async function deleteResourceFile(fileId) {
+  const file = resourceFiles.find((item) => item.id === fileId);
+  if (!file) {
+    return;
+  }
+
+  const confirmed = confirm(`确定删除「${file.name}」吗？`);
+  if (!confirmed) {
+    return;
+  }
+
+  resourceFiles = await window.noticeNote.deleteFile(file.id);
+  pdfFiles = resourceFiles.filter((item) => item.kind === 'pdf');
+  workspaceTabs = workspaceTabs.filter((tab) => {
+    const tabKey = getWorkspaceTabKey(tab.type, tab.id);
+    return tabKey !== getWorkspaceTabKey('pdf', file.id)
+      && tabKey !== getWorkspaceTabKey('file', file.id);
+  });
+  if (activeWorkspaceTabKey === getWorkspaceTabKey('pdf', file.id)
+    || activeWorkspaceTabKey === getWorkspaceTabKey('file', file.id)) {
+    activeWorkspaceTabKey = null;
+  }
+
+  if (!reconcileWorkspaceTabs()) {
+    renderNoteList();
+  }
+}
+
 async function boot() {
   setSidebarCollapsed(readBooleanSetting(SIDEBAR_COLLAPSED_KEY));
   setReminderCollapsed(readBooleanSetting(REMINDER_COLLAPSED_KEY));
-  noteSortSelect.value = localStorage.getItem(NOTE_SORT_KEY) || 'created';
-  noteSortSelect.value = getNoteSortMode();
-  noteSortOrderSelect.value = localStorage.getItem(NOTE_SORT_ORDER_KEY) || 'desc';
-  noteSortOrderSelect.value = getNoteSortOrder();
   createMarkdownEditor();
   notes = sortNotes(await window.noticeNote.listNotes());
   folders = await window.noticeNote.listFolders();
   pdfFiles = await window.noticeNote.listPdfs();
   resourceFiles = await window.noticeNote.listFiles();
   storageInfo = await window.noticeNote.getStorage();
-  activeNoteId = notes[0]?.id || null;
-  workspaceTabs = activeNoteId ? [{ type: 'note', id: activeNoteId }] : [];
-  activeWorkspaceTabKey = activeNoteId ? getWorkspaceTabKey('note', activeNoteId) : null;
+  activeNoteId = null;
+  workspaceTabs = [];
+  activeWorkspaceTabKey = null;
   reminderInput.value = toLocalDateKey(new Date());
   renderBreadcrumb();
   renderNoteList();
@@ -1652,16 +1728,6 @@ pdfOutlineToggle.addEventListener('click', () => {
 workspaceTabAdd.addEventListener('click', () => {
   createNote().catch(console.error);
 });
-noteSortSelect.addEventListener('change', () => {
-  localStorage.setItem(NOTE_SORT_KEY, getNoteSortMode());
-  notes = sortNotes(notes);
-  renderNoteList();
-});
-noteSortOrderSelect.addEventListener('change', () => {
-  localStorage.setItem(NOTE_SORT_ORDER_KEY, getNoteSortOrder());
-  notes = sortNotes(notes);
-  renderNoteList();
-});
 toggleSidebarButton.addEventListener('click', () => {
   setSidebarCollapsed(!sidebar.classList.contains('is-collapsed'));
 });
@@ -1678,7 +1744,43 @@ showReminderButton.addEventListener('click', () => {
 // Right-click context menu on note list
 let contextMenu = null;
 
-function showContextMenu(x, y) {
+function createContextMenuItem(label, onClick) {
+  const item = document.createElement('button');
+  item.className = 'context-menu-item';
+  item.type = 'button';
+  item.textContent = label;
+  item.addEventListener('click', () => {
+    hideContextMenu();
+    onClick();
+  });
+  return item;
+}
+
+function createContextMenuSeparator() {
+  const separator = document.createElement('div');
+  separator.className = 'context-menu-separator';
+  return separator;
+}
+
+function getContextMenuEntry(target) {
+  const item = target.closest('.note-item');
+  if (!item) {
+    return null;
+  }
+
+  if (item.dataset.noteId) {
+    return { type: 'note', id: item.dataset.noteId };
+  }
+  if (item.dataset.fileId) {
+    return { type: 'file', id: item.dataset.fileId };
+  }
+  if (item.dataset.folderId) {
+    return { type: 'folder', id: item.dataset.folderId };
+  }
+  return null;
+}
+
+function showContextMenu(x, y, entry = null) {
   hideContextMenu();
 
   contextMenu = document.createElement('div');
@@ -1686,25 +1788,36 @@ function showContextMenu(x, y) {
   contextMenu.style.left = `${x}px`;
   contextMenu.style.top = `${y}px`;
 
-  const newNoteItem = document.createElement('button');
-  newNoteItem.className = 'context-menu-item';
-  newNoteItem.type = 'button';
-  newNoteItem.innerHTML = '<svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M14 1H2a1 1 0 0 0-1 1v12a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V2a1 1 0 0 0-1-1zM8 11V5M5 8h6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg> 新建笔记';
-  newNoteItem.addEventListener('click', () => {
-    hideContextMenu();
-    createNote().catch(console.error);
-  });
+  if (entry) {
+    contextMenu.append(
+      createContextMenuItem('复制绝对路径', () => {
+        window.noticeNote.copyEntryPath(entry).catch(console.error);
+      }),
+      createContextMenuItem('打开资源管理器', () => {
+        window.noticeNote.showEntryInFolder(entry).catch(console.error);
+      }),
+      createContextMenuSeparator(),
+      createContextMenuItem('删除', () => {
+        if (entry.type === 'note') {
+          deleteNoteById(entry.id).catch(console.error);
+        } else if (entry.type === 'folder') {
+          deleteFolder(entry.id).catch(console.error);
+        } else if (entry.type === 'file') {
+          deleteResourceFile(entry.id).catch(console.error);
+        }
+      })
+    );
+  } else {
+    contextMenu.append(
+      createContextMenuItem('新建笔记', () => {
+        createNote().catch(console.error);
+      }),
+      createContextMenuItem('新建文件夹', () => {
+        createFolder().catch(console.error);
+      })
+    );
+  }
 
-  const newFolderItem = document.createElement('button');
-  newFolderItem.className = 'context-menu-item';
-  newFolderItem.type = 'button';
-  newFolderItem.innerHTML = '<svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M1.5 2.5h4.3l1.5-1h6.7a1 1 0 0 1 1 1v11a1 1 0 0 1-1 1h-13a1 1 0 0 1-1-1v-10a1 1 0 0 1 1-1z" fill="#e8a849" stroke="#c48a30" stroke-width="0.8"/><path d="M1.5 6h13" stroke="#c48a30" stroke-width="0.6"/></svg> 新建文件夹';
-  newFolderItem.addEventListener('click', () => {
-    hideContextMenu();
-    createFolder().catch(console.error);
-  });
-
-  contextMenu.append(newNoteItem, newFolderItem);
   document.body.append(contextMenu);
 
   // Keep menu within viewport
@@ -1725,9 +1838,8 @@ function hideContextMenu() {
 }
 
 noteList.addEventListener('contextmenu', (e) => {
-  // Only show on the empty area or on items (right-click)
   e.preventDefault();
-  showContextMenu(e.clientX, e.clientY);
+  showContextMenu(e.clientX, e.clientY, getContextMenuEntry(e.target));
 });
 
 document.addEventListener('click', (e) => {

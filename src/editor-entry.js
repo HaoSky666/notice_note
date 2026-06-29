@@ -4,7 +4,7 @@ import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirro
 import { markdown } from '@codemirror/lang-markdown';
 import { syntaxHighlighting, HighlightStyle } from '@codemirror/language';
 import { tags } from '@lezer/highlight';
-import { getDocument, GlobalWorkerOptions } from 'pdfjs-dist';
+import { getDocument, GlobalWorkerOptions, TextLayer } from 'pdfjs-dist';
 
 GlobalWorkerOptions.workerSrc = './vendor/pdf.worker.min.mjs';
 
@@ -346,4 +346,4 @@ function createNoticeNoteEditor(options) {
 }
 
 window.createNoticeNoteEditor = createNoticeNoteEditor;
-window.noticeNotePdf = { getDocument };
+window.noticeNotePdf = { getDocument, TextLayer };

@@ -31,17 +31,6 @@
         <div class="breadcrumb" id="breadcrumb">
           <button class="breadcrumb-item active" data-folder-id="">全部笔记</button>
         </div>
-        <div class="sort-controls">
-          <select id="noteSortSelect">
-            <option value="created">创建时间</option>
-            <option value="updated">修改时间</option>
-            <option value="reminder">提醒日期</option>
-          </select>
-          <select id="noteSortOrderSelect">
-            <option value="desc">倒序</option>
-            <option value="asc">顺序</option>
-          </select>
-        </div>
       </div>
       <div id="noteList" class="note-list"></div>
       <button id="showSidebarButton" class="panel-toggle sidebar-toggle collapsed-sidebar-button" type="button" title="显示笔记列表" aria-label="显示笔记列表"></button>
@@ -54,7 +43,7 @@
       </div>
       <div class="workspace-content">
       <section class="editor-panel">
-        <div class="topbar">
+        <div id="editorTopbar" class="topbar">
           <input id="titleInput" class="title-input" placeholder="笔记标题">
           <button id="openReminderConfigButton" class="secondary-button">提醒</button>
           <button id="insertImageButton" class="secondary-button">插入图片</button>

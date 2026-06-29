@@ -233,72 +233,76 @@ button {
   padding: 12px 12px 0;
   display: flex;
   flex-direction: column;
-  gap: 8px;
 }
 
 .breadcrumb {
   display: flex;
   align-items: center;
-  gap: 4px;
-  flex-wrap: wrap;
-}
-
-.sort-controls {
-  display: flex;
   gap: 6px;
-}
-
-.sort-controls select {
-  flex: 1;
-  border: 1px solid #cfc4b2;
-  border-radius: 6px;
-  padding: 5px 8px;
-  background: #fffaf0;
-  color: #25231f;
-  font-size: 12px;
-  outline: none;
-}
-
-.sort-controls select:focus {
-  border-color: #2f6b55;
-}
-
-.breadcrumb {
-  display: flex;
-  align-items: center;
-  gap: 4px;
   flex-wrap: wrap;
+  padding: 8px 10px;
+  border: 1px solid #e3dacb;
+  border-radius: 12px;
+  background: linear-gradient(180deg, #fbf7f0 0%, #f3ecdf 100%);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.75);
 }
 
 .breadcrumb-item {
-  border: 0;
+  position: relative;
+  max-width: 100%;
+  border: 1px solid transparent;
   background: transparent;
-  padding: 4px 8px;
+  padding: 5px 10px;
   font: inherit;
-  font-size: 13px;
-  color: #756e62;
+  font-size: 12px;
+  line-height: 1.2;
+  color: #6f675b;
   cursor: pointer;
-  border-radius: 4px;
+  border-radius: 999px;
+  transition: background 0.15s, border-color 0.15s, color 0.15s, transform 0.15s;
+}
+
+.breadcrumb-root {
+  background: rgba(255, 253, 248, 0.88);
+  border-color: #eadfcd;
+  color: #4d473f;
+  font-weight: 600;
+}
+
+.breadcrumb-child {
+  padding-left: 18px;
+}
+
+.breadcrumb-child::before {
+  content: '›';
+  position: absolute;
+  left: 6px;
+  top: 50%;
+  color: #bbaf9f;
+  font-size: 13px;
+  transform: translateY(-50%);
 }
 
 .breadcrumb-item:hover {
-  background: #f5eee2;
+  background: #fffaf1;
+  border-color: #e4d6c0;
   color: #25231f;
+  transform: translateY(-1px);
 }
 
 .breadcrumb-item.active {
+  background: #efe5d5;
+  border-color: #d7c7ae;
   color: #25231f;
-  font-weight: 600;
+  font-weight: 700;
   cursor: default;
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.6);
 }
 
 .breadcrumb-item.active:hover {
-  background: transparent;
-}
-
-.breadcrumb-separator {
-  color: #bfb5a5;
-  font-size: 12px;
+  background: #efe5d5;
+  border-color: #d7c7ae;
+  transform: none;
 }
 
 .note-item.folder-item {
@@ -410,8 +414,10 @@ button {
 }
 
 .breadcrumb-item.drag-over {
-  background: #ddd4be !important;
-  border-color: #c4a86a;
+  background: #e8dcc4 !important;
+  border-color: #c4a86a !important;
+  color: #5a4521;
+  box-shadow: inset 0 0 0 1px rgba(196, 168, 106, 0.28);
 }
 
 .note-item.drag-over-note {
@@ -449,9 +455,10 @@ button {
   background: #f0ebe0;
 }
 
-.context-menu-item svg {
-  flex-shrink: 0;
-  color: #756e62;
+.context-menu-separator {
+  height: 1px;
+  margin: 4px 0;
+  background: #e6dfd2;
 }
 
 .folder-dialog {
@@ -539,19 +546,23 @@ button {
 .note-item {
   width: 100%;
   border: 0;
-  border-radius: 8px;
-  padding: 12px;
+  border-radius: 12px;
+  padding: 12px 12px 11px;
   margin-bottom: 8px;
-  background: transparent;
+  background: rgba(255, 250, 240, 0.52);
+  box-shadow: inset 0 0 0 1px rgba(227, 218, 203, 0.72);
   color: inherit;
   text-align: left;
   display: grid;
-  gap: 5px;
+  gap: 8px;
+  transition: background 0.15s, box-shadow 0.15s, transform 0.15s;
 }
 
 .note-item:hover,
 .note-item.active {
   background: #fffaf0;
+  box-shadow: inset 0 0 0 1px rgba(220, 207, 187, 0.95), 0 8px 18px rgba(82, 67, 43, 0.06);
+  transform: translateY(-1px);
 }
 
 .note-item strong {
@@ -570,6 +581,9 @@ button {
 .note-title-row strong {
   flex: 1;
   min-width: 0;
+  color: #25231f;
+  font-size: 15px;
+  line-height: 1.3;
 }
 
 .note-item span {
@@ -578,11 +592,47 @@ button {
   line-height: 1.35;
 }
 
-.note-time-meta,
+.note-time-meta {
+  display: grid;
+  gap: 4px;
+}
+
+.note-meta-line {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+
+.note-meta-label {
+  flex: 0 0 auto;
+  color: #9a8f7d !important;
+  font-size: 11px !important;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+
+.note-meta-value {
+  min-width: 0;
+  color: #6e665b !important;
+  font-variant-numeric: tabular-nums;
+}
+
 .note-reminder-meta {
-  overflow: hidden;
-  text-overflow: ellipsis;
+  width: fit-content;
+  max-width: 100%;
+  border-radius: 999px;
+  padding: 3px 8px;
+  background: #f1eadf;
+  color: #847867 !important;
+  font-size: 11px !important;
+  font-weight: 600;
   white-space: nowrap;
+}
+
+.note-reminder-meta.has-pending {
+  background: #fff1e8;
+  color: #a94d35 !important;
 }
 
 .today-reminder-badge {
@@ -1241,9 +1291,9 @@ button {
 }
 
 .pdf-page {
+  position: relative;
   width: max-content;
   margin: 0 auto 20px;
-  line-height: 0;
 }
 
 .pdf-page:last-child {
@@ -1254,6 +1304,32 @@ button {
   display: block;
   background: #fff;
   box-shadow: 0 4px 18px rgba(37, 35, 31, 0.16);
+}
+
+.textLayer {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  line-height: 1;
+  text-size-adjust: none;
+  transform-origin: 0 0;
+}
+
+.textLayer :is(span, br) {
+  position: absolute;
+  color: transparent;
+  white-space: pre;
+  cursor: text;
+  transform-origin: 0 0;
+}
+
+.textLayer span.markedContent {
+  top: 0;
+  height: 0;
+}
+
+.textLayer ::selection {
+  background: rgba(47, 107, 85, 0.26);
 }
 
 .pdf-preview-status {
@@ -1283,6 +1359,10 @@ button {
 .topbar {
   padding: 18px;
   border-bottom: 1px solid #dfd8cc;
+}
+
+#editorTopbar[hidden] {
+  display: none;
 }
 
 .title-input {
@@ -1358,6 +1438,31 @@ button {
   display: flex;
   background: #fffdf8;
   overflow: auto;
+}
+
+.editor-empty-state {
+  display: grid;
+  flex: 1;
+  min-width: 0;
+  place-content: center;
+  padding: 40px 28px;
+  color: #756e62;
+  text-align: center;
+}
+
+.editor-empty-state h2 {
+  margin: 0 0 10px;
+  color: #25231f;
+  font-size: 26px;
+}
+
+.editor-empty-state p {
+  margin: 0;
+  font-size: 14px;
+}
+
+.editor-empty-state[hidden] {
+  display: none;
 }
 
 .content-shell::-webkit-scrollbar {

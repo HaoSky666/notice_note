@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, Notification, dialog, Menu, Tray } = require('electron');
+const { app, BrowserWindow, ipcMain, Notification, dialog, Menu, Tray, clipboard, shell } = require('electron');
 const path = require('node:path');
 const { watch } = require('node:fs');
 const fs = require('node:fs/promises');
@@ -967,6 +967,67 @@ async function previewResourceFile(fileId) {
   throw new Error('该文件类型不支持预览');
 }
 
+function resolveLibraryEntryPath(entry) {
+  if (!entry || typeof entry !== 'object') {
+    return null;
+  }
+
+  if (entry.type === 'note') {
+    return noteFileMap.get(entry.id) || null;
+  }
+
+  if (entry.type === 'file') {
+    return resourceFiles.find((item) => item.id === entry.id)?.path || null;
+  }
+
+  if (entry.type === 'folder') {
+    const folder = folders.find((item) => item.id === entry.id);
+    return folder ? getFolderPath(folder.id) : null;
+  }
+
+  return null;
+}
+
+async function deleteResourceFile(_event, fileId) {
+  const file = resourceFiles.find((item) => item.id === fileId);
+  if (!file) {
+    throw new Error('文件不存在');
+  }
+
+  await fs.unlink(file.path);
+  await loadPdfFiles();
+  sendPdfFilesChanged();
+  return resourceFiles;
+}
+
+async function copyLibraryEntryPath(_event, entry) {
+  const targetPath = resolveLibraryEntryPath(entry);
+  if (!targetPath) {
+    throw new Error('路径不存在');
+  }
+
+  clipboard.writeText(targetPath);
+  return targetPath;
+}
+
+async function showLibraryEntryInFolder(_event, entry) {
+  const targetPath = resolveLibraryEntryPath(entry);
+  if (!targetPath) {
+    throw new Error('路径不存在');
+  }
+
+  if (entry.type === 'folder') {
+    const result = await shell.openPath(targetPath);
+    if (result) {
+      throw new Error(result);
+    }
+    return targetPath;
+  }
+
+  shell.showItemInFolder(targetPath);
+  return targetPath;
+}
+
 function schedulePdfReload() {
   clearTimeout(pdfReloadTimer);
   pdfReloadTimer = setTimeout(() => {
@@ -1369,6 +1430,7 @@ app.whenReady().then(async () => {
   ipcMain.handle('pdfs:list', () => pdfFiles);
   ipcMain.handle('files:list', () => resourceFiles);
   ipcMain.handle('files:preview', (_event, fileId) => previewResourceFile(fileId));
+  ipcMain.handle('files:delete', deleteResourceFile);
   ipcMain.handle('pdfs:refresh', async () => {
     await loadPdfFiles();
     return pdfFiles;
@@ -1442,6 +1504,8 @@ app.whenReady().then(async () => {
   ipcMain.handle('storage:get', () => getStorageInfo());
   ipcMain.handle('storage:choose', chooseNotesPath);
   ipcMain.handle('storage:reset', resetNotesPath);
+  ipcMain.handle('entries:copy-path', copyLibraryEntryPath);
+  ipcMain.handle('entries:show-in-folder', showLibraryEntryInFolder);
   ipcMain.handle('images:insert', insertImageForNote);
   ipcMain.handle('images:save-pasted', async (_event, payload) => {
     if (!payload || !payload.noteId) {
