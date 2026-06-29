@@ -4,6 +4,9 @@ import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirro
 import { markdown } from '@codemirror/lang-markdown';
 import { syntaxHighlighting, HighlightStyle } from '@codemirror/language';
 import { tags } from '@lezer/highlight';
+import { getDocument, GlobalWorkerOptions } from 'pdfjs-dist';
+
+GlobalWorkerOptions.workerSrc = './vendor/pdf.worker.min.mjs';
 
 const markdownHighlight = HighlightStyle.define([
   { tag: tags.heading1, fontSize: '1.72em', fontWeight: '700' },
@@ -69,6 +72,9 @@ function addListLineClass(builder, line, depth) {
 
 function buildLivePreviewDecorations(view, options = {}) {
   const builder = new RangeSetBuilder();
+  if (options.isPlainText?.()) {
+    return builder.finish();
+  }
 
   for (const { from, to } of view.visibleRanges) {
     let pos = from;
@@ -340,3 +346,4 @@ function createNoticeNoteEditor(options) {
 }
 
 window.createNoticeNoteEditor = createNoticeNoteEditor;
+window.noticeNotePdf = { getDocument };

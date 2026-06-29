@@ -1,9 +1,12 @@
 const { app, BrowserWindow, ipcMain, Notification, dialog, Menu, Tray } = require('electron');
 const path = require('node:path');
+const { watch } = require('node:fs');
 const fs = require('node:fs/promises');
 const { randomUUID } = require('node:crypto');
 const { pathToFileURL } = require('node:url');
 const matter = require('gray-matter');
+const mammoth = require('mammoth');
+const ExcelJS = require('exceljs');
 
 const NOTES_DIR_NAME = 'notes';
 const OLD_NOTE_FILE_NAME = 'notes.json';
@@ -11,15 +14,25 @@ const CONFIG_FILE_NAME = 'config.json';
 const REMINDER_CHECK_INTERVAL = 30 * 1000;
 const DAILY_REMINDER_TIMES = ['09:30', '15:00'];
 const IMAGE_ASSET_DIR_NAME = 'notice_note_images';
+const APP_DATA_DIR_NAME = '.notice-note';
+const NOTE_METADATA_FILE_NAME = 'metadata.json';
+const NOTE_BACKUP_DIR_NAME = 'backups';
 
 let mainWindow;
 let tray;
 let notes = [];
 let folders = [];
+let pdfFiles = [];
+let resourceFiles = [];
 let reminderTimer;
+let pdfReloadTimer;
+let pdfWatcher;
+let noteReloadTimer;
 let notesPath;
 let isQuitting = false;
 let noteFileMap = new Map(); // noteId -> filePath
+let noteMetadata = {};
+let internalNoteWrites = new Map();
 
 if (process.platform === 'win32') {
   app.setAppUserModelId('com.notice-note.app');
@@ -36,7 +49,8 @@ function createWindow() {
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
-      nodeIntegration: false
+      nodeIntegration: false,
+      plugins: true
     }
   });
 
@@ -196,6 +210,108 @@ function getNoteAssetDir(noteId) {
   return path.join(getNotesPath(), IMAGE_ASSET_DIR_NAME, noteId);
 }
 
+function getAppDataPath() {
+  return path.join(getNotesPath(), APP_DATA_DIR_NAME);
+}
+
+function getNoteMetadataPath() {
+  return path.join(getAppDataPath(), NOTE_METADATA_FILE_NAME);
+}
+
+function getNoteMetadataKey(filePath) {
+  return path.relative(getNotesPath(), filePath).split(path.sep).join('/');
+}
+
+function markInternalNoteWrite(filePath) {
+  const key = getNoteMetadataKey(filePath).toLowerCase();
+  const expiresAt = Date.now() + 2000;
+  internalNoteWrites.set(key, expiresAt);
+  setTimeout(() => {
+    if (internalNoteWrites.get(key) === expiresAt) {
+      internalNoteWrites.delete(key);
+    }
+  }, 2100);
+}
+
+function isInternalDirectory(name) {
+  return name === IMAGE_ASSET_DIR_NAME || name === APP_DATA_DIR_NAME;
+}
+
+async function loadNoteMetadata() {
+  try {
+    const raw = await fs.readFile(getNoteMetadataPath(), 'utf8');
+    const parsed = JSON.parse(raw);
+    noteMetadata = parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    noteMetadata = {};
+  }
+}
+
+async function saveNoteMetadata() {
+  await fs.mkdir(getAppDataPath(), { recursive: true });
+  await fs.writeFile(getNoteMetadataPath(), JSON.stringify(noteMetadata, null, 2), 'utf8');
+}
+
+function setNoteMetadata(filePath, note, fileId = null) {
+  const metadataKey = getNoteMetadataKey(filePath);
+  noteMetadata[metadataKey] = {
+    id: note.id,
+    title: note.title,
+    createdAt: note.createdAt,
+    updatedAt: note.updatedAt,
+    reminders: note.reminders,
+    fileId: fileId || noteMetadata[metadataKey]?.fileId || null
+  };
+}
+
+function moveNoteMetadata(oldPath, newPath) {
+  const oldKey = getNoteMetadataKey(oldPath);
+  const newKey = getNoteMetadataKey(newPath);
+  if (noteMetadata[oldKey]) {
+    noteMetadata[newKey] = noteMetadata[oldKey];
+    delete noteMetadata[oldKey];
+  }
+}
+
+function moveNoteMetadataTree(oldPath, newPath) {
+  const oldPrefix = `${getNoteMetadataKey(oldPath).replace(/\/$/, '')}/`;
+  const newPrefix = `${getNoteMetadataKey(newPath).replace(/\/$/, '')}/`;
+  for (const key of Object.keys(noteMetadata)) {
+    if (key.startsWith(oldPrefix)) {
+      noteMetadata[`${newPrefix}${key.slice(oldPrefix.length)}`] = noteMetadata[key];
+      delete noteMetadata[key];
+    }
+  }
+
+  for (const [noteId, filePath] of noteFileMap) {
+    const relativePath = path.relative(oldPath, filePath);
+    if (!relativePath.startsWith('..') && !path.isAbsolute(relativePath)) {
+      noteFileMap.set(noteId, path.join(newPath, relativePath));
+    }
+  }
+}
+
+function deleteNoteMetadataTree(folderPath) {
+  const prefix = `${getNoteMetadataKey(folderPath).replace(/\/$/, '')}/`;
+  for (const key of Object.keys(noteMetadata)) {
+    if (key.startsWith(prefix)) {
+      delete noteMetadata[key];
+    }
+  }
+}
+
+async function backupLegacyMarkdown(filePath, content) {
+  const relativePath = path.relative(getNotesPath(), filePath);
+  const backupPath = path.join(getAppDataPath(), NOTE_BACKUP_DIR_NAME, relativePath);
+  try {
+    await fs.access(backupPath);
+  } catch {
+    await fs.mkdir(path.dirname(backupPath), { recursive: true });
+    markInternalNoteWrite(backupPath);
+    await fs.writeFile(backupPath, content, 'utf8');
+  }
+}
+
 function sanitizeFileName(fileName) {
   return String(fileName || 'image')
     .replace(/[<>:"/\\|?*\x00-\x1F]/g, '_')
@@ -235,8 +351,8 @@ function getFolderPath(folderId) {
   return path.join(getNotesPath(), ...parts);
 }
 
-async function getUniqueFilePath(dir, baseName) {
-  let filePath = path.join(dir, `${baseName}.md`);
+async function getUniqueFilePath(dir, baseName, extension = '.md') {
+  let filePath = path.join(dir, `${baseName}${extension}`);
   try {
     await fs.access(filePath);
   } catch {
@@ -245,7 +361,7 @@ async function getUniqueFilePath(dir, baseName) {
 
   let counter = 2;
   while (counter < 1000) {
-    filePath = path.join(dir, `${baseName}(${counter}).md`);
+    filePath = path.join(dir, `${baseName}(${counter})${extension}`);
     try {
       await fs.access(filePath);
     } catch {
@@ -253,7 +369,7 @@ async function getUniqueFilePath(dir, baseName) {
     }
     counter++;
   }
-  return path.join(dir, `${baseName}-${Date.now()}.md`);
+  return path.join(dir, `${baseName}-${Date.now()}${extension}`);
 }
 
 function getImageExtension(fileName, mimeType) {
@@ -343,6 +459,7 @@ function createEmptyNote() {
     id: randomUUID(),
     title: '未命名笔记',
     content: '',
+    fileType: 'md',
     reminders: [],
     createdAt: now,
     updatedAt: now
@@ -351,6 +468,16 @@ function createEmptyNote() {
 
 function isValidDateTime(value) {
   return typeof value === 'string' && Number.isFinite(Date.parse(value));
+}
+
+function getLatestDateTime(...values) {
+  const validValues = values.filter(isValidDateTime);
+  if (validValues.length === 0) {
+    return null;
+  }
+  return validValues.reduce((latest, value) => {
+    return Date.parse(value) > Date.parse(latest) ? value : latest;
+  });
 }
 
 function padDatePart(value) {
@@ -401,6 +528,7 @@ function normalizeLoadedNote(input) {
     id: input.id || randomUUID(),
     title: String(input.title || '未命名笔记').trim() || '未命名笔记',
     content: String(input.content || ''),
+    fileType: input.fileType === 'txt' ? 'txt' : 'md',
     reminders: Array.isArray(input.reminders)
       ? input.reminders
         .filter((item) => item && (item.date || item.time))
@@ -418,30 +546,7 @@ async function loadFolders() {
   folders = [];
 
   try {
-    const entries = await fs.readdir(notesDir, { withFileTypes: true });
-    for (const entry of entries) {
-      if (entry.isDirectory() && entry.name !== IMAGE_ASSET_DIR_NAME) {
-        const folderPath = path.join(notesDir, entry.name);
-        const metaPath = path.join(folderPath, '.folder.json');
-        try {
-          const meta = await fs.readFile(metaPath, 'utf8');
-          const data = JSON.parse(meta);
-          folders.push({
-            id: data.id || randomUUID(),
-            name: data.name || entry.name,
-            parentId: data.parentId || null,
-            createdAt: data.createdAt || new Date().toISOString()
-          });
-        } catch {
-          folders.push({
-            id: randomUUID(),
-            name: entry.name,
-            parentId: null,
-            createdAt: new Date().toISOString()
-          });
-        }
-      }
-    }
+    await scanFolderDirectory(notesDir, null);
   } catch (error) {
     console.error('读取文件夹失败:', error);
   }
@@ -449,10 +554,45 @@ async function loadFolders() {
   return folders;
 }
 
-async function createFolder(_event, name) {
+async function scanFolderDirectory(dirPath, parentId) {
+  const entries = await fs.readdir(dirPath, { withFileTypes: true });
+
+  for (const entry of entries) {
+    if (!entry.isDirectory() || isInternalDirectory(entry.name)) {
+      continue;
+    }
+
+    const folderPath = path.join(dirPath, entry.name);
+    const metaPath = path.join(folderPath, '.folder.json');
+    let data = {};
+
+    try {
+      const meta = await fs.readFile(metaPath, 'utf8');
+      data = JSON.parse(meta);
+    } catch {
+      data = {};
+    }
+
+    const folder = {
+      id: data.id || randomUUID(),
+      name: data.name || entry.name,
+      parentId,
+      createdAt: data.createdAt || new Date().toISOString()
+    };
+    folders.push(folder);
+    await scanFolderDirectory(folderPath, folder.id);
+  }
+}
+
+async function createFolder(_event, name, parentId) {
   const folderName = sanitizeFolderName(name);
-  const notesDir = getNotesPath();
-  const folderPath = path.join(notesDir, folderName);
+  const normalizedParentId = parentId || null;
+  if (normalizedParentId && !folders.some((folder) => folder.id === normalizedParentId)) {
+    throw new Error('父文件夹不存在');
+  }
+
+  const parentPath = getFolderPath(normalizedParentId);
+  const folderPath = path.join(parentPath, folderName);
 
   try {
     await fs.access(folderPath);
@@ -466,7 +606,7 @@ async function createFolder(_event, name) {
   const folder = {
     id: randomUUID(),
     name: folderName,
-    parentId: null,
+    parentId: normalizedParentId,
     createdAt: new Date().toISOString()
   };
 
@@ -487,6 +627,8 @@ async function renameFolder(_event, folderId, newName) {
   const newPath = path.join(getNotesPath(), ...getFolderPathParts(folder).slice(0, -1), newFolderName);
 
   await fs.rename(oldPath, newPath);
+  moveNoteMetadataTree(oldPath, newPath);
+  await saveNoteMetadata();
 
   folder.name = newFolderName;
   const metaPath = path.join(newPath, '.folder.json');
@@ -502,21 +644,27 @@ async function deleteFolder(_event, folderId) {
 
   const folderPath = getFolderPath(folderId);
   await fs.rm(folderPath, { recursive: true, force: true });
+  deleteNoteMetadataTree(folderPath);
+  await saveNoteMetadata();
 
-  // 删除该文件夹下的所有笔记
-  const notesToDelete = notes.filter(n => n.folderId === folderId);
+  // 删除该文件夹及所有子文件夹下的笔记
+  const deletedFolderIds = new Set([folderId]);
+  let foundChild = true;
+  while (foundChild) {
+    foundChild = false;
+    for (const item of folders) {
+      if (item.parentId && deletedFolderIds.has(item.parentId) && !deletedFolderIds.has(item.id)) {
+        deletedFolderIds.add(item.id);
+        foundChild = true;
+      }
+    }
+  }
+  const notesToDelete = notes.filter((note) => deletedFolderIds.has(note.folderId));
   for (const note of notesToDelete) {
     noteFileMap.delete(note.id);
   }
-  notes = notes.filter(n => n.folderId !== folderId);
-
-  // 删除子文件夹
-  const childFolders = folders.filter(f => f.parentId === folderId);
-  for (const child of childFolders) {
-    folders = folders.filter(f => f.id !== child.id);
-  }
-
-  folders = folders.filter(f => f.id !== folderId);
+  notes = notes.filter((note) => !deletedFolderIds.has(note.folderId));
+  folders = folders.filter((item) => !deletedFolderIds.has(item.id));
 
   if (notes.length === 0) {
     const note = createEmptyNote();
@@ -548,6 +696,7 @@ function sendFoldersChanged() {
 async function loadNotes() {
   const notesDir = getNotesPath();
   let shouldCreateInitialFile = false;
+  await loadNoteMetadata();
 
   // 检查是否有旧的 notes.json 需要迁移（默认路径和自定义路径）
   const oldJsonPaths = [
@@ -568,13 +717,17 @@ async function loadNotes() {
 
   // 加载文件夹
   await loadFolders();
+  await loadPdfFiles();
 
   try {
     notes = [];
     noteFileMap.clear();
+    const storedMetadataByPath = noteMetadata;
+    noteMetadata = {};
 
     // 递归扫描目录
-    await scanDirectory(notesDir, null);
+    await scanDirectory(notesDir, null, storedMetadataByPath, new Set());
+    await saveNoteMetadata();
   } catch (error) {
     if (error.code !== 'ENOENT') {
       dialog.showErrorBox('读取笔记失败', `无法读取笔记目录：${error.message}`);
@@ -600,30 +753,269 @@ async function loadNotes() {
   sortNotesByCreatedAt();
 }
 
-async function scanDirectory(dirPath, folderId) {
+async function scanDirectory(dirPath, folderId, storedMetadataByPath, claimedMetadataIds) {
   const entries = await fs.readdir(dirPath, { withFileTypes: true });
 
   for (const entry of entries) {
     const fullPath = path.join(dirPath, entry.name);
+    const fileExtension = path.extname(entry.name).toLowerCase();
 
-    if (entry.isFile() && entry.name.endsWith('.md')) {
+    if (entry.isFile() && ['.md', '.txt'].includes(fileExtension)) {
       try {
         const raw = await fs.readFile(fullPath, 'utf8');
-        const { data, content } = matter(raw);
-        const noteData = { ...data, content, folderId };
+        const stats = await fs.stat(fullPath);
+        const parsed = fileExtension === '.md' ? matter(raw) : { data: {}, content: raw };
+        const isLegacyNote = fileExtension === '.md' && Boolean(parsed.data.id
+          && parsed.data.title
+          && parsed.data.createdAt
+          && parsed.data.updatedAt
+          && Array.isArray(parsed.data.reminders));
+        const metadataKey = getNoteMetadataKey(fullPath);
+        const fileId = Number(stats.ino) > 0 ? String(stats.ino) : null;
+        const metadataByPath = storedMetadataByPath[metadataKey];
+        const metadataByFileId = fileId
+          ? Object.values(storedMetadataByPath).find((item) => {
+            return item.fileId === fileId && !claimedMetadataIds.has(item.id);
+          })
+          : null;
+        const storedMetadata = metadataByPath || metadataByFileId || {};
+        const wasRenamedExternally = !metadataByPath && Boolean(metadataByFileId);
+        if (storedMetadata.id) {
+          claimedMetadataIds.add(storedMetadata.id);
+        }
+        const fileTitle = path.basename(entry.name, path.extname(entry.name));
+        const noteData = {
+          ...(isLegacyNote ? parsed.data : {}),
+          ...storedMetadata,
+          title: wasRenamedExternally
+            ? fileTitle
+            : storedMetadata.title || (isLegacyNote ? parsed.data.title : null) || fileTitle,
+          content: isLegacyNote ? parsed.content : raw,
+          fileType: fileExtension === '.txt' ? 'txt' : 'md',
+          folderId,
+          createdAt: storedMetadata.createdAt
+            || (isLegacyNote ? parsed.data.createdAt : null)
+            || stats.birthtime.toISOString(),
+          updatedAt: getLatestDateTime(
+            storedMetadata.updatedAt,
+            isLegacyNote ? parsed.data.updatedAt : null,
+            stats.mtime.toISOString()
+          )
+        };
         const normalizedNote = normalizeLoadedNote(noteData);
         notes.push(normalizedNote);
         noteFileMap.set(normalizedNote.id, fullPath);
+        setNoteMetadata(fullPath, normalizedNote, fileId);
+
+        if (isLegacyNote) {
+          await backupLegacyMarkdown(fullPath, raw);
+          markInternalNoteWrite(fullPath);
+          await fs.writeFile(fullPath, parsed.content, 'utf8');
+          await fs.utimes(fullPath, stats.atime, stats.mtime);
+        }
       } catch (error) {
         console.error(`读取笔记文件失败: ${entry.name}`, error);
       }
-    } else if (entry.isDirectory() && entry.name !== IMAGE_ASSET_DIR_NAME) {
+    } else if (entry.isDirectory() && !isInternalDirectory(entry.name)) {
       // 查找对应的文件夹记录
       const folder = folders.find(f => f.name === entry.name && f.parentId === folderId);
       if (folder) {
-        await scanDirectory(fullPath, folder.id);
+        await scanDirectory(fullPath, folder.id, storedMetadataByPath, claimedMetadataIds);
       }
     }
+  }
+}
+
+function classifyResourceFile(extension) {
+  if (extension === '.pdf') {
+    return { kind: 'pdf', typeLabel: 'PDF', canOpen: true };
+  }
+  if (['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp', '.svg'].includes(extension)) {
+    return { kind: 'image', typeLabel: extension.slice(1).toUpperCase(), canOpen: true };
+  }
+  if (extension === '.docx') {
+    return { kind: 'word', typeLabel: 'WORD', canOpen: true };
+  }
+  if (extension === '.xlsx') {
+    return { kind: 'spreadsheet', typeLabel: 'EXCEL', canOpen: true };
+  }
+  if (['.zip', '.rar', '.7z', '.tar', '.gz'].includes(extension)) {
+    return { kind: 'archive', typeLabel: extension.slice(1).toUpperCase(), canOpen: false };
+  }
+  return {
+    kind: 'other',
+    typeLabel: extension ? extension.slice(1).toUpperCase() : 'FILE',
+    canOpen: false
+  };
+}
+
+async function scanResourceDirectory(dirPath, folderId) {
+  const entries = await fs.readdir(dirPath, { withFileTypes: true });
+
+  for (const entry of entries) {
+    const fullPath = path.join(dirPath, entry.name);
+    const extension = path.extname(entry.name).toLowerCase();
+
+    if (entry.isFile()
+      && !['.md', '.txt'].includes(extension)
+      && entry.name !== '.folder.json') {
+      try {
+        const stats = await fs.stat(fullPath);
+        const type = classifyResourceFile(extension);
+        resourceFiles.push({
+          id: fullPath,
+          name: entry.name,
+          path: fullPath,
+          fileUrl: pathToFileURL(fullPath).href,
+          folderId,
+          extension,
+          ...type,
+          size: stats.size,
+          createdAt: stats.birthtime.toISOString(),
+          updatedAt: stats.mtime.toISOString()
+        });
+      } catch (error) {
+        console.error(`读取资源文件失败: ${entry.name}`, error);
+      }
+    } else if (entry.isDirectory() && !isInternalDirectory(entry.name)) {
+      const folder = folders.find((item) => item.name === entry.name && item.parentId === folderId);
+      if (folder) {
+        await scanResourceDirectory(fullPath, folder.id);
+      }
+    }
+  }
+}
+
+async function loadPdfFiles() {
+  resourceFiles = [];
+  pdfFiles = [];
+
+  try {
+    await scanResourceDirectory(getNotesPath(), null);
+    resourceFiles.sort((a, b) => a.name.localeCompare(b.name, 'zh-CN'));
+    pdfFiles = resourceFiles.filter((file) => file.kind === 'pdf');
+    pdfFiles.sort((a, b) => a.name.localeCompare(b.name, 'zh-CN'));
+  } catch (error) {
+    if (error.code !== 'ENOENT') {
+      console.error('读取资源文件列表失败:', error);
+    }
+  }
+}
+
+function sendPdfFilesChanged() {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('pdfs:changed', pdfFiles);
+    mainWindow.webContents.send('files:changed', resourceFiles);
+  }
+}
+
+function formatSpreadsheetValue(value) {
+  if (value === null || value === undefined) {
+    return '';
+  }
+  if (value instanceof Date) {
+    return value.toLocaleString('zh-CN');
+  }
+  if (typeof value === 'object') {
+    if ('result' in value) {
+      return formatSpreadsheetValue(value.result);
+    }
+    if (Array.isArray(value.richText)) {
+      return value.richText.map((item) => item.text || '').join('');
+    }
+    return value.text || value.hyperlink || JSON.stringify(value);
+  }
+  return String(value);
+}
+
+async function previewResourceFile(fileId) {
+  const file = resourceFiles.find((item) => item.id === fileId);
+  if (!file || !file.canOpen) {
+    throw new Error('该文件类型不支持预览');
+  }
+
+  if (file.kind === 'image') {
+    return { kind: 'image', fileUrl: file.fileUrl };
+  }
+  if (file.kind === 'word') {
+    const result = await mammoth.extractRawText({ path: file.path });
+    return { kind: 'word', text: result.value || '' };
+  }
+  if (file.kind === 'spreadsheet') {
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.readFile(file.path);
+    const sheets = workbook.worksheets.slice(0, 20).map((worksheet) => {
+      const rowCount = Math.min(worksheet.rowCount, 500);
+      const columnCount = Math.min(worksheet.columnCount, 50);
+      const rows = [];
+      for (let rowNumber = 1; rowNumber <= rowCount; rowNumber++) {
+        const row = [];
+        for (let columnNumber = 1; columnNumber <= columnCount; columnNumber++) {
+          row.push(formatSpreadsheetValue(worksheet.getRow(rowNumber).getCell(columnNumber).value));
+        }
+        rows.push(row);
+      }
+      return {
+        name: worksheet.name,
+        rows,
+        truncated: worksheet.rowCount > rowCount || worksheet.columnCount > columnCount
+      };
+    });
+    return { kind: 'spreadsheet', sheets };
+  }
+
+  throw new Error('该文件类型不支持预览');
+}
+
+function schedulePdfReload() {
+  clearTimeout(pdfReloadTimer);
+  pdfReloadTimer = setTimeout(() => {
+    loadPdfFiles()
+      .then(sendPdfFilesChanged)
+      .catch((error) => console.error('同步 PDF 列表失败:', error));
+  }, 300);
+}
+
+function scheduleNoteReload() {
+  clearTimeout(noteReloadTimer);
+  noteReloadTimer = setTimeout(() => {
+    loadNotes()
+      .then(() => {
+        scheduleReminderCheck();
+        sendNotesChanged();
+        sendFoldersChanged();
+        sendPdfFilesChanged();
+      })
+      .catch((error) => console.error('同步 Markdown 列表失败:', error));
+  }, 400);
+}
+
+function watchPdfFiles() {
+  pdfWatcher?.close();
+  pdfWatcher = null;
+
+  try {
+    pdfWatcher = watch(getNotesPath(), { recursive: true }, (_eventType, fileName) => {
+      const relativePath = String(fileName || '').split(path.sep).join('/');
+      const extension = path.extname(relativePath).toLowerCase();
+      if (relativePath.toLowerCase().startsWith(`${APP_DATA_DIR_NAME}/`)) {
+        return;
+      }
+      if (extension === '.pdf') {
+        schedulePdfReload();
+      } else if (['.md', '.txt'].includes(extension)) {
+        const writeExpiresAt = internalNoteWrites.get(relativePath.toLowerCase()) || 0;
+        if (writeExpiresAt > Date.now()) {
+          return;
+        }
+        scheduleNoteReload();
+      } else if (path.basename(relativePath) !== '.folder.json') {
+        schedulePdfReload();
+      }
+    });
+    pdfWatcher.on('error', (error) => console.error('监听资料库文件失败:', error));
+  } catch (error) {
+    console.error('启动资料库文件监听失败:', error);
   }
 }
 
@@ -641,16 +1033,11 @@ async function migrateFromJson(jsonPath, notesDir) {
     const normalizedNote = normalizeLoadedNote(noteData);
     const baseName = sanitizeNoteFilename(normalizedNote.title);
     const filePath = await getUniqueFilePath(notesDir, baseName);
-    const frontmatter = {
-      id: normalizedNote.id,
-      title: normalizedNote.title,
-      createdAt: normalizedNote.createdAt,
-      updatedAt: normalizedNote.updatedAt,
-      reminders: normalizedNote.reminders
-    };
-    const fileContent = matter.stringify(normalizedNote.content || '', frontmatter);
-    await fs.writeFile(filePath, fileContent, 'utf8');
+    markInternalNoteWrite(filePath);
+    await fs.writeFile(filePath, normalizedNote.content || '', 'utf8');
+    setNoteMetadata(filePath, normalizedNote);
   }
+  await saveNoteMetadata();
 
   // 迁移完成后重命名旧文件
   const backupPath = jsonPath + '.bak';
@@ -668,16 +1055,11 @@ async function saveNote(note) {
     noteFileMap.set(note.id, filePath);
   }
 
-  const frontmatter = {
-    id: note.id,
-    title: note.title,
-    createdAt: note.createdAt,
-    updatedAt: note.updatedAt,
-    reminders: note.reminders,
-    folderId: note.folderId
-  };
-  const fileContent = matter.stringify(note.content || '', frontmatter);
-  await fs.writeFile(filePath, fileContent, 'utf8');
+  markInternalNoteWrite(filePath);
+  await fs.writeFile(filePath, note.content || '', 'utf8');
+  const stats = await fs.stat(filePath);
+  setNoteMetadata(filePath, note, Number(stats.ino) > 0 ? String(stats.ino) : null);
+  await saveNoteMetadata();
 }
 
 function getStorageInfo() {
@@ -724,12 +1106,14 @@ function normalizeNote(input) {
     id: input.id || randomUUID(),
     title: String(input.title || '未命名笔记').trim() || '未命名笔记',
     content: String(input.content || ''),
+    fileType: input.fileType === 'txt' ? 'txt' : 'md',
     reminders: Array.isArray(input.reminders)
       ? input.reminders
         .filter((item) => item && (item.date || item.time))
         .map(normalizeReminder)
         .filter((item) => item.date)
       : [],
+    folderId: input.folderId || null,
     createdAt: isValidDateTime(input.createdAt) ? input.createdAt : now,
     updatedAt: now
   };
@@ -756,10 +1140,14 @@ async function upsertNote(_event, input) {
         const targetDir = getFolderPath(note.folderId);
         await fs.mkdir(targetDir, { recursive: true });
         const baseName = sanitizeNoteFilename(note.title);
-        const newPath = await getUniqueFilePath(targetDir, baseName);
+        const extension = path.extname(oldPath).toLowerCase() === '.txt' ? '.txt' : '.md';
+        const newPath = await getUniqueFilePath(targetDir, baseName, extension);
         try {
+          markInternalNoteWrite(oldPath);
+          markInternalNoteWrite(newPath);
           await fs.rename(oldPath, newPath);
           noteFileMap.set(note.id, newPath);
+          moveNoteMetadata(oldPath, newPath);
         } catch (error) {
           console.error('移动/重命名笔记文件失败:', error);
         }
@@ -781,11 +1169,14 @@ async function deleteNote(_event, noteId) {
   const filePath = noteFileMap.get(noteId);
   if (filePath) {
     try {
+      markInternalNoteWrite(filePath);
       await fs.unlink(filePath);
     } catch (error) {
       console.error('删除笔记文件失败:', error);
     }
+    delete noteMetadata[getNoteMetadataKey(filePath)];
     noteFileMap.delete(noteId);
+    await saveNoteMetadata();
   }
 
   notes = notes.filter((note) => note.id !== noteId);
@@ -806,8 +1197,11 @@ async function useNotesPath(nextPath) {
   notesPath = nextPath;
   await saveConfig();
   await loadNotes();
+  watchPdfFiles();
   scheduleReminderCheck();
   sendNotesChanged();
+  sendFoldersChanged();
+  sendPdfFilesChanged();
   sendStorageChanged();
   createAppMenu();
   return {
@@ -967,6 +1361,27 @@ app.whenReady().then(async () => {
   await loadNotes();
 
   ipcMain.handle('notes:list', () => notes);
+  ipcMain.handle('library:refresh', async () => {
+    await loadNotes();
+    scheduleReminderCheck();
+    return { notes, folders, pdfFiles, resourceFiles };
+  });
+  ipcMain.handle('pdfs:list', () => pdfFiles);
+  ipcMain.handle('files:list', () => resourceFiles);
+  ipcMain.handle('files:preview', (_event, fileId) => previewResourceFile(fileId));
+  ipcMain.handle('pdfs:refresh', async () => {
+    await loadPdfFiles();
+    return pdfFiles;
+  });
+  ipcMain.handle('pdfs:read', async (_event, pdfId) => {
+    const pdf = pdfFiles.find((item) => item.id === pdfId);
+    if (!pdf) {
+      throw new Error('PDF 文件不存在');
+    }
+
+    const buffer = await fs.readFile(pdf.path);
+    return buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength);
+  });
   ipcMain.handle('notes:save', upsertNote);
   ipcMain.handle('notes:delete', deleteNote);
   ipcMain.handle('notes:create', async (_event, folderId) => {
@@ -987,9 +1402,13 @@ app.whenReady().then(async () => {
       const targetDir = getFolderPath(folderId);
       await fs.mkdir(targetDir, { recursive: true });
       const baseName = sanitizeNoteFilename(note.title);
-      const newPath = await getUniqueFilePath(targetDir, baseName);
+      const extension = path.extname(oldPath).toLowerCase() === '.txt' ? '.txt' : '.md';
+      const newPath = await getUniqueFilePath(targetDir, baseName, extension);
+      markInternalNoteWrite(oldPath);
+      markInternalNoteWrite(newPath);
       await fs.rename(oldPath, newPath);
       noteFileMap.set(noteId, newPath);
+      moveNoteMetadata(oldPath, newPath);
     }
 
     note.folderId = folderId || null;
@@ -1011,6 +1430,8 @@ app.whenReady().then(async () => {
     const newPath = getFolderPath(folderId);
 
     await fs.rename(oldPath, newPath);
+    moveNoteMetadataTree(oldPath, newPath);
+    await saveNoteMetadata();
 
     const metaPath = path.join(newPath, '.folder.json');
     await fs.writeFile(metaPath, JSON.stringify(folder, null, 2), 'utf8');
@@ -1033,6 +1454,7 @@ app.whenReady().then(async () => {
   createWindow();
   createTray();
   createAppMenu();
+  watchPdfFiles();
   scheduleReminderCheck();
 
   app.on('activate', () => {
@@ -1049,4 +1471,7 @@ app.on('window-all-closed', () => {
 app.on('before-quit', () => {
   isQuitting = true;
   clearTimeout(reminderTimer);
+  clearTimeout(pdfReloadTimer);
+  clearTimeout(noteReloadTimer);
+  pdfWatcher?.close();
 });
