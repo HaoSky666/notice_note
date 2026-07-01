@@ -9,7 +9,6 @@ const saveButton = document.querySelector('#saveButton');
 const newNoteButton = document.querySelector('#newNoteButton');
 const addReminderButton = document.querySelector('#addReminderButton');
 const deleteNoteButton = document.querySelector('#deleteNoteButton');
-const toastRoot = document.querySelector('#toastRoot');
 const autoReminderCheckbox = document.querySelector('#autoReminderCheckbox');
 const reminderDialog = document.querySelector('#reminderDialog');
 const openReminderConfigButton = document.querySelector('#openReminderConfigButton');
@@ -39,7 +38,10 @@ const pdfOutline = document.querySelector('#pdfOutline');
 const pdfOutlineList = document.querySelector('#pdfOutlineList');
 const pdfOutlineToggle = document.querySelector('#pdfOutlineToggle');
 const workspaceTabsRoot = document.querySelector('#workspaceTabs');
-const workspaceTabAdd = document.querySelector('#workspaceTabAdd');
+const notificationBell = document.querySelector('#notificationBell');
+const notificationDot = document.querySelector('#notificationDot');
+const notificationPanel = document.querySelector('#notificationPanel');
+const notificationList = document.querySelector('#notificationList');
 const fileViewer = document.querySelector('#fileViewer');
 const fileViewerIcon = document.querySelector('#fileViewerIcon');
 const fileViewerTitle = document.querySelector('#fileViewerTitle');
@@ -47,6 +49,12 @@ const fileViewerMeta = document.querySelector('#fileViewerMeta');
 const fileViewerType = document.querySelector('#fileViewerType');
 const fileViewerPath = document.querySelector('#fileViewerPath');
 const fileViewerContent = document.querySelector('#fileViewerContent');
+const viewerSearchBar = document.querySelector('#viewerSearchBar');
+const viewerSearchInput = document.querySelector('#viewerSearchInput');
+const viewerSearchCount = document.querySelector('#viewerSearchCount');
+const viewerSearchPrevious = document.querySelector('#viewerSearchPrevious');
+const viewerSearchNext = document.querySelector('#viewerSearchNext');
+const viewerSearchClose = document.querySelector('#viewerSearchClose');
 
 let notes = [];
 let folders = [];
@@ -65,12 +73,17 @@ let pdfDocument = null;
 let pdfZoom = 1;
 let pdfLoadVersion = 0;
 let pdfPageRenderVersion = 0;
+let imageZoom = 1;
 let workspaceTabs = [];
 let activeWorkspaceTabKey = null;
 let filePreviewVersion = 0;
+let viewerSearchMatches = [];
+let activeViewerSearchIndex = -1;
 const SIDEBAR_COLLAPSED_KEY = 'notice-note:sidebar-collapsed';
 const REMINDER_COLLAPSED_KEY = 'notice-note:reminder-collapsed';
+const REMINDER_NOTIFICATIONS_KEY = 'notice-note:reminder-notifications';
 const DAILY_REMINDER_SLOTS = ['09:30', '15:00'];
+let reminderNotifications = readReminderNotifications();
 const editorEmptyState = document.createElement('div');
 editorEmptyState.className = 'editor-empty-state';
 editorEmptyState.hidden = true;
@@ -239,6 +252,7 @@ function renderWorkspaceTabs() {
     const tabKey = getWorkspaceTabKey(tab.type, tab.id);
     const item = document.createElement('div');
     item.className = `workspace-tab${tabKey === activeWorkspaceTabKey ? ' is-active' : ''}`;
+    item.dataset.tabKey = tabKey;
 
     const mainButton = document.createElement('button');
     mainButton.className = 'workspace-tab-main';
@@ -277,7 +291,127 @@ function renderWorkspaceTabs() {
   }
 }
 
+function getViewerSearchRoot() {
+  if (activePdfId) {
+    return pdfPages;
+  }
+  const file = resourceFiles.find((item) => item.id === activeResourceId);
+  return file?.kind === 'word'
+    ? fileViewerContent.querySelector('.word-preview')
+    : null;
+}
+
+function clearViewerSearchHighlights() {
+  if (!window.CSS?.highlights) {
+    return;
+  }
+  CSS.highlights.delete('viewer-search-match');
+  CSS.highlights.delete('viewer-search-active');
+}
+
+function buildViewerSearchRanges(root, query) {
+  const segments = [];
+  let text = '';
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  let node = walker.nextNode();
+  while (node) {
+    const value = node.nodeValue || '';
+    if (value) {
+      segments.push({ node, start: text.length, end: text.length + value.length });
+      text += value;
+    }
+    node = walker.nextNode();
+  }
+
+  const normalizedText = text.toLocaleLowerCase('zh-CN');
+  const normalizedQuery = query.toLocaleLowerCase('zh-CN');
+  const ranges = [];
+  let searchFrom = 0;
+  while (ranges.length < 500) {
+    const matchStart = normalizedText.indexOf(normalizedQuery, searchFrom);
+    if (matchStart < 0) {
+      break;
+    }
+    const matchEnd = matchStart + normalizedQuery.length;
+    const startSegment = segments.find((segment) => matchStart >= segment.start && matchStart < segment.end);
+    const endSegment = segments.find((segment) => matchEnd > segment.start && matchEnd <= segment.end);
+    if (startSegment && endSegment) {
+      const range = document.createRange();
+      range.setStart(startSegment.node, matchStart - startSegment.start);
+      range.setEnd(endSegment.node, matchEnd - endSegment.start);
+      ranges.push(range);
+    }
+    searchFrom = matchStart + normalizedQuery.length;
+  }
+  return ranges;
+}
+
+function showActiveViewerSearchMatch() {
+  const match = viewerSearchMatches[activeViewerSearchIndex];
+  if (!match) {
+    viewerSearchCount.textContent = '0 / 0';
+    return;
+  }
+
+  viewerSearchCount.textContent = `${activeViewerSearchIndex + 1} / ${viewerSearchMatches.length}`;
+  if (window.CSS?.highlights && typeof window.Highlight === 'function') {
+    CSS.highlights.set('viewer-search-active', new Highlight(match));
+  }
+  match.startContainer.parentElement?.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'center' });
+}
+
+function updateViewerSearch() {
+  clearViewerSearchHighlights();
+  viewerSearchMatches = [];
+  activeViewerSearchIndex = -1;
+  const root = getViewerSearchRoot();
+  const query = viewerSearchInput.value.trim();
+  if (!root || !query) {
+    viewerSearchCount.textContent = '0 / 0';
+    return;
+  }
+
+  viewerSearchMatches = buildViewerSearchRanges(root, query);
+  if (window.CSS?.highlights && typeof window.Highlight === 'function' && viewerSearchMatches.length > 0) {
+    CSS.highlights.set('viewer-search-match', new Highlight(...viewerSearchMatches));
+  }
+  if (viewerSearchMatches.length > 0) {
+    activeViewerSearchIndex = 0;
+    showActiveViewerSearchMatch();
+  } else {
+    viewerSearchCount.textContent = '0 / 0';
+  }
+}
+
+function moveViewerSearch(step) {
+  if (viewerSearchMatches.length === 0) {
+    return;
+  }
+  activeViewerSearchIndex = (activeViewerSearchIndex + step + viewerSearchMatches.length)
+    % viewerSearchMatches.length;
+  showActiveViewerSearchMatch();
+}
+
+function openViewerSearch() {
+  if (!getViewerSearchRoot()) {
+    return;
+  }
+  viewerSearchBar.hidden = false;
+  viewerSearchInput.focus();
+  viewerSearchInput.select();
+  updateViewerSearch();
+}
+
+function closeViewerSearch() {
+  clearViewerSearchHighlights();
+  viewerSearchBar.hidden = true;
+  viewerSearchMatches = [];
+  activeViewerSearchIndex = -1;
+  viewerSearchCount.textContent = '0 / 0';
+}
+
 function showWorkspaceTab(tab) {
+  closeViewerSearch();
   activeWorkspaceTabKey = getWorkspaceTabKey(tab.type, tab.id);
   if (tab.type === 'pdf') {
     activePdfId = tab.id;
@@ -346,6 +480,31 @@ async function closeWorkspaceTab(tabKey) {
   renderEditor();
 }
 
+async function closeOtherWorkspaceTabs(tabKey) {
+  const tab = workspaceTabs.find((item) => getWorkspaceTabKey(item.type, item.id) === tabKey);
+  if (!tab) {
+    return;
+  }
+
+  await flushPendingSave();
+  workspaceTabs = [tab];
+  if (tabKey === activeWorkspaceTabKey) {
+    renderWorkspaceTabs();
+  } else {
+    showWorkspaceTab(tab);
+  }
+}
+
+async function closeAllWorkspaceTabs() {
+  await flushPendingSave();
+  workspaceTabs = [];
+  activeWorkspaceTabKey = null;
+  activeNoteId = null;
+  activePdfId = null;
+  activeResourceId = null;
+  renderEditor();
+}
+
 function reconcileWorkspaceTabs() {
   workspaceTabs = workspaceTabs.filter((tab) => Boolean(getWorkspaceTabResource(tab)));
   let activeTab = workspaceTabs.find((tab) => {
@@ -370,6 +529,30 @@ function reconcileWorkspaceTabs() {
 
 function getCurrentFolders() {
   return folders.filter(folder => folder.parentId === activeFolderId);
+}
+
+function getFolderNamePath(folderId, sourceFolders = folders) {
+  const names = [];
+  let current = folderId ? sourceFolders.find((folder) => folder.id === folderId) : null;
+  while (current) {
+    names.unshift(current.name);
+    current = current.parentId
+      ? sourceFolders.find((folder) => folder.id === current.parentId)
+      : null;
+  }
+  return names;
+}
+
+function resolveFolderIdByNamePath(names, sourceFolders = folders) {
+  let parentId = null;
+  for (const name of names) {
+    const folder = sourceFolders.find((item) => item.parentId === parentId && item.name === name);
+    if (!folder) {
+      return null;
+    }
+    parentId = folder.id;
+  }
+  return parentId;
 }
 
 function renderBreadcrumb() {
@@ -570,7 +753,7 @@ function renderNoteList() {
 
     const textBadge = document.createElement('span');
     textBadge.className = `file-type-badge ${note.fileType}`;
-    textBadge.textContent = note.fileType === 'txt' ? 'TXT' : 'MD';
+    textBadge.textContent = note.fileType.toUpperCase();
     titleRow.append(textBadge);
 
     item.append(titleRow);
@@ -813,7 +996,7 @@ function normalizeMarkdownContent(content) {
 }
 
 function normalizeEditorContent(content, note = getActiveNote()) {
-  return note?.fileType === 'txt'
+  return ['txt', 'json'].includes(note?.fileType)
     ? String(content || '')
     : normalizeMarkdownContent(content);
 }
@@ -874,34 +1057,86 @@ async function handlePastedImage(file) {
   return `${result.markdown}\n`;
 }
 
-function showReminderToast(reminder) {
-  const toast = document.createElement('section');
-  toast.className = 'reminder-toast';
+function readReminderNotifications() {
+  try {
+    const stored = JSON.parse(localStorage.getItem(REMINDER_NOTIFICATIONS_KEY) || '[]');
+    return Array.isArray(stored) ? stored.slice(0, 50) : [];
+  } catch {
+    return [];
+  }
+}
 
-  const heading = document.createElement('div');
-  heading.className = 'toast-heading';
-  heading.textContent = `提醒：${reminder.title || '未命名笔记'}`;
+function saveReminderNotifications() {
+  localStorage.setItem(REMINDER_NOTIFICATIONS_KEY, JSON.stringify(reminderNotifications.slice(0, 50)));
+}
 
-  const body = document.createElement('div');
-  body.className = 'toast-body';
-  body.textContent = reminder.body || '你有一条笔记提醒到了。';
+function renderReminderNotifications() {
+  notificationList.innerHTML = '';
+  notificationDot.hidden = !reminderNotifications.some((item) => !item.read);
 
-  const meta = document.createElement('div');
-  meta.className = 'toast-meta';
-  meta.textContent = `${formatDateOnly(reminder.date)} ${reminder.slot || ''}`.trim();
+  if (reminderNotifications.length === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'notification-empty';
+    empty.textContent = '暂无提醒通知';
+    notificationList.append(empty);
+    return;
+  }
 
-  const closeButton = document.createElement('button');
-  closeButton.className = 'toast-close';
-  closeButton.type = 'button';
-  closeButton.textContent = '知道了';
-  closeButton.addEventListener('click', () => toast.remove());
+  for (const notification of reminderNotifications) {
+    const button = document.createElement('button');
+    button.className = `notification-item${notification.read ? '' : ' is-unread'}`;
+    button.type = 'button';
 
-  toast.append(heading, body, meta, closeButton);
-  toastRoot.append(toast);
+    const title = document.createElement('strong');
+    title.textContent = notification.title || '未命名笔记';
+    const body = document.createElement('span');
+    body.className = 'notification-item-body';
+    body.textContent = notification.body || '你有一条笔记提醒到了。';
+    const meta = document.createElement('span');
+    meta.className = 'notification-item-meta';
+    meta.textContent = `${formatDateOnly(notification.date)} ${notification.slot || ''}`.trim();
+    button.append(title, body, meta);
 
-  setTimeout(() => {
-    toast.remove();
-  }, 30000);
+    const noteExists = notes.some((note) => note.id === notification.noteId);
+    button.disabled = !noteExists;
+    if (!noteExists) {
+      button.title = '对应文件已不存在';
+    } else {
+      button.addEventListener('click', () => {
+        notificationPanel.hidden = true;
+        selectNote(notification.noteId).catch(console.error);
+      });
+    }
+    notificationList.append(button);
+  }
+}
+
+function addReminderNotification(reminder) {
+  const id = `${reminder.reminderId || reminder.noteId}:${reminder.date || ''}:${reminder.slot || ''}`;
+  reminderNotifications = reminderNotifications.filter((item) => item.id !== id);
+  reminderNotifications.unshift({
+    id,
+    noteId: reminder.noteId,
+    title: reminder.title,
+    body: reminder.body,
+    date: reminder.date,
+    slot: reminder.slot,
+    receivedAt: new Date().toISOString(),
+    read: false
+  });
+  reminderNotifications = reminderNotifications.slice(0, 50);
+  saveReminderNotifications();
+  renderReminderNotifications();
+}
+
+function toggleNotificationPanel() {
+  notificationPanel.hidden = !notificationPanel.hidden;
+  if (notificationPanel.hidden) {
+    return;
+  }
+  reminderNotifications = reminderNotifications.map((item) => ({ ...item, read: true }));
+  saveReminderNotifications();
+  renderReminderNotifications();
 }
 
 function renderStorageInfo() {
@@ -1044,6 +1279,8 @@ async function renderPdfPages() {
     const pageElement = document.createElement('section');
     pageElement.className = 'pdf-page';
     pageElement.dataset.pageNumber = String(pageNumber);
+    pageElement.style.setProperty('--scale-factor', String(viewport.scale));
+    pageElement.style.setProperty('--user-unit', String(viewport.userUnit || 1));
     pageElement.style.width = `${Math.floor(viewport.width)}px`;
     pageElement.style.height = `${Math.floor(viewport.height)}px`;
 
@@ -1075,6 +1312,10 @@ async function renderPdfPages() {
       viewport
     });
     await layer.render();
+  }
+
+  if (!viewerSearchBar.hidden) {
+    updateViewerSearch();
   }
 }
 
@@ -1179,17 +1420,66 @@ async function loadPdfPreview(pdf) {
   }
 }
 
-function changePdfZoom(step) {
+async function changePdfZoom(step, anchor = null) {
   const nextZoom = Math.min(2, Math.max(0.5, pdfZoom + step));
   if (nextZoom === pdfZoom) {
     return;
   }
 
+  const pageNumber = anchor?.page?.dataset.pageNumber;
+  const pageRect = anchor?.page?.getBoundingClientRect();
+  const anchorRatioX = pageRect ? (anchor.clientX - pageRect.left) / pageRect.width : 0;
+  const anchorRatioY = pageRect ? (anchor.clientY - pageRect.top) / pageRect.height : 0;
+
   pdfZoom = nextZoom;
   pdfZoomValue.textContent = `${Math.round(pdfZoom * 100)}%`;
   pdfZoomOut.disabled = pdfZoom <= 0.5;
   pdfZoomIn.disabled = pdfZoom >= 2;
-  renderPdfPages().catch((error) => showPdfStatus(`PDF 渲染失败：${error.message}`, true));
+  await renderPdfPages();
+
+  if (!pageNumber || pdfZoom !== nextZoom) {
+    return;
+  }
+
+  const nextPage = pdfPages.querySelector(`[data-page-number="${pageNumber}"]`);
+  const nextRect = nextPage?.getBoundingClientRect();
+  if (nextRect) {
+    pdfPages.scrollLeft += nextRect.left + (nextRect.width * anchorRatioX) - anchor.clientX;
+    pdfPages.scrollTop += nextRect.top + (nextRect.height * anchorRatioY) - anchor.clientY;
+  }
+}
+
+function changeImageZoom(step, anchor) {
+  const image = fileViewerContent.querySelector('.file-preview-image');
+  if (!image?.complete || !image.naturalWidth) {
+    return;
+  }
+
+  const nextZoom = Math.min(5, Math.max(0.25, imageZoom + step));
+  if (nextZoom === imageZoom) {
+    return;
+  }
+
+  const previousRect = image.getBoundingClientRect();
+  if (imageZoom === 1) {
+    image.dataset.baseWidth = String(previousRect.width);
+    image.dataset.baseHeight = String(previousRect.height);
+  }
+
+  const anchorRatioX = (anchor.clientX - previousRect.left) / previousRect.width;
+  const anchorRatioY = (anchor.clientY - previousRect.top) / previousRect.height;
+  const baseWidth = Number(image.dataset.baseWidth) || previousRect.width / imageZoom;
+  const baseHeight = Number(image.dataset.baseHeight) || previousRect.height / imageZoom;
+
+  imageZoom = nextZoom;
+  image.style.maxWidth = 'none';
+  image.style.maxHeight = 'none';
+  image.style.width = `${baseWidth * imageZoom}px`;
+  image.style.height = `${baseHeight * imageZoom}px`;
+
+  const nextRect = image.getBoundingClientRect();
+  fileViewerContent.scrollLeft += nextRect.left + (nextRect.width * anchorRatioX) - anchor.clientX;
+  fileViewerContent.scrollTop += nextRect.top + (nextRect.height * anchorRatioY) - anchor.clientY;
 }
 
 function renderPdf() {
@@ -1221,9 +1511,82 @@ function showFilePreviewStatus(message) {
   fileViewerContent.append(status);
 }
 
+function applySpreadsheetBorder(element, side, border) {
+  if (!border) {
+    return;
+  }
+
+  const width = ['medium', 'mediumDashed', 'mediumDashDot', 'mediumDashDotDot'].includes(border.style)
+    ? 2
+    : border.style === 'thick' ? 3 : 1;
+  const lineStyle = border.style === 'double'
+    ? 'double'
+    : border.style.includes('dash') || border.style.includes('Dash')
+      ? 'dashed'
+      : border.style === 'dotted' || border.style === 'hair'
+        ? 'dotted'
+        : 'solid';
+  element.style[`border${side}Width`] = `${border.style === 'double' ? 3 : width}px`;
+  element.style[`border${side}Style`] = lineStyle;
+  element.style[`border${side}Color`] = border.color || '#5f594e';
+}
+
+function applySpreadsheetCellStyle(cell, style = {}) {
+  if (style.fontName) {
+    cell.style.fontFamily = `"${style.fontName}", "Microsoft YaHei", sans-serif`;
+  }
+  if (style.fontSize) {
+    cell.style.fontSize = `${style.fontSize}pt`;
+  }
+  cell.style.fontWeight = style.bold ? '700' : '400';
+  cell.style.fontStyle = style.italic ? 'italic' : 'normal';
+  if (style.underline || style.strike) {
+    cell.style.textDecoration = [style.underline ? 'underline' : '', style.strike ? 'line-through' : '']
+      .filter(Boolean)
+      .join(' ');
+  }
+  if (style.fontColor) {
+    cell.style.color = style.fontColor;
+  }
+  if (style.fillColor) {
+    cell.style.backgroundColor = style.fillColor;
+  }
+
+  const horizontal = style.horizontal === 'centerContinuous' ? 'center' : style.horizontal;
+  if (['left', 'center', 'right', 'justify'].includes(horizontal)) {
+    cell.style.textAlign = horizontal;
+  }
+  if (style.vertical === 'middle') {
+    cell.style.verticalAlign = 'middle';
+  } else if (['top', 'bottom'].includes(style.vertical)) {
+    cell.style.verticalAlign = style.vertical;
+  }
+  if (style.wrapText) {
+    cell.style.whiteSpace = 'normal';
+    cell.style.overflowWrap = 'anywhere';
+  }
+
+  applySpreadsheetBorder(cell, 'Top', style.borders?.top);
+  applySpreadsheetBorder(cell, 'Right', style.borders?.right);
+  applySpreadsheetBorder(cell, 'Bottom', style.borders?.bottom);
+  applySpreadsheetBorder(cell, 'Left', style.borders?.left);
+}
+
 function renderSpreadsheetPreview(sheets) {
   fileViewerContent.innerHTML = '';
-  for (const sheet of sheets) {
+  const preview = document.createElement('div');
+  preview.className = 'spreadsheet-preview';
+  const tabs = document.createElement('div');
+  tabs.className = 'spreadsheet-sheet-tabs';
+  const sheetRoot = document.createElement('div');
+  preview.append(tabs, sheetRoot);
+  fileViewerContent.append(preview);
+
+  const renderSheet = (sheet, activeButton) => {
+    for (const button of tabs.querySelectorAll('button')) {
+      button.classList.toggle('is-active', button === activeButton);
+    }
+    sheetRoot.innerHTML = '';
     const section = document.createElement('section');
     section.className = 'spreadsheet-preview-sheet';
     const heading = document.createElement('h2');
@@ -1233,11 +1596,36 @@ function renderSpreadsheetPreview(sheets) {
     const table = document.createElement('table');
     table.className = 'spreadsheet-preview-table';
 
+    const colgroup = document.createElement('colgroup');
+    for (const column of sheet.columns || []) {
+      const col = document.createElement('col');
+      col.style.width = `${column.width}px`;
+      colgroup.append(col);
+    }
+    const tableWidth = (sheet.columns || []).reduce((total, column) => total + column.width, 0);
+    if (tableWidth > 0) {
+      table.style.width = `${tableWidth}px`;
+    }
+    table.append(colgroup);
+
     for (const row of sheet.rows) {
       const tr = document.createElement('tr');
-      for (const value of row) {
+      if (row.height) {
+        tr.style.height = `${row.height}px`;
+      }
+      for (const cell of row.cells) {
+        if (cell.skip) {
+          continue;
+        }
         const td = document.createElement('td');
-        td.textContent = value;
+        td.textContent = cell.value;
+        if (cell.rowSpan > 1) {
+          td.rowSpan = cell.rowSpan;
+        }
+        if (cell.columnSpan > 1) {
+          td.colSpan = cell.columnSpan;
+        }
+        applySpreadsheetCellStyle(td, cell.style);
         tr.append(td);
       }
       table.append(tr);
@@ -1251,7 +1639,132 @@ function renderSpreadsheetPreview(sheets) {
       note.textContent = '表格较大，当前仅显示前 500 行、50 列。';
       section.append(note);
     }
-    fileViewerContent.append(section);
+    sheetRoot.append(section);
+  };
+
+  for (const [index, sheet] of sheets.entries()) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.textContent = sheet.name;
+    button.addEventListener('click', () => renderSheet(sheet, button));
+    tabs.append(button);
+    if (index === 0) {
+      renderSheet(sheet, button);
+    }
+  }
+}
+
+function appendSanitizedWordNode(sourceNode, targetParent) {
+  if (sourceNode.nodeType === Node.TEXT_NODE) {
+    targetParent.append(document.createTextNode(sourceNode.textContent || ''));
+    return;
+  }
+  if (sourceNode.nodeType !== Node.ELEMENT_NODE) {
+    return;
+  }
+
+  const tagName = sourceNode.tagName.toLowerCase();
+  const allowedTags = new Set([
+    'p', 'br', 'strong', 'em', 'u', 's', 'sup', 'sub', 'a',
+    'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'ul', 'ol', 'li',
+    'table', 'thead', 'tbody', 'tfoot', 'tr', 'th', 'td',
+    'img', 'blockquote', 'hr'
+  ]);
+
+  if (!allowedTags.has(tagName)) {
+    for (const child of sourceNode.childNodes) {
+      appendSanitizedWordNode(child, targetParent);
+    }
+    return;
+  }
+
+  const target = document.createElement(tagName);
+  if (sourceNode.id) {
+    target.id = sourceNode.id;
+  }
+
+  const wordClasses = [...sourceNode.classList].filter((className) => className.startsWith('word-'));
+  if (wordClasses.length > 0) {
+    target.className = wordClasses.join(' ');
+  }
+
+  if (tagName === 'a') {
+    const href = sourceNode.getAttribute('href') || '';
+    if (href.startsWith('#')) {
+      target.setAttribute('href', href);
+    }
+  } else if (tagName === 'img') {
+    const src = sourceNode.getAttribute('src') || '';
+    if (/^data:image\/(?:png|jpe?g|gif|webp);base64,/i.test(src)) {
+      target.setAttribute('src', src);
+    }
+    target.setAttribute('alt', sourceNode.getAttribute('alt') || '文档图片');
+  } else if (tagName === 'td' || tagName === 'th') {
+    for (const attributeName of ['colspan', 'rowspan']) {
+      const value = Number(sourceNode.getAttribute(attributeName));
+      if (Number.isInteger(value) && value > 1 && value <= 100) {
+        target.setAttribute(attributeName, String(value));
+      }
+    }
+  }
+
+  for (const child of sourceNode.childNodes) {
+    appendSanitizedWordNode(child, target);
+  }
+  targetParent.append(target);
+}
+
+function enhanceWordPreview(content) {
+  const children = [...content.children];
+  const tocIndex = children.findIndex((element) => {
+    return element.tagName === 'P' && element.textContent.replace(/\s/g, '') === '目录';
+  });
+  if (tocIndex < 3) {
+    return;
+  }
+
+  const coverElements = children.slice(0, tocIndex);
+  const cover = document.createElement('section');
+  cover.className = 'word-cover';
+  content.insertBefore(cover, coverElements[0]);
+  cover.append(...coverElements);
+
+  const paragraphs = [...cover.querySelectorAll(':scope > p')];
+  paragraphs[0]?.classList.add('word-cover-organization');
+  const title = paragraphs.find((paragraph) => {
+    return /(规格书|方案|报告|说明书|合同|招标文件|技术要求)/.test(paragraph.textContent);
+  }) || paragraphs[1];
+  title?.classList.add('word-cover-title');
+
+  for (const paragraph of paragraphs) {
+    const text = paragraph.textContent.replace(/\s/g, '');
+    if (/(编制人|审核人|分管领导|主要领导|负责人)[:：]/.test(text)) {
+      paragraph.classList.add('word-cover-field');
+    } else if (/^\d{4}年\d{1,2}月(?:\d{1,2}日)?$/.test(text)) {
+      paragraph.classList.add('word-cover-date');
+    }
+  }
+
+  children[tocIndex].classList.add('word-toc-title');
+}
+
+function renderWordPreview(html) {
+  const content = document.createElement('article');
+  content.className = 'word-preview';
+  const parsed = new DOMParser().parseFromString(html || '', 'text/html');
+
+  for (const child of parsed.body.childNodes) {
+    appendSanitizedWordNode(child, content);
+  }
+
+  if (!content.hasChildNodes()) {
+    content.textContent = '文档没有可显示的内容。';
+  } else {
+    enhanceWordPreview(content);
+  }
+  fileViewerContent.append(content);
+  if (!viewerSearchBar.hidden) {
+    updateViewerSearch();
   }
 }
 
@@ -1264,16 +1777,19 @@ async function loadResourcePreview(file, version) {
 
     fileViewerContent.innerHTML = '';
     if (preview.kind === 'image') {
+      imageZoom = 1;
       const image = document.createElement('img');
       image.className = 'file-preview-image';
-      image.src = preview.fileUrl;
       image.alt = file.name;
+      image.addEventListener('load', () => {
+        const rect = image.getBoundingClientRect();
+        image.dataset.baseWidth = String(rect.width);
+        image.dataset.baseHeight = String(rect.height);
+      }, { once: true });
+      image.src = preview.fileUrl;
       fileViewerContent.append(image);
     } else if (preview.kind === 'word') {
-      const content = document.createElement('pre');
-      content.className = 'word-preview';
-      content.textContent = preview.text || '文档没有可显示的文字内容。';
-      fileViewerContent.append(content);
+      renderWordPreview(preview.html);
     } else if (preview.kind === 'spreadsheet') {
       renderSpreadsheetPreview(preview.sheets);
     }
@@ -1365,7 +1881,7 @@ function createMarkdownEditor() {
     parent: editorRoot,
     initialValue: '',
     placeholder: '点击这里记录 Markdown 笔记。',
-    isPlainText: () => getActiveNote()?.fileType === 'txt',
+    isPlainText: () => ['txt', 'json'].includes(getActiveNote()?.fileType),
     resolveImageSrc: (src) => src,
     onPasteImage: handlePastedImage,
     onError: (error) => {
@@ -1515,21 +2031,28 @@ async function createNote() {
 }
 
 async function refreshNotes() {
-  const library = await window.noticeNote.refreshLibrary();
-  notes = sortNotes(library.notes);
-  folders = library.folders;
-  pdfFiles = library.pdfFiles;
-  resourceFiles = library.resourceFiles;
-  renderBreadcrumb();
-  if (reconcileWorkspaceTabs()) {
-    return;
-  }
-  if (activePdfId && pdfFiles.some((pdf) => pdf.id === activePdfId)) {
-    renderPdf();
-  } else if (activeResourceId && resourceFiles.some((file) => file.id === activeResourceId)) {
-    renderResourceFile();
-  } else {
-    renderEditor();
+  refreshButton.disabled = true;
+  try {
+    const activeFolderPath = getFolderNamePath(activeFolderId);
+    const library = await window.noticeNote.refreshLibrary();
+    notes = sortNotes(library.notes);
+    folders = library.folders;
+    activeFolderId = resolveFolderIdByNamePath(activeFolderPath, folders);
+    pdfFiles = library.pdfFiles;
+    resourceFiles = library.resourceFiles;
+    renderBreadcrumb();
+    if (reconcileWorkspaceTabs()) {
+      return;
+    }
+    if (activePdfId && pdfFiles.some((pdf) => pdf.id === activePdfId)) {
+      renderPdf();
+    } else if (activeResourceId && resourceFiles.some((file) => file.id === activeResourceId)) {
+      renderResourceFile();
+    } else {
+      renderEditor();
+    }
+  } finally {
+    refreshButton.disabled = false;
   }
 }
 
@@ -1612,13 +2135,17 @@ async function boot() {
   renderBreadcrumb();
   renderNoteList();
   renderEditor();
+  renderReminderNotifications();
 
   window.noticeNote.onNotesChanged((nextNotes) => {
     mergeIncomingNotes(nextNotes);
+    renderReminderNotifications();
   });
 
   window.noticeNote.onFoldersChanged((nextFolders) => {
+    const activeFolderPath = getFolderNamePath(activeFolderId);
     folders = nextFolders;
+    activeFolderId = resolveFolderIdByNamePath(activeFolderPath, folders);
     renderBreadcrumb();
     renderNoteList();
   });
@@ -1657,7 +2184,7 @@ async function boot() {
   });
 
   window.noticeNote.onReminderFired((reminder) => {
-    showReminderToast(reminder);
+    addReminderNotification(reminder);
   });
 }
 
@@ -1719,14 +2246,63 @@ deleteNoteButton.addEventListener('click', () => {
 insertImageButton.addEventListener('click', () => {
   insertImage().catch(console.error);
 });
-pdfZoomOut.addEventListener('click', () => changePdfZoom(-0.1));
-pdfZoomIn.addEventListener('click', () => changePdfZoom(0.1));
+pdfZoomOut.addEventListener('click', () => {
+  changePdfZoom(-0.1).catch((error) => showPdfStatus(`PDF 渲染失败：${error.message}`, true));
+});
+pdfZoomIn.addEventListener('click', () => {
+  changePdfZoom(0.1).catch((error) => showPdfStatus(`PDF 渲染失败：${error.message}`, true));
+});
+pdfPages.addEventListener('wheel', (event) => {
+  if (!event.ctrlKey || event.deltaY === 0) {
+    return;
+  }
+
+  event.preventDefault();
+  const page = event.target.closest('.pdf-page');
+  changePdfZoom(event.deltaY < 0 ? 0.1 : -0.1, {
+    page,
+    clientX: event.clientX,
+    clientY: event.clientY
+  }).catch((error) => showPdfStatus(`PDF 渲染失败：${error.message}`, true));
+}, { passive: false });
+fileViewerContent.addEventListener('wheel', (event) => {
+  if (!event.ctrlKey || event.deltaY === 0 || !event.target.closest('.file-preview-image')) {
+    return;
+  }
+
+  event.preventDefault();
+  changeImageZoom(event.deltaY < 0 ? 0.1 : -0.1, event);
+}, { passive: false });
+viewerSearchInput.addEventListener('input', updateViewerSearch);
+viewerSearchInput.addEventListener('keydown', (event) => {
+  if (event.key === 'Enter') {
+    event.preventDefault();
+    moveViewerSearch(event.shiftKey ? -1 : 1);
+  } else if (event.key === 'Escape') {
+    event.preventDefault();
+    closeViewerSearch();
+  }
+});
+viewerSearchPrevious.addEventListener('click', () => moveViewerSearch(-1));
+viewerSearchNext.addEventListener('click', () => moveViewerSearch(1));
+viewerSearchClose.addEventListener('click', closeViewerSearch);
+document.addEventListener('keydown', (event) => {
+  if ((event.ctrlKey || event.metaKey) && event.key.toLocaleLowerCase('en-US') === 'f'
+    && getViewerSearchRoot()) {
+    event.preventDefault();
+    openViewerSearch();
+  }
+});
 pdfOutlineToggle.addEventListener('click', () => {
   pdfOutline.hidden = !pdfOutline.hidden;
   pdfOutlineToggle.classList.toggle('is-active', !pdfOutline.hidden);
 });
-workspaceTabAdd.addEventListener('click', () => {
-  createNote().catch(console.error);
+notificationBell.addEventListener('click', (event) => {
+  event.stopPropagation();
+  toggleNotificationPanel();
+});
+notificationPanel.addEventListener('click', (event) => {
+  event.stopPropagation();
 });
 toggleSidebarButton.addEventListener('click', () => {
   setSidebarCollapsed(!sidebar.classList.contains('is-collapsed'));
@@ -1789,10 +2365,15 @@ function showContextMenu(x, y, entry = null) {
   contextMenu.style.top = `${y}px`;
 
   if (entry) {
+    contextMenu.append(createContextMenuItem('复制绝对路径', () => {
+      window.noticeNote.copyEntryPath(entry).catch(console.error);
+    }));
+    if (entry.type !== 'folder') {
+      contextMenu.append(createContextMenuItem('使用默认应用打开', () => {
+        window.noticeNote.openEntryWithDefaultApp(entry).catch(console.error);
+      }));
+    }
     contextMenu.append(
-      createContextMenuItem('复制绝对路径', () => {
-        window.noticeNote.copyEntryPath(entry).catch(console.error);
-      }),
       createContextMenuItem('打开资源管理器', () => {
         window.noticeNote.showEntryInFolder(entry).catch(console.error);
       }),
@@ -1830,6 +2411,32 @@ function showContextMenu(x, y, entry = null) {
   }
 }
 
+function showWorkspaceTabContextMenu(x, y, tabKey) {
+  hideContextMenu();
+
+  contextMenu = document.createElement('div');
+  contextMenu.className = 'context-menu';
+  contextMenu.style.left = `${x}px`;
+  contextMenu.style.top = `${y}px`;
+  contextMenu.append(
+    createContextMenuItem('关闭其他', () => {
+      closeOtherWorkspaceTabs(tabKey).catch(console.error);
+    }),
+    createContextMenuItem('关闭所有', () => {
+      closeAllWorkspaceTabs().catch(console.error);
+    })
+  );
+  document.body.append(contextMenu);
+
+  const rect = contextMenu.getBoundingClientRect();
+  if (rect.right > window.innerWidth) {
+    contextMenu.style.left = `${x - rect.width}px`;
+  }
+  if (rect.bottom > window.innerHeight) {
+    contextMenu.style.top = `${y - rect.height}px`;
+  }
+}
+
 function hideContextMenu() {
   if (contextMenu) {
     contextMenu.remove();
@@ -1842,15 +2449,29 @@ noteList.addEventListener('contextmenu', (e) => {
   showContextMenu(e.clientX, e.clientY, getContextMenuEntry(e.target));
 });
 
+workspaceTabsRoot.addEventListener('contextmenu', (e) => {
+  const tab = e.target.closest('.workspace-tab');
+  if (!tab?.dataset.tabKey) {
+    return;
+  }
+
+  e.preventDefault();
+  showWorkspaceTabContextMenu(e.clientX, e.clientY, tab.dataset.tabKey);
+});
+
 document.addEventListener('click', (e) => {
   if (contextMenu && !contextMenu.contains(e.target)) {
     hideContextMenu();
+  }
+  if (!notificationPanel.hidden && !e.target.closest('.notification-center')) {
+    notificationPanel.hidden = true;
   }
 });
 
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
     hideContextMenu();
+    notificationPanel.hidden = true;
   }
 });
 

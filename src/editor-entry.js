@@ -70,7 +70,48 @@ function addListLineClass(builder, line, depth) {
   addLineClass(builder, line, `cm-list-line cm-list-depth-${depth}`);
 }
 
-function buildLivePreviewDecorations(view, options = {}) {
+function collectFencedCodeBlocks(doc) {
+  const blocks = [];
+  let opening = null;
+
+  for (let lineNumber = 1; lineNumber <= doc.lines; lineNumber++) {
+    const line = doc.line(lineNumber);
+    if (!opening) {
+      const fence = /^```(?:\s*([\w-]+))?\s*$/.exec(line.text);
+      if (fence) {
+        opening = { lineNumber, language: fence[1] || '' };
+      }
+      continue;
+    }
+
+    if (/^```\s*$/.test(line.text)) {
+      blocks.push({
+        startLine: opening.lineNumber,
+        endLine: lineNumber,
+        language: opening.language
+      });
+      opening = null;
+    }
+  }
+
+  return blocks;
+}
+
+function isCodeBlockActive(view, block) {
+  if (!view.hasFocus) {
+    return false;
+  }
+
+  return view.state.selection.ranges.some((range) => {
+    const headLine = view.state.doc.lineAt(range.head).number;
+    const anchorLine = view.state.doc.lineAt(range.anchor).number;
+    const selectionStart = Math.min(headLine, anchorLine);
+    const selectionEnd = Math.max(headLine, anchorLine);
+    return selectionStart <= block.endLine && selectionEnd >= block.startLine;
+  });
+}
+
+function buildLivePreviewDecorations(view, options = {}, codeBlocks = []) {
   const builder = new RangeSetBuilder();
   if (options.isPlainText?.()) {
     return builder.finish();
@@ -81,6 +122,38 @@ function buildLivePreviewDecorations(view, options = {}) {
     while (pos <= to) {
       const line = view.state.doc.lineAt(pos);
       const text = line.text;
+
+      const codeBlock = codeBlocks.find((block) => {
+        return line.number >= block.startLine && line.number <= block.endLine;
+      });
+      if (codeBlock) {
+        const positionClass = line.number === codeBlock.startLine
+          ? 'cm-code-block-start'
+          : line.number === codeBlock.endLine
+            ? 'cm-code-block-end'
+            : 'cm-code-block-content';
+        const isEditing = isCodeBlockActive(view, codeBlock);
+        const editingClass = isEditing ? ' cm-code-block-editing' : '';
+        addLineClass(builder, line, `cm-code-block-line ${positionClass}${editingClass}`);
+
+        if (!isEditing) {
+          if (line.number === codeBlock.startLine) {
+            builder.add(
+              line.from,
+              line.to,
+              Decoration.replace({ widget: new CodeFenceWidget(codeBlock.language) })
+            );
+          } else if (line.number === codeBlock.endLine) {
+            replaceWithEmpty(builder, line.from, line.to);
+          }
+        }
+
+        if (line.to >= to) {
+          break;
+        }
+        pos = line.to + 1;
+        continue;
+      }
 
       if (!isLineActive(view, line)) {
         const heading = /^(#{1,6})\s+/.exec(text);
@@ -225,15 +298,37 @@ class ImageWidget extends WidgetType {
   }
 }
 
+class CodeFenceWidget extends WidgetType {
+  constructor(language) {
+    super();
+    this.language = language;
+  }
+
+  eq(other) {
+    return other.language === this.language;
+  }
+
+  toDOM() {
+    const label = document.createElement('span');
+    label.className = 'cm-code-block-language';
+    label.textContent = this.language;
+    return label;
+  }
+}
+
 function createLivePreviewPlugin(options) {
   return ViewPlugin.fromClass(class {
     constructor(view) {
-      this.decorations = buildLivePreviewDecorations(view, options);
+      this.codeBlocks = collectFencedCodeBlocks(view.state.doc);
+      this.decorations = buildLivePreviewDecorations(view, options, this.codeBlocks);
     }
 
     update(update) {
+      if (update.docChanged) {
+        this.codeBlocks = collectFencedCodeBlocks(update.state.doc);
+      }
       if (update.docChanged || update.selectionSet || update.viewportChanged || update.focusChanged) {
-        this.decorations = buildLivePreviewDecorations(update.view, options);
+        this.decorations = buildLivePreviewDecorations(update.view, options, this.codeBlocks);
       }
     }
   }, {

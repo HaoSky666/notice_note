@@ -39,7 +39,26 @@
     <main class="workspace">
       <div class="workspace-tabs-bar">
         <div id="workspaceTabs" class="workspace-tabs"></div>
-        <button id="workspaceTabAdd" class="workspace-tab-add" type="button" title="新建笔记" aria-label="新建笔记">＋</button>
+        <div class="notification-center">
+          <button id="notificationBell" class="notification-bell" type="button" title="提醒通知" aria-label="提醒通知">
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <path d="M6.5 9.5a5.5 5.5 0 0 1 11 0c0 6 2.5 6.5 2.5 6.5H4s2.5-.5 2.5-6.5Z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>
+              <path d="M9.5 19a2.8 2.8 0 0 0 5 0" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+            </svg>
+            <span id="notificationDot" class="notification-dot" hidden></span>
+          </button>
+          <section id="notificationPanel" class="notification-panel" hidden>
+            <div class="notification-panel-heading">提醒通知</div>
+            <div id="notificationList" class="notification-list"></div>
+          </section>
+        </div>
+      </div>
+      <div id="viewerSearchBar" class="viewer-search-bar" hidden>
+        <input id="viewerSearchInput" type="search" placeholder="在文档中搜索" autocomplete="off">
+        <span id="viewerSearchCount" class="viewer-search-count">0 / 0</span>
+        <button id="viewerSearchPrevious" type="button" title="上一个匹配项" aria-label="上一个匹配项">↑</button>
+        <button id="viewerSearchNext" type="button" title="下一个匹配项" aria-label="下一个匹配项">↓</button>
+        <button id="viewerSearchClose" type="button" title="关闭搜索" aria-label="关闭搜索">×</button>
       </div>
       <div class="workspace-content">
       <section class="editor-panel">
@@ -143,8 +162,6 @@
         </div>
       </form>
     </dialog>
-    <div id="toastRoot" class="toast-root"></div>
-
     <script src="./vendor/editor.bundle.js"></script>
     <script src="./renderer.js"></script>
   </body>

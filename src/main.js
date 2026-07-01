@@ -30,6 +30,8 @@ let pdfWatcher;
 let noteReloadTimer;
 let notesPath;
 let isQuitting = false;
+let noteLoadPromise = null;
+let resourceLoadPromise = null;
 let noteFileMap = new Map(); // noteId -> filePath
 let noteMetadata = {};
 let internalNoteWrites = new Map();
@@ -466,6 +468,14 @@ function createEmptyNote() {
   };
 }
 
+function normalizeNoteFileType(fileType) {
+  return ['txt', 'json'].includes(fileType) ? fileType : 'md';
+}
+
+function getNoteFileExtension(fileType) {
+  return fileType === 'txt' ? '.txt' : fileType === 'json' ? '.json' : '.md';
+}
+
 function isValidDateTime(value) {
   return typeof value === 'string' && Number.isFinite(Date.parse(value));
 }
@@ -528,7 +538,7 @@ function normalizeLoadedNote(input) {
     id: input.id || randomUUID(),
     title: String(input.title || '未命名笔记').trim() || '未命名笔记',
     content: String(input.content || ''),
-    fileType: input.fileType === 'txt' ? 'txt' : 'md',
+    fileType: normalizeNoteFileType(input.fileType),
     reminders: Array.isArray(input.reminders)
       ? input.reminders
         .filter((item) => item && (item.date || item.time))
@@ -574,7 +584,7 @@ async function scanFolderDirectory(dirPath, parentId) {
     }
 
     const folder = {
-      id: data.id || randomUUID(),
+      id: data.id || getStableFolderId(folderPath),
       name: data.name || entry.name,
       parentId,
       createdAt: data.createdAt || new Date().toISOString()
@@ -687,6 +697,11 @@ function getFolderPathParts(folder) {
   return parts;
 }
 
+function getStableFolderId(folderPath) {
+  const relativePath = path.relative(getNotesPath(), folderPath).split(path.sep).join('/');
+  return `path:${relativePath.toLocaleLowerCase('zh-CN')}`;
+}
+
 function sendFoldersChanged() {
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send('folders:changed', folders);
@@ -694,6 +709,23 @@ function sendFoldersChanged() {
 }
 
 async function loadNotes() {
+  if (noteLoadPromise) {
+    return noteLoadPromise;
+  }
+
+  noteLoadPromise = performLoadNotes();
+  try {
+    return await noteLoadPromise;
+  } finally {
+    noteLoadPromise = null;
+  }
+}
+
+async function performLoadNotes() {
+  if (resourceLoadPromise) {
+    await resourceLoadPromise;
+  }
+
   const notesDir = getNotesPath();
   let shouldCreateInitialFile = false;
   await loadNoteMetadata();
@@ -760,7 +792,8 @@ async function scanDirectory(dirPath, folderId, storedMetadataByPath, claimedMet
     const fullPath = path.join(dirPath, entry.name);
     const fileExtension = path.extname(entry.name).toLowerCase();
 
-    if (entry.isFile() && ['.md', '.txt'].includes(fileExtension)) {
+    if (entry.isFile() && ['.md', '.txt', '.json'].includes(fileExtension)
+      && entry.name !== '.folder.json') {
       try {
         const raw = await fs.readFile(fullPath, 'utf8');
         const stats = await fs.stat(fullPath);
@@ -791,7 +824,7 @@ async function scanDirectory(dirPath, folderId, storedMetadataByPath, claimedMet
             ? fileTitle
             : storedMetadata.title || (isLegacyNote ? parsed.data.title : null) || fileTitle,
           content: isLegacyNote ? parsed.content : raw,
-          fileType: fileExtension === '.txt' ? 'txt' : 'md',
+          fileType: fileExtension.slice(1),
           folderId,
           createdAt: storedMetadata.createdAt
             || (isLegacyNote ? parsed.data.createdAt : null)
@@ -857,7 +890,7 @@ async function scanResourceDirectory(dirPath, folderId) {
     const extension = path.extname(entry.name).toLowerCase();
 
     if (entry.isFile()
-      && !['.md', '.txt'].includes(extension)
+      && !['.md', '.txt', '.json'].includes(extension)
       && entry.name !== '.folder.json') {
       try {
         const stats = await fs.stat(fullPath);
@@ -887,6 +920,19 @@ async function scanResourceDirectory(dirPath, folderId) {
 }
 
 async function loadPdfFiles() {
+  if (resourceLoadPromise) {
+    return resourceLoadPromise;
+  }
+
+  resourceLoadPromise = performLoadPdfFiles();
+  try {
+    return await resourceLoadPromise;
+  } finally {
+    resourceLoadPromise = null;
+  }
+}
+
+async function performLoadPdfFiles() {
   resourceFiles = [];
   pdfFiles = [];
 
@@ -928,6 +974,95 @@ function formatSpreadsheetValue(value) {
   return String(value);
 }
 
+function getSpreadsheetColor(color) {
+  const argb = color?.argb;
+  if (typeof argb !== 'string' || !/^[0-9a-f]{8}$/i.test(argb)) {
+    return null;
+  }
+  return `#${argb.slice(2)}`;
+}
+
+function serializeSpreadsheetBorder(border) {
+  if (!border?.style) {
+    return null;
+  }
+  return {
+    style: border.style,
+    color: getSpreadsheetColor(border.color)
+  };
+}
+
+function serializeSpreadsheetCell(cell) {
+  const patternFillColors = {
+    gray125: '#e7e7e7',
+    lightGray: '#e2e2e2',
+    mediumGray: '#b7b7b7',
+    darkGray: '#7f7f7f'
+  };
+  const fillColor = cell.fill?.type === 'pattern'
+    ? cell.fill.pattern === 'solid'
+      ? getSpreadsheetColor(cell.fill.fgColor)
+      : patternFillColors[cell.fill.pattern] || null
+    : null;
+  return {
+    value: cell.text || formatSpreadsheetValue(cell.value),
+    style: {
+      fontName: cell.font?.name || null,
+      fontSize: Number(cell.font?.size) || null,
+      bold: Boolean(cell.font?.bold),
+      italic: Boolean(cell.font?.italic),
+      underline: Boolean(cell.font?.underline),
+      strike: Boolean(cell.font?.strike),
+      fontColor: getSpreadsheetColor(cell.font?.color),
+      fillColor,
+      horizontal: cell.alignment?.horizontal || null,
+      vertical: cell.alignment?.vertical || null,
+      wrapText: Boolean(cell.alignment?.wrapText),
+      borders: {
+        top: serializeSpreadsheetBorder(cell.border?.top),
+        right: serializeSpreadsheetBorder(cell.border?.right),
+        bottom: serializeSpreadsheetBorder(cell.border?.bottom),
+        left: serializeSpreadsheetBorder(cell.border?.left)
+      }
+    }
+  };
+}
+
+function parseSpreadsheetCellAddress(address) {
+  const match = /^\$?([A-Z]+)\$?(\d+)$/i.exec(address);
+  if (!match) {
+    return null;
+  }
+  const column = [...match[1].toUpperCase()].reduce((value, letter) => {
+    return value * 26 + letter.charCodeAt(0) - 64;
+  }, 0);
+  return { row: Number(match[2]), column };
+}
+
+function getSpreadsheetMergeMap(worksheet, rowCount, columnCount) {
+  const mergeMap = new Map();
+  for (const range of worksheet.model.merges || []) {
+    const [startAddress, endAddress = startAddress] = range.split(':');
+    const start = parseSpreadsheetCellAddress(startAddress);
+    const end = parseSpreadsheetCellAddress(endAddress);
+    if (!start || !end || start.row > rowCount || start.column > columnCount) {
+      continue;
+    }
+
+    const endRow = Math.min(end.row, rowCount);
+    const endColumn = Math.min(end.column, columnCount);
+    for (let row = start.row; row <= endRow; row++) {
+      for (let column = start.column; column <= endColumn; column++) {
+        const key = `${row}:${column}`;
+        mergeMap.set(key, row === start.row && column === start.column
+          ? { rowSpan: endRow - start.row + 1, columnSpan: endColumn - start.column + 1 }
+          : { skip: true });
+      }
+    }
+  }
+  return mergeMap;
+}
+
 async function previewResourceFile(fileId) {
   const file = resourceFiles.find((item) => item.id === fileId);
   if (!file || !file.canOpen) {
@@ -938,8 +1073,16 @@ async function previewResourceFile(fileId) {
     return { kind: 'image', fileUrl: file.fileUrl };
   }
   if (file.kind === 'word') {
-    const result = await mammoth.extractRawText({ path: file.path });
-    return { kind: 'word', text: result.value || '' };
+    const result = await mammoth.convertToHtml({ path: file.path }, {
+      styleMap: [
+        "p[style-name='Title'] => h1.word-document-title:fresh",
+        "p[style-name='Subtitle'] => p.word-document-subtitle:fresh",
+        "p[style-name='toc 1'] => p.word-toc.word-toc-1:fresh",
+        "p[style-name='toc 2'] => p.word-toc.word-toc-2:fresh",
+        "p[style-name='toc 3'] => p.word-toc.word-toc-3:fresh"
+      ]
+    });
+    return { kind: 'word', html: result.value || '' };
   }
   if (file.kind === 'spreadsheet') {
     const workbook = new ExcelJS.Workbook();
@@ -947,16 +1090,36 @@ async function previewResourceFile(fileId) {
     const sheets = workbook.worksheets.slice(0, 20).map((worksheet) => {
       const rowCount = Math.min(worksheet.rowCount, 500);
       const columnCount = Math.min(worksheet.columnCount, 50);
+      const mergeMap = getSpreadsheetMergeMap(worksheet, rowCount, columnCount);
+      const columns = [];
+      for (let columnNumber = 1; columnNumber <= columnCount; columnNumber++) {
+        const width = Number(worksheet.getColumn(columnNumber).width) || 10;
+        columns.push({ width: Math.min(600, Math.max(42, Math.round(width * 7 + 12))) });
+      }
       const rows = [];
       for (let rowNumber = 1; rowNumber <= rowCount; rowNumber++) {
-        const row = [];
+        const cells = [];
         for (let columnNumber = 1; columnNumber <= columnCount; columnNumber++) {
-          row.push(formatSpreadsheetValue(worksheet.getRow(rowNumber).getCell(columnNumber).value));
+          const merge = mergeMap.get(`${rowNumber}:${columnNumber}`);
+          if (merge?.skip) {
+            cells.push({ skip: true });
+            continue;
+          }
+          cells.push({
+            ...serializeSpreadsheetCell(worksheet.getCell(rowNumber, columnNumber)),
+            rowSpan: merge?.rowSpan || 1,
+            columnSpan: merge?.columnSpan || 1
+          });
         }
-        rows.push(row);
+        const height = Number(worksheet.getRow(rowNumber).height);
+        rows.push({
+          height: Number.isFinite(height) ? Math.round(height * 4 / 3) : null,
+          cells
+        });
       }
       return {
         name: worksheet.name,
+        columns,
         rows,
         truncated: worksheet.rowCount > rowCount || worksheet.columnCount > columnCount
       };
@@ -1028,10 +1191,25 @@ async function showLibraryEntryInFolder(_event, entry) {
   return targetPath;
 }
 
+async function openLibraryEntry(_event, entry) {
+  const targetPath = resolveLibraryEntryPath(entry);
+  if (!targetPath || entry?.type === 'folder') {
+    throw new Error('文件不存在');
+  }
+
+  const result = await shell.openPath(targetPath);
+  if (result) {
+    throw new Error(result);
+  }
+  return targetPath;
+}
+
 function schedulePdfReload() {
   clearTimeout(pdfReloadTimer);
   pdfReloadTimer = setTimeout(() => {
-    loadPdfFiles()
+    const pendingNoteLoad = noteLoadPromise || Promise.resolve();
+    pendingNoteLoad
+      .then(() => loadPdfFiles())
       .then(sendPdfFilesChanged)
       .catch((error) => console.error('同步 PDF 列表失败:', error));
   }, 300);
@@ -1064,7 +1242,8 @@ function watchPdfFiles() {
       }
       if (extension === '.pdf') {
         schedulePdfReload();
-      } else if (['.md', '.txt'].includes(extension)) {
+      } else if (['.md', '.txt', '.json'].includes(extension)
+        && path.basename(relativePath) !== '.folder.json') {
         const writeExpiresAt = internalNoteWrites.get(relativePath.toLowerCase()) || 0;
         if (writeExpiresAt > Date.now()) {
           return;
@@ -1112,7 +1291,7 @@ async function saveNote(note) {
   let filePath = noteFileMap.get(note.id);
   if (!filePath) {
     const baseName = sanitizeNoteFilename(note.title);
-    filePath = await getUniqueFilePath(targetDir, baseName);
+    filePath = await getUniqueFilePath(targetDir, baseName, getNoteFileExtension(note.fileType));
     noteFileMap.set(note.id, filePath);
   }
 
@@ -1167,7 +1346,7 @@ function normalizeNote(input) {
     id: input.id || randomUUID(),
     title: String(input.title || '未命名笔记').trim() || '未命名笔记',
     content: String(input.content || ''),
-    fileType: input.fileType === 'txt' ? 'txt' : 'md',
+    fileType: normalizeNoteFileType(input.fileType),
     reminders: Array.isArray(input.reminders)
       ? input.reminders
         .filter((item) => item && (item.date || item.time))
@@ -1201,7 +1380,7 @@ async function upsertNote(_event, input) {
         const targetDir = getFolderPath(note.folderId);
         await fs.mkdir(targetDir, { recursive: true });
         const baseName = sanitizeNoteFilename(note.title);
-        const extension = path.extname(oldPath).toLowerCase() === '.txt' ? '.txt' : '.md';
+        const extension = getNoteFileExtension(note.fileType);
         const newPath = await getUniqueFilePath(targetDir, baseName, extension);
         try {
           markInternalNoteWrite(oldPath);
@@ -1255,6 +1434,9 @@ async function deleteNote(_event, noteId) {
 }
 
 async function useNotesPath(nextPath) {
+  if (noteLoadPromise) {
+    await noteLoadPromise;
+  }
   notesPath = nextPath;
   await saveConfig();
   await loadNotes();
@@ -1464,7 +1646,7 @@ app.whenReady().then(async () => {
       const targetDir = getFolderPath(folderId);
       await fs.mkdir(targetDir, { recursive: true });
       const baseName = sanitizeNoteFilename(note.title);
-      const extension = path.extname(oldPath).toLowerCase() === '.txt' ? '.txt' : '.md';
+      const extension = getNoteFileExtension(note.fileType);
       const newPath = await getUniqueFilePath(targetDir, baseName, extension);
       markInternalNoteWrite(oldPath);
       markInternalNoteWrite(newPath);
@@ -1506,6 +1688,7 @@ app.whenReady().then(async () => {
   ipcMain.handle('storage:reset', resetNotesPath);
   ipcMain.handle('entries:copy-path', copyLibraryEntryPath);
   ipcMain.handle('entries:show-in-folder', showLibraryEntryInFolder);
+  ipcMain.handle('entries:open-default', openLibraryEntry);
   ipcMain.handle('images:insert', insertImageForNote);
   ipcMain.handle('images:save-pasted', async (_event, payload) => {
     if (!payload || !payload.noteId) {

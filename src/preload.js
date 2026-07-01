@@ -25,6 +25,7 @@ contextBridge.exposeInMainWorld('noticeNote', {
   readPdf: (pdfId) => ipcRenderer.invoke('pdfs:read', pdfId),
   copyEntryPath: (entry) => ipcRenderer.invoke('entries:copy-path', entry),
   showEntryInFolder: (entry) => ipcRenderer.invoke('entries:show-in-folder', entry),
+  openEntryWithDefaultApp: (entry) => ipcRenderer.invoke('entries:open-default', entry),
   onNotesChanged: (callback) => {
     const listener = (_event, notes) => callback(notes);
     ipcRenderer.on('notes:changed', listener);
