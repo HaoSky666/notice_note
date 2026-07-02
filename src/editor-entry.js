@@ -32,6 +32,21 @@ function isLineActive(view, line) {
   });
 }
 
+function isPrefixActive(view, line, prefixEnd) {
+  if (!view.hasFocus) {
+    return false;
+  }
+
+  return view.state.selection.ranges.some((range) => {
+    const from = Math.min(range.anchor, range.head);
+    const to = Math.max(range.anchor, range.head);
+    if (from === to) {
+      return from >= line.from && from < prefixEnd;
+    }
+    return from < prefixEnd && to > line.from;
+  });
+}
+
 function replaceWithEmpty(builder, from, to) {
   if (from < to) {
     builder.add(from, to, Decoration.replace({ widget: new EmptyWidget() }));
@@ -155,33 +170,33 @@ function buildLivePreviewDecorations(view, options = {}, codeBlocks = []) {
         continue;
       }
 
+      const unordered = /^(\s*)([-*+])\s+/.exec(text);
+      if (unordered && !isPrefixActive(view, line, line.from + unordered[0].length)) {
+        const depth = getListDepth(unordered[1]);
+        addListLineClass(builder, line, depth);
+        builder.add(
+          line.from,
+          line.from + unordered[0].length,
+          Decoration.replace({ widget: new BulletWidget(depth) })
+        );
+      }
+
+      const ordered = /^(\s*)(\d+\.)\s+/.exec(text);
+      if (ordered && !isPrefixActive(view, line, line.from + ordered[0].length)) {
+        const depth = getListDepth(ordered[1]);
+        addListLineClass(builder, line, depth);
+        builder.add(
+          line.from,
+          line.from + ordered[0].length,
+          Decoration.replace({ widget: new OrderedMarkerWidget(ordered[2], depth) })
+        );
+      }
+
       if (!isLineActive(view, line)) {
         const heading = /^(#{1,6})\s+/.exec(text);
         if (heading) {
           addLineClass(builder, line, `cm-heading-line cm-heading-${heading[1].length}`);
           replaceWithEmpty(builder, line.from, line.from + heading[0].length);
-        }
-
-        const unordered = /^(\s*)([-*+])\s+/.exec(text);
-        if (unordered) {
-          const depth = getListDepth(unordered[1]);
-          addListLineClass(builder, line, depth);
-          builder.add(
-            line.from + unordered[1].length,
-            line.from + unordered[0].length,
-            Decoration.replace({ widget: new BulletWidget(depth) })
-          );
-        }
-
-        const ordered = /^(\s*)(\d+\.)\s+/.exec(text);
-        if (ordered) {
-          const depth = getListDepth(ordered[1]);
-          addListLineClass(builder, line, depth);
-          builder.add(
-            line.from + ordered[1].length,
-            line.from + ordered[0].length,
-            Decoration.replace({ widget: new OrderedMarkerWidget(ordered[2], depth) })
-          );
         }
 
         const quote = /^(\s*>+\s*)/.exec(text);

@@ -1163,6 +1163,31 @@ async function deleteResourceFile(_event, fileId) {
   return resourceFiles;
 }
 
+async function moveResourceFile(_event, fileId, targetFolderId) {
+  const file = resourceFiles.find((item) => item.id === fileId);
+  if (!file) {
+    throw new Error('文件不存在');
+  }
+
+  const normalizedTargetFolderId = targetFolderId || null;
+  if (normalizedTargetFolderId && !folders.some((folder) => folder.id === normalizedTargetFolderId)) {
+    throw new Error('目标文件夹不存在');
+  }
+  if ((file.folderId || null) === normalizedTargetFolderId) {
+    return resourceFiles;
+  }
+
+  const targetDir = getFolderPath(normalizedTargetFolderId);
+  await fs.mkdir(targetDir, { recursive: true });
+  const extension = path.extname(file.name);
+  const baseName = path.basename(file.name, extension);
+  const targetPath = await getUniqueFilePath(targetDir, baseName, extension);
+  await fs.rename(file.path, targetPath);
+  await loadPdfFiles();
+  sendPdfFilesChanged();
+  return resourceFiles;
+}
+
 async function copyLibraryEntryPath(_event, entry) {
   const targetPath = resolveLibraryEntryPath(entry);
   if (!targetPath) {
@@ -1613,6 +1638,7 @@ app.whenReady().then(async () => {
   ipcMain.handle('files:list', () => resourceFiles);
   ipcMain.handle('files:preview', (_event, fileId) => previewResourceFile(fileId));
   ipcMain.handle('files:delete', deleteResourceFile);
+  ipcMain.handle('files:move', moveResourceFile);
   ipcMain.handle('pdfs:refresh', async () => {
     await loadPdfFiles();
     return pdfFiles;
@@ -1669,19 +1695,45 @@ app.whenReady().then(async () => {
     const folder = folders.find(f => f.id === folderId);
     if (!folder) throw new Error('文件夹不存在');
 
+    const normalizedTargetFolderId = targetFolderId || null;
+    let target = normalizedTargetFolderId
+      ? folders.find((item) => item.id === normalizedTargetFolderId)
+      : null;
+    while (target) {
+      if (target.id === folderId) {
+        throw new Error('不能将文件夹移动到自身或其子文件夹');
+      }
+      target = target.parentId ? folders.find((item) => item.id === target.parentId) : null;
+    }
+    if ((folder.parentId || null) === normalizedTargetFolderId) {
+      return folder;
+    }
+
     const oldPath = getFolderPath(folderId);
-    folder.parentId = targetFolderId || null;
-    const newPath = getFolderPath(folderId);
+    const targetDir = getFolderPath(normalizedTargetFolderId);
+    const newPath = path.join(targetDir, folder.name);
+
+    try {
+      await fs.access(newPath);
+      throw new Error('目标目录已存在同名文件夹');
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw error;
+    }
 
     await fs.rename(oldPath, newPath);
     moveNoteMetadataTree(oldPath, newPath);
     await saveNoteMetadata();
 
+    folder.parentId = normalizedTargetFolderId;
     const metaPath = path.join(newPath, '.folder.json');
     await fs.writeFile(metaPath, JSON.stringify(folder, null, 2), 'utf8');
 
+    await loadNotes();
+    scheduleReminderCheck();
+    sendNotesChanged();
     sendFoldersChanged();
-    return folder;
+    sendPdfFilesChanged();
+    return folders.find((item) => item.id === folderId) || folder;
   });
   ipcMain.handle('storage:get', () => getStorageInfo());
   ipcMain.handle('storage:choose', chooseNotesPath);

@@ -21,6 +21,7 @@ contextBridge.exposeInMainWorld('noticeNote', {
   listFiles: () => ipcRenderer.invoke('files:list'),
   previewFile: (fileId) => ipcRenderer.invoke('files:preview', fileId),
   deleteFile: (fileId) => ipcRenderer.invoke('files:delete', fileId),
+  moveFile: (fileId, folderId) => ipcRenderer.invoke('files:move', fileId, folderId),
   refreshPdfs: () => ipcRenderer.invoke('pdfs:refresh'),
   readPdf: (pdfId) => ipcRenderer.invoke('pdfs:read', pdfId),
   copyEntryPath: (entry) => ipcRenderer.invoke('entries:copy-path', entry),

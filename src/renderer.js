@@ -21,6 +21,7 @@ const editorTopbar = document.querySelector('#editorTopbar');
 const toggleReminderButton = document.querySelector('#toggleReminderButton');
 const showReminderButton = document.querySelector('#showReminderButton');
 const refreshButton = document.querySelector('#refreshButton');
+const locateCurrentFileButton = document.querySelector('#locateCurrentFileButton');
 const newMenuDropdown = document.querySelector('#newMenuDropdown');
 const newNoteOption = document.querySelector('#newNoteOption');
 const newFolderOption = document.querySelector('#newFolderOption');
@@ -242,6 +243,7 @@ function syncSidebarToWorkspaceTab(tab) {
 
 function renderWorkspaceTabs() {
   workspaceTabsRoot.innerHTML = '';
+  locateCurrentFileButton.disabled = !activeWorkspaceTabKey;
 
   for (const tab of workspaceTabs) {
     const resource = getWorkspaceTabResource(tab);
@@ -428,13 +430,11 @@ function showWorkspaceTab(tab) {
     renderEditor();
   }
   renderWorkspaceTabs();
-  syncSidebarToWorkspaceTab(tab);
 }
 
 async function activateWorkspaceTab(type, id) {
   const tabKey = getWorkspaceTabKey(type, id);
   if (tabKey === activeWorkspaceTabKey) {
-    syncSidebarToWorkspaceTab({ type, id });
     return;
   }
 
@@ -837,6 +837,195 @@ async function moveFolderToFolder(folderId, targetFolderId) {
   }
 }
 
+async function moveResourceToFolder(fileId, folderId) {
+  try {
+    resourceFiles = await window.noticeNote.moveFile(fileId, folderId);
+    pdfFiles = resourceFiles.filter((file) => file.kind === 'pdf');
+    if (!reconcileWorkspaceTabs()) {
+      renderNoteList();
+    }
+  } catch (error) {
+    console.error('移动文件失败:', error);
+  }
+}
+
+function getInvalidMoveFolderIds(entry) {
+  const invalidIds = new Set();
+  if (entry.type !== 'folder') {
+    return invalidIds;
+  }
+
+  invalidIds.add(entry.id);
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const folder of folders) {
+      if (folder.parentId && invalidIds.has(folder.parentId) && !invalidIds.has(folder.id)) {
+        invalidIds.add(folder.id);
+        changed = true;
+      }
+    }
+  }
+  return invalidIds;
+}
+
+function getMoveEntryFolderId(entry) {
+  if (entry.type === 'note') {
+    return notes.find((note) => note.id === entry.id)?.folderId || null;
+  }
+  if (entry.type === 'file') {
+    return resourceFiles.find((file) => file.id === entry.id)?.folderId || null;
+  }
+  return folders.find((folder) => folder.id === entry.id)?.parentId || null;
+}
+
+function getMoveEntryName(entry) {
+  if (entry.type === 'note') {
+    return notes.find((note) => note.id === entry.id)?.title || '未命名笔记';
+  }
+  if (entry.type === 'file') {
+    return resourceFiles.find((file) => file.id === entry.id)?.name || '未命名文件';
+  }
+  return folders.find((folder) => folder.id === entry.id)?.name || '未命名文件夹';
+}
+
+function showMoveToFolderDialog(entry) {
+  return new Promise((resolve) => {
+    const dialog = document.createElement('div');
+    dialog.className = 'folder-dialog';
+    const content = document.createElement('div');
+    content.className = 'folder-dialog-content move-folder-dialog-content';
+    const label = document.createElement('label');
+    label.textContent = `移动「${getMoveEntryName(entry)}」到`;
+    const browser = document.createElement('div');
+    browser.className = 'move-folder-browser';
+    const pathBar = document.createElement('div');
+    pathBar.className = 'move-folder-path';
+    const folderList = document.createElement('div');
+    folderList.className = 'move-folder-list';
+    browser.append(pathBar, folderList);
+    const invalidIds = getInvalidMoveFolderIds(entry);
+    let currentFolderId = null;
+
+    const getFolderPath = (folderId) => {
+      const path = [];
+      let current = folderId ? folders.find((folder) => folder.id === folderId) : null;
+      while (current) {
+        path.unshift(current);
+        current = current.parentId
+          ? folders.find((folder) => folder.id === current.parentId)
+          : null;
+      }
+      return path;
+    };
+
+    const renderBrowser = () => {
+      pathBar.innerHTML = '';
+      const rootButton = document.createElement('button');
+      rootButton.type = 'button';
+      rootButton.textContent = '全部笔记';
+      rootButton.addEventListener('click', () => {
+        currentFolderId = null;
+        renderBrowser();
+      });
+      pathBar.append(rootButton);
+
+      for (const folder of getFolderPath(currentFolderId)) {
+        const separator = document.createElement('span');
+        separator.textContent = '›';
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.textContent = folder.name;
+        button.addEventListener('click', () => {
+          currentFolderId = folder.id;
+          renderBrowser();
+        });
+        pathBar.append(separator, button);
+      }
+
+      folderList.innerHTML = '';
+      const children = folders
+        .filter((folder) => folder.parentId === currentFolderId)
+        .sort((a, b) => a.name.localeCompare(b.name, 'zh-CN'));
+      if (children.length === 0) {
+        const empty = document.createElement('div');
+        empty.className = 'move-folder-empty';
+        empty.textContent = '此目录下没有子文件夹';
+        folderList.append(empty);
+        return;
+      }
+
+      for (const folder of children) {
+        const button = document.createElement('button');
+        button.className = 'move-folder-item';
+        button.type = 'button';
+        button.disabled = invalidIds.has(folder.id);
+        const icon = document.createElement('span');
+        icon.className = 'move-folder-icon';
+        icon.textContent = '▸';
+        const name = document.createElement('span');
+        name.textContent = folder.name;
+        button.append(icon, name);
+        button.addEventListener('click', () => {
+          currentFolderId = folder.id;
+          renderBrowser();
+        });
+        folderList.append(button);
+      }
+    };
+    renderBrowser();
+
+    const actions = document.createElement('div');
+    actions.className = 'folder-dialog-actions';
+    const cancelButton = document.createElement('button');
+    cancelButton.className = 'secondary-button';
+    cancelButton.type = 'button';
+    cancelButton.textContent = '取消';
+    const confirmButton = document.createElement('button');
+    confirmButton.className = 'primary-button';
+    confirmButton.type = 'button';
+    confirmButton.textContent = '移动到此处';
+    actions.append(cancelButton, confirmButton);
+    content.append(label, browser, actions);
+    dialog.append(content);
+    document.body.append(dialog);
+    folderList.querySelector('button:not(:disabled)')?.focus();
+
+    const close = (folderId) => {
+      dialog.remove();
+      resolve(folderId);
+    };
+    cancelButton.addEventListener('click', () => close(undefined));
+    confirmButton.addEventListener('click', () => close(currentFolderId));
+    dialog.addEventListener('click', (event) => {
+      if (event.target === dialog) {
+        close(undefined);
+      }
+    });
+    dialog.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape') {
+        close(undefined);
+      }
+    });
+  });
+}
+
+async function moveEntryToFolder(entry) {
+  const targetFolderId = await showMoveToFolderDialog(entry);
+  if (targetFolderId === undefined || targetFolderId === getMoveEntryFolderId(entry)) {
+    return;
+  }
+
+  await flushPendingSave();
+  if (entry.type === 'note') {
+    await moveNoteToFolder(entry.id, targetFolderId);
+  } else if (entry.type === 'folder') {
+    await moveFolderToFolder(entry.id, targetFolderId);
+  } else if (entry.type === 'file') {
+    await moveResourceToFolder(entry.id, targetFolderId);
+  }
+}
+
 async function createFolder() {
   const name = await showFolderNameDialog();
   if (!name) return;
@@ -1071,18 +1260,20 @@ function saveReminderNotifications() {
 }
 
 function renderReminderNotifications() {
+  const today = toLocalDateKey(new Date());
+  const todayNotifications = reminderNotifications.filter((item) => item.date === today);
   notificationList.innerHTML = '';
-  notificationDot.hidden = !reminderNotifications.some((item) => !item.read);
+  notificationDot.hidden = !todayNotifications.some((item) => !item.read);
 
-  if (reminderNotifications.length === 0) {
+  if (todayNotifications.length === 0) {
     const empty = document.createElement('div');
     empty.className = 'notification-empty';
-    empty.textContent = '暂无提醒通知';
+    empty.textContent = '今天暂无提醒通知';
     notificationList.append(empty);
     return;
   }
 
-  for (const notification of reminderNotifications) {
+  for (const notification of todayNotifications) {
     const button = document.createElement('button');
     button.className = `notification-item${notification.read ? '' : ' is-unread'}`;
     button.type = 'button';
@@ -1134,7 +1325,10 @@ function toggleNotificationPanel() {
   if (notificationPanel.hidden) {
     return;
   }
-  reminderNotifications = reminderNotifications.map((item) => ({ ...item, read: true }));
+  const today = toLocalDateKey(new Date());
+  reminderNotifications = reminderNotifications.map((item) => {
+    return item.date === today ? { ...item, read: true } : item;
+  });
   saveReminderNotifications();
   renderReminderNotifications();
 }
@@ -2207,6 +2401,14 @@ newNoteButton.addEventListener('click', () => {
 refreshButton.addEventListener('click', () => {
   refreshNotes().catch(console.error);
 });
+locateCurrentFileButton.addEventListener('click', () => {
+  const tab = workspaceTabs.find((item) => {
+    return getWorkspaceTabKey(item.type, item.id) === activeWorkspaceTabKey;
+  });
+  if (tab) {
+    syncSidebarToWorkspaceTab(tab);
+  }
+});
 newNoteOption.addEventListener('click', () => {
   newMenuDropdown.classList.remove('is-open');
   createNote().catch(console.error);
@@ -2376,6 +2578,9 @@ function showContextMenu(x, y, entry = null) {
     contextMenu.append(
       createContextMenuItem('打开资源管理器', () => {
         window.noticeNote.showEntryInFolder(entry).catch(console.error);
+      }),
+      createContextMenuItem('移动到…', () => {
+        moveEntryToFolder(entry).catch(console.error);
       }),
       createContextMenuSeparator(),
       createContextMenuItem('删除', () => {
