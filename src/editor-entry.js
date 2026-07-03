@@ -112,6 +112,30 @@ function collectFencedCodeBlocks(doc) {
   return blocks;
 }
 
+function selectCurrentCodeBlock(view, options = {}) {
+  if (options.isPlainText?.()) {
+    return false;
+  }
+
+  const cursorLine = view.state.doc.lineAt(view.state.selection.main.head).number;
+  const block = collectFencedCodeBlocks(view.state.doc).find((item) => {
+    return cursorLine >= item.startLine && cursorLine <= item.endLine;
+  });
+  if (!block) {
+    return false;
+  }
+
+  const openingLine = view.state.doc.line(block.startLine);
+  const closingLine = view.state.doc.line(block.endLine);
+  const contentFrom = Math.min(openingLine.to + 1, closingLine.from);
+  const contentTo = Math.max(contentFrom, closingLine.from - 1);
+  view.dispatch({
+    selection: { anchor: contentFrom, head: contentTo },
+    scrollIntoView: true
+  });
+  return true;
+}
+
 function isCodeBlockActive(view, block) {
   if (!view.hasFocus) {
     return false;
@@ -336,15 +360,25 @@ function createLivePreviewPlugin(options) {
     constructor(view) {
       this.codeBlocks = collectFencedCodeBlocks(view.state.doc);
       this.decorations = buildLivePreviewDecorations(view, options, this.codeBlocks);
+      this.wasComposing = false;
     }
 
     update(update) {
-      if (update.docChanged) {
+      if (update.view.composing) {
+        if (update.docChanged) {
+          this.decorations = this.decorations.map(update.changes);
+        }
+        this.wasComposing = true;
+        return;
+      }
+
+      if (this.wasComposing || update.docChanged) {
         this.codeBlocks = collectFencedCodeBlocks(update.state.doc);
       }
-      if (update.docChanged || update.selectionSet || update.viewportChanged || update.focusChanged) {
+      if (this.wasComposing || update.docChanged || update.selectionSet || update.viewportChanged || update.focusChanged) {
         this.decorations = buildLivePreviewDecorations(update.view, options, this.codeBlocks);
       }
+      this.wasComposing = false;
     }
   }, {
     decorations: (plugin) => plugin.decorations
@@ -382,7 +416,12 @@ function createNoticeNoteEditor(options) {
             return true;
           }
         }),
-        keymap.of([indentWithTab, ...defaultKeymap, ...historyKeymap]),
+        keymap.of([
+          indentWithTab,
+          { key: 'Mod-a', run: (editorView) => selectCurrentCodeBlock(editorView, options) },
+          ...defaultKeymap,
+          ...historyKeymap
+        ]),
         placeholder(options.placeholder || ''),
         createLivePreviewPlugin(options),
         EditorView.lineWrapping,
@@ -448,6 +487,57 @@ function createNoticeNoteEditor(options) {
     },
     hasFocus() {
       return view.hasFocus;
+    },
+    getScrollPosition() {
+      const scrollTop = view.scrollDOM.scrollTop;
+      const topBlock = view.lineBlockAtHeight(scrollTop + 1);
+      const selection = view.state.selection.main;
+      return {
+        top: scrollTop,
+        left: view.scrollDOM.scrollLeft,
+        documentAnchor: topBlock.from,
+        documentOffset: scrollTop - topBlock.top,
+        selectionAnchor: selection.anchor,
+        selectionHead: selection.head,
+        scrollSnapshot: view.scrollSnapshot()
+      };
+    },
+    setScrollPosition(position = {}) {
+      const documentLength = view.state.doc.length;
+      let selection = null;
+      if (Number.isFinite(position.selectionAnchor) && Number.isFinite(position.selectionHead)) {
+        selection = {
+          anchor: Math.min(documentLength, Math.max(0, position.selectionAnchor)),
+          head: Math.min(documentLength, Math.max(0, position.selectionHead))
+        };
+      }
+      if (selection || position.scrollSnapshot) {
+        view.dispatch({
+          ...(selection ? { selection } : {}),
+          ...(position.scrollSnapshot ? { effects: position.scrollSnapshot } : {})
+        });
+      }
+      if (position.scrollSnapshot) {
+        return;
+      }
+
+      const documentAnchor = Number.isFinite(position.documentAnchor)
+        ? Math.min(documentLength, Math.max(0, position.documentAnchor))
+        : null;
+      const documentOffset = Number(position.documentOffset) || 0;
+      const fallbackTop = Number(position.top) || 0;
+      const left = Number(position.left) || 0;
+      view.requestMeasure({
+        read(editorView) {
+          const top = documentAnchor === null
+            ? fallbackTop
+            : editorView.lineBlockAt(documentAnchor).top + documentOffset;
+          return { top: Math.max(0, top), left };
+        },
+        write(scrollPosition, editorView) {
+          editorView.scrollDOM.scrollTo(scrollPosition);
+        }
+      });
     },
     destroy() {
       view.destroy();

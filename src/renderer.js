@@ -9,23 +9,35 @@ const saveButton = document.querySelector('#saveButton');
 const newNoteButton = document.querySelector('#newNoteButton');
 const addReminderButton = document.querySelector('#addReminderButton');
 const deleteNoteButton = document.querySelector('#deleteNoteButton');
-const autoReminderCheckbox = document.querySelector('#autoReminderCheckbox');
+const autoReminderButton = document.querySelector('#autoReminderButton');
 const reminderDialog = document.querySelector('#reminderDialog');
 const openReminderConfigButton = document.querySelector('#openReminderConfigButton');
 const closeReminderDialogButton = document.querySelector('#closeReminderDialogButton');
+const reminderButtonCount = document.querySelector('#reminderButtonCount');
+const reminderDialogCount = document.querySelector('#reminderDialogCount');
+const reminderDialogNoteTitle = document.querySelector('#reminderDialogNoteTitle');
 const sidebar = document.querySelector('#sidebar');
 const toggleSidebarButton = document.querySelector('#toggleSidebarButton');
 const showSidebarButton = document.querySelector('#showSidebarButton');
 const editorPanel = document.querySelector('.editor-panel');
 const editorTopbar = document.querySelector('#editorTopbar');
-const toggleReminderButton = document.querySelector('#toggleReminderButton');
-const showReminderButton = document.querySelector('#showReminderButton');
 const refreshButton = document.querySelector('#refreshButton');
 const locateCurrentFileButton = document.querySelector('#locateCurrentFileButton');
+const settingsButton = document.querySelector('#settingsButton');
+const settingsDialog = document.querySelector('#settingsDialog');
+const closeSettingsDialogButton = document.querySelector('#closeSettingsDialogButton');
+const dailyReviewEnabledInput = document.querySelector('#dailyReviewEnabledInput');
+const dailyReviewCurrentTitle = document.querySelector('#dailyReviewCurrentTitle');
+const settingsStoragePath = document.querySelector('#settingsStoragePath');
+const chooseStorageButton = document.querySelector('#chooseStorageButton');
+const resetStorageButton = document.querySelector('#resetStorageButton');
 const newMenuDropdown = document.querySelector('#newMenuDropdown');
 const newNoteOption = document.querySelector('#newNoteOption');
 const newFolderOption = document.querySelector('#newFolderOption');
 const breadcrumb = document.querySelector('#breadcrumb');
+const showAllFilesButton = document.querySelector('#showAllFilesButton');
+const showReminderFilesButton = document.querySelector('#showReminderFilesButton');
+const showReminderCalendarButton = document.querySelector('#showReminderCalendarButton');
 const pdfViewer = document.querySelector('#pdfViewer');
 const pdfTitle = document.querySelector('#pdfTitle');
 const pdfMeta = document.querySelector('#pdfMeta');
@@ -65,8 +77,12 @@ let activeNoteId = null;
 let activePdfId = null;
 let activeResourceId = null;
 let activeFolderId = null;
+let sidebarViewMode = 'all';
+let reminderCalendarMonth = new Date(new Date().getFullYear(), new Date().getMonth(), 1);
+let selectedReminderDate = toLocalDateKey(new Date());
 let saveTimer;
 let storageInfo = null;
+let appSettings = null;
 let markdownEditor = null;
 let isRenderingEditor = false;
 let pdfLoadingTask = null;
@@ -77,11 +93,11 @@ let pdfPageRenderVersion = 0;
 let imageZoom = 1;
 let workspaceTabs = [];
 let activeWorkspaceTabKey = null;
+const workspaceTabViewStates = new Map();
 let filePreviewVersion = 0;
 let viewerSearchMatches = [];
 let activeViewerSearchIndex = -1;
 const SIDEBAR_COLLAPSED_KEY = 'notice-note:sidebar-collapsed';
-const REMINDER_COLLAPSED_KEY = 'notice-note:reminder-collapsed';
 const REMINDER_NOTIFICATIONS_KEY = 'notice-note:reminder-notifications';
 const DAILY_REMINDER_SLOTS = ['09:30', '15:00'];
 let reminderNotifications = readReminderNotifications();
@@ -107,16 +123,6 @@ function setSidebarCollapsed(isCollapsed) {
   showSidebarButton.title = '显示笔记列表';
   showSidebarButton.setAttribute('aria-label', '显示笔记列表');
   writeBooleanSetting(SIDEBAR_COLLAPSED_KEY, isCollapsed);
-}
-
-function setReminderCollapsed(isCollapsed) {
-  editorPanel.classList.toggle('reminder-collapsed', isCollapsed);
-  const toggleText = isCollapsed ? '显示提醒日期' : '隐藏提醒日期';
-  toggleReminderButton.title = toggleText;
-  toggleReminderButton.setAttribute('aria-label', toggleText);
-  showReminderButton.title = '显示提醒日期';
-  showReminderButton.setAttribute('aria-label', '显示提醒日期');
-  writeBooleanSetting(REMINDER_COLLAPSED_KEY, isCollapsed);
 }
 
 function formatListDateTime(value) {
@@ -196,10 +202,16 @@ function sortNotes(noteItems) {
 }
 
 function getFilteredNotes() {
+  if (sidebarViewMode === 'reminder') {
+    return notes.filter((note) => note.isReminderFile);
+  }
   return notes.filter(note => note.folderId === activeFolderId);
 }
 
 function getFilteredResources() {
+  if (sidebarViewMode === 'reminder') {
+    return resourceFiles.filter((file) => file.isReminderFile);
+  }
   return resourceFiles.filter((file) => file.folderId === activeFolderId);
 }
 
@@ -229,11 +241,12 @@ function syncSidebarToWorkspaceTab(tab) {
   }
 
   const nextFolderId = resource.folderId || null;
+  setSidebarViewMode('all', false);
   if (activeFolderId !== nextFolderId) {
     activeFolderId = nextFolderId;
-    renderBreadcrumb();
-    renderNoteList();
   }
+  renderBreadcrumb();
+  renderNoteList();
 
   const target = tab.type === 'note'
     ? findSidebarEntry('[data-note-id]', 'noteId', tab.id)
@@ -291,6 +304,46 @@ function renderWorkspaceTabs() {
     item.append(mainButton, closeButton);
     workspaceTabsRoot.append(item);
   }
+}
+
+function saveActiveWorkspaceTabViewState() {
+  if (!activeWorkspaceTabKey) {
+    return;
+  }
+
+  let position = null;
+  if (activePdfId) {
+    position = { top: pdfPages.scrollTop, left: pdfPages.scrollLeft, pdfZoom };
+  } else if (activeResourceId) {
+    position = { top: fileViewerContent.scrollTop, left: fileViewerContent.scrollLeft, imageZoom };
+  } else if (activeNoteId) {
+    position = markdownEditor?.getScrollPosition?.() || null;
+  }
+  if (position) {
+    workspaceTabViewStates.set(activeWorkspaceTabKey, position);
+  }
+}
+
+function restoreWorkspaceTabViewState(tabKey, target) {
+  const position = workspaceTabViewStates.get(tabKey);
+  if (!position) {
+    return;
+  }
+
+  requestAnimationFrame(() => {
+    if (activeWorkspaceTabKey !== tabKey) {
+      return;
+    }
+    workspaceTabViewStates.delete(tabKey);
+    if (target === 'editor') {
+      markdownEditor?.setScrollPosition?.(position);
+      return;
+    }
+    target.scrollTo({
+      top: Number(position.top) || 0,
+      left: Number(position.left) || 0
+    });
+  });
 }
 
 function getViewerSearchRoot() {
@@ -414,7 +467,11 @@ function closeViewerSearch() {
 
 function showWorkspaceTab(tab) {
   closeViewerSearch();
-  activeWorkspaceTabKey = getWorkspaceTabKey(tab.type, tab.id);
+  const tabKey = getWorkspaceTabKey(tab.type, tab.id);
+  if (activeWorkspaceTabKey !== tabKey) {
+    saveActiveWorkspaceTabViewState();
+  }
+  activeWorkspaceTabKey = tabKey;
   if (tab.type === 'pdf') {
     activePdfId = tab.id;
     activeResourceId = null;
@@ -463,6 +520,7 @@ async function closeWorkspaceTab(tabKey) {
   workspaceTabs.splice(index, 1);
 
   if (!isActive) {
+    workspaceTabViewStates.delete(tabKey);
     renderWorkspaceTabs();
     return;
   }
@@ -470,9 +528,11 @@ async function closeWorkspaceTab(tabKey) {
   const nextTab = workspaceTabs[Math.min(index, workspaceTabs.length - 1)];
   if (nextTab) {
     showWorkspaceTab(nextTab);
+    workspaceTabViewStates.delete(tabKey);
     return;
   }
 
+  workspaceTabViewStates.delete(tabKey);
   activeWorkspaceTabKey = null;
   activeNoteId = null;
   activePdfId = null;
@@ -493,11 +553,17 @@ async function closeOtherWorkspaceTabs(tabKey) {
   } else {
     showWorkspaceTab(tab);
   }
+  for (const key of workspaceTabViewStates.keys()) {
+    if (key !== tabKey) {
+      workspaceTabViewStates.delete(key);
+    }
+  }
 }
 
 async function closeAllWorkspaceTabs() {
   await flushPendingSave();
   workspaceTabs = [];
+  workspaceTabViewStates.clear();
   activeWorkspaceTabKey = null;
   activeNoteId = null;
   activePdfId = null;
@@ -528,6 +594,9 @@ function reconcileWorkspaceTabs() {
 }
 
 function getCurrentFolders() {
+  if (sidebarViewMode !== 'all') {
+    return [];
+  }
   return folders.filter(folder => folder.parentId === activeFolderId);
 }
 
@@ -557,6 +626,21 @@ function resolveFolderIdByNamePath(names, sourceFolders = folders) {
 
 function renderBreadcrumb() {
   breadcrumb.innerHTML = '';
+
+  if (sidebarViewMode === 'reminder') {
+    const reminderBtn = document.createElement('button');
+    reminderBtn.className = 'breadcrumb-item breadcrumb-root active';
+    reminderBtn.textContent = '提醒文件';
+    breadcrumb.append(reminderBtn);
+    return;
+  }
+  if (sidebarViewMode === 'calendar') {
+    const calendarBtn = document.createElement('button');
+    calendarBtn.className = 'breadcrumb-item breadcrumb-root active';
+    calendarBtn.textContent = '提醒日历';
+    breadcrumb.append(calendarBtn);
+    return;
+  }
 
   const buildPath = (folderId) => {
     const path = [];
@@ -590,7 +674,7 @@ function renderBreadcrumb() {
 
   const rootBtn = document.createElement('button');
   rootBtn.className = `breadcrumb-item breadcrumb-root${activeFolderId === null ? ' active' : ''}`;
-  rootBtn.textContent = '全部笔记';
+  rootBtn.textContent = '全部文件';
   rootBtn.addEventListener('click', () => selectFolder(null));
   makeBreadcrumbDropTarget(rootBtn, null);
   breadcrumb.append(rootBtn);
@@ -616,6 +700,184 @@ function getChildFolderCount(folderId) {
   return folders.filter((folder) => folder.parentId === folderId).length;
 }
 
+function getCalendarReminderEntries() {
+  const reminderEntries = notes.flatMap((note) => {
+    return (note.reminders || []).map((reminder) => ({
+      note,
+      reminder,
+      date: getReminderDateKey(reminder)
+    })).filter((entry) => entry.date);
+  });
+  const dailyReviewNote = notes.find((note) => note.isDailyReview);
+  const dailyReviewFile = resourceFiles.find((file) => file.isDailyReview);
+  if (dailyReviewNote || dailyReviewFile) {
+    reminderEntries.push({
+      note: dailyReviewNote || null,
+      file: dailyReviewFile || null,
+      reminder: null,
+      date: toLocalDateKey(new Date()),
+      isDailyReview: true
+    });
+  }
+  return reminderEntries;
+}
+
+function renderReminderCalendar() {
+  const entries = getCalendarReminderEntries();
+  const entriesByDate = new Map();
+  for (const entry of entries) {
+    const current = entriesByDate.get(entry.date) || [];
+    current.push(entry);
+    entriesByDate.set(entry.date, current);
+  }
+
+  const calendar = document.createElement('section');
+  calendar.className = 'reminder-calendar';
+  const header = document.createElement('div');
+  header.className = 'reminder-calendar-header';
+  const previousButton = document.createElement('button');
+  previousButton.type = 'button';
+  previousButton.title = '上个月';
+  previousButton.setAttribute('aria-label', '上个月');
+  previousButton.textContent = '‹';
+  const monthTitle = document.createElement('strong');
+  monthTitle.textContent = `${reminderCalendarMonth.getFullYear()} 年 ${reminderCalendarMonth.getMonth() + 1} 月`;
+  const nextButton = document.createElement('button');
+  nextButton.type = 'button';
+  nextButton.title = '下个月';
+  nextButton.setAttribute('aria-label', '下个月');
+  nextButton.textContent = '›';
+  previousButton.addEventListener('click', () => {
+    reminderCalendarMonth = new Date(
+      reminderCalendarMonth.getFullYear(),
+      reminderCalendarMonth.getMonth() - 1,
+      1
+    );
+    selectedReminderDate = toLocalDateKey(reminderCalendarMonth);
+    renderNoteList();
+  });
+  nextButton.addEventListener('click', () => {
+    reminderCalendarMonth = new Date(
+      reminderCalendarMonth.getFullYear(),
+      reminderCalendarMonth.getMonth() + 1,
+      1
+    );
+    selectedReminderDate = toLocalDateKey(reminderCalendarMonth);
+    renderNoteList();
+  });
+  header.append(previousButton, monthTitle, nextButton);
+
+  const weekdays = document.createElement('div');
+  weekdays.className = 'reminder-calendar-weekdays';
+  for (const weekday of ['一', '二', '三', '四', '五', '六', '日']) {
+    const label = document.createElement('span');
+    label.textContent = weekday;
+    weekdays.append(label);
+  }
+
+  const grid = document.createElement('div');
+  grid.className = 'reminder-calendar-grid';
+  const year = reminderCalendarMonth.getFullYear();
+  const month = reminderCalendarMonth.getMonth();
+  const firstWeekday = (new Date(year, month, 1).getDay() + 6) % 7;
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const todayKey = toLocalDateKey(new Date());
+  for (let index = 0; index < firstWeekday; index++) {
+    const spacer = document.createElement('span');
+    spacer.className = 'reminder-calendar-spacer';
+    grid.append(spacer);
+  }
+  for (let day = 1; day <= daysInMonth; day++) {
+    const date = new Date(year, month, day);
+    const dateKey = toLocalDateKey(date);
+    const dateEntries = entriesByDate.get(dateKey) || [];
+    const dayButton = document.createElement('button');
+    dayButton.type = 'button';
+    dayButton.className = 'reminder-calendar-day';
+    dayButton.classList.toggle('is-today', dateKey === todayKey);
+    dayButton.classList.toggle('is-selected', dateKey === selectedReminderDate);
+    dayButton.classList.toggle('has-reminder', dateEntries.length > 0);
+    dayButton.classList.toggle(
+      'has-daily-review',
+      dateEntries.some((entry) => entry.isDailyReview)
+    );
+    dayButton.setAttribute('aria-label', `${month + 1} 月 ${day} 日，${dateEntries.length} 项安排`);
+    const dayNumber = document.createElement('span');
+    dayNumber.textContent = String(day);
+    dayButton.append(dayNumber);
+    if (dateEntries.length > 0) {
+      const count = document.createElement('small');
+      count.textContent = String(dateEntries.length);
+      dayButton.append(count);
+    }
+    dayButton.addEventListener('click', () => {
+      selectedReminderDate = dateKey;
+      renderNoteList();
+    });
+    grid.append(dayButton);
+  }
+
+  const todayButton = document.createElement('button');
+  todayButton.className = 'reminder-calendar-today';
+  todayButton.type = 'button';
+  todayButton.textContent = '回到今天';
+  todayButton.addEventListener('click', () => {
+    const today = new Date();
+    reminderCalendarMonth = new Date(today.getFullYear(), today.getMonth(), 1);
+    selectedReminderDate = toLocalDateKey(today);
+    renderNoteList();
+  });
+  calendar.append(header, weekdays, grid, todayButton);
+  noteList.append(calendar);
+
+  const selectedEntries = entriesByDate.get(selectedReminderDate) || [];
+  const details = document.createElement('section');
+  details.className = 'reminder-calendar-details';
+  const detailsTitle = document.createElement('h3');
+  const selectedDate = parseReminderDate(selectedReminderDate);
+  detailsTitle.textContent = selectedDate
+    ? `${selectedDate.getMonth() + 1} 月 ${selectedDate.getDate()} 日的安排`
+    : '日历详情';
+  details.append(detailsTitle);
+
+  if (selectedEntries.length === 0) {
+    const empty = document.createElement('p');
+    empty.className = 'reminder-calendar-empty';
+    empty.textContent = '当天没有提醒或回顾';
+    details.append(empty);
+  } else {
+    for (const { note, file, reminder, isDailyReview } of selectedEntries) {
+      const resource = note || file;
+      const item = document.createElement('button');
+      item.className = `reminder-calendar-entry${isDailyReview ? ' is-daily-review' : ''}`;
+      item.type = 'button';
+      const title = document.createElement('strong');
+      title.textContent = note?.title || file?.name || '未命名文件';
+      const folderPath = document.createElement('span');
+      const pathParts = getFolderNamePath(resource?.folderId);
+      folderPath.textContent = pathParts.length > 0 ? pathParts.join(' / ') : '根目录';
+      const meta = document.createElement('span');
+      if (isDailyReview) {
+        meta.className = 'daily-review-calendar-meta';
+        meta.textContent = '今日回顾 · 回忆以前内容';
+      } else {
+        meta.className = reminder.done ? 'is-done' : '';
+        const reminderTimes = DAILY_REMINDER_SLOTS.join('、');
+        meta.textContent = reminder.done
+          ? `${reminderTimes} · 已完成`
+          : `${reminderTimes} · 待提醒`;
+      }
+      item.append(title, folderPath, meta);
+      item.addEventListener('click', () => {
+        const openPromise = note ? selectNote(note.id) : selectResourceFile(file.id);
+        openPromise.catch(console.error);
+      });
+      details.append(item);
+    }
+  }
+  noteList.append(details);
+}
+
 function renderNoteList() {
   if (!noteList) {
     return;
@@ -626,6 +888,21 @@ function renderNoteList() {
   const filteredResources = getFilteredResources();
 
   noteList.innerHTML = '';
+
+  if (sidebarViewMode === 'calendar') {
+    renderReminderCalendar();
+    return;
+  }
+
+  if (sidebarViewMode === 'reminder'
+    && filteredNotes.length === 0
+    && filteredResources.length === 0) {
+    const empty = document.createElement('p');
+    empty.className = 'note-list-empty';
+    empty.textContent = '暂无标记为提醒文件的内容';
+    noteList.append(empty);
+    return;
+  }
 
   for (const folder of currentFolders) {
     const item = document.createElement('div');
@@ -718,7 +995,10 @@ function renderNoteList() {
     noteList.append(item);
   }
 
-  for (const note of sortNotes(filteredNotes)) {
+  const orderedNotes = sortNotes(filteredNotes).sort((a, b) => {
+    return Number(Boolean(b.isDailyReview)) - Number(Boolean(a.isDailyReview));
+  });
+  for (const note of orderedNotes) {
     const item = document.createElement('button');
     item.className = `note-item${!activePdfId && !activeResourceId && note.id === activeNoteId ? ' active' : ''}`;
     item.type = 'button';
@@ -741,14 +1021,33 @@ function renderNoteList() {
 
     const title = document.createElement('strong');
     title.textContent = note.title || '未命名笔记';
+    title.title = title.textContent;
     titleRow.append(title);
+    const badgeRow = document.createElement('div');
+    badgeRow.className = 'note-badge-row';
 
     if (hasTodayPendingReminder(note)) {
       const todayBadge = document.createElement('span');
       todayBadge.className = 'today-reminder-badge';
       todayBadge.textContent = '今日';
       todayBadge.title = '今天有提醒';
-      titleRow.append(todayBadge);
+      badgeRow.append(todayBadge);
+    }
+
+    if (note.isDailyReview) {
+      const dailyReviewBadge = document.createElement('span');
+      dailyReviewBadge.className = 'daily-review-badge';
+      dailyReviewBadge.textContent = '今日回顾';
+      dailyReviewBadge.title = '今天随机选中的回顾文件';
+      badgeRow.append(dailyReviewBadge);
+    }
+
+    if (note.isReminderFile) {
+      const reminderFileBadge = document.createElement('span');
+      reminderFileBadge.className = 'reminder-file-badge';
+      reminderFileBadge.textContent = '提醒';
+      reminderFileBadge.title = '已标记为提醒文件';
+      badgeRow.append(reminderFileBadge);
     }
 
     const textBadge = document.createElement('span');
@@ -757,6 +1056,18 @@ function renderNoteList() {
     titleRow.append(textBadge);
 
     item.append(titleRow);
+    if (badgeRow.childElementCount > 0) {
+      item.append(badgeRow);
+    }
+
+    if (sidebarViewMode === 'reminder') {
+      const folderPath = document.createElement('div');
+      folderPath.className = 'reminder-file-path';
+      const pathParts = getFolderNamePath(note.folderId);
+      folderPath.textContent = pathParts.length > 0 ? pathParts.join(' / ') : '根目录';
+      folderPath.title = folderPath.textContent;
+      item.append(folderPath);
+    }
 
     const timeMeta = document.createElement('div');
     timeMeta.className = 'note-time-meta';
@@ -772,16 +1083,21 @@ function renderNoteList() {
     `;
     item.append(timeMeta);
 
-    const pendingCount = (note.reminders || []).filter((reminder) => !reminder.done).length;
-    const reminderMeta = document.createElement('span');
-    reminderMeta.className = `note-reminder-meta${pendingCount > 0 ? ' has-pending' : ''}`;
-    reminderMeta.textContent = pendingCount > 0 ? `${pendingCount} 个待提醒` : '无待提醒';
-    item.append(reminderMeta);
+    if (note.isReminderFile) {
+      const pendingCount = (note.reminders || []).filter((reminder) => !reminder.done).length;
+      const reminderMeta = document.createElement('span');
+      reminderMeta.className = `note-reminder-meta${pendingCount > 0 ? ' has-pending' : ''}`;
+      reminderMeta.textContent = pendingCount > 0 ? `${pendingCount} 个待提醒` : '无待提醒';
+      item.append(reminderMeta);
+    }
 
     noteList.append(item);
   }
 
-  for (const file of filteredResources) {
+  const orderedResources = [...filteredResources].sort((a, b) => {
+    return Number(Boolean(b.isDailyReview)) - Number(Boolean(a.isDailyReview));
+  });
+  for (const file of orderedResources) {
     const item = document.createElement('button');
     const isActive = file.kind === 'pdf'
       ? file.id === activePdfId
@@ -800,6 +1116,9 @@ function renderNoteList() {
 
     const title = document.createElement('strong');
     title.textContent = file.name;
+    title.title = file.name;
+    const badgeRow = document.createElement('div');
+    badgeRow.className = 'note-badge-row';
 
     const badge = document.createElement('span');
     badge.className = `file-type-badge ${file.kind}`;
@@ -809,16 +1128,58 @@ function renderNoteList() {
     meta.className = 'note-time-meta';
     meta.textContent = `${formatFileSize(file.size)} · 修改：${formatListDateTime(file.updatedAt)}`;
 
-    titleRow.append(title, badge);
-    item.append(titleRow, meta);
+    titleRow.append(title);
+    if (file.isDailyReview) {
+      const dailyReviewBadge = document.createElement('span');
+      dailyReviewBadge.className = 'daily-review-badge';
+      dailyReviewBadge.textContent = '今日回顾';
+      dailyReviewBadge.title = '今天随机选中的回顾文件';
+      badgeRow.append(dailyReviewBadge);
+    }
+    if (file.isReminderFile) {
+      const reminderFileBadge = document.createElement('span');
+      reminderFileBadge.className = 'reminder-file-badge';
+      reminderFileBadge.textContent = '提醒';
+      reminderFileBadge.title = '已标记为提醒文件';
+      badgeRow.append(reminderFileBadge);
+    }
+    titleRow.append(badge);
+    item.append(titleRow);
+    if (badgeRow.childElementCount > 0) {
+      item.append(badgeRow);
+    }
+    if (sidebarViewMode === 'reminder') {
+      const folderPath = document.createElement('div');
+      folderPath.className = 'reminder-file-path';
+      const pathParts = getFolderNamePath(file.folderId);
+      folderPath.textContent = pathParts.length > 0 ? pathParts.join(' / ') : '根目录';
+      folderPath.title = folderPath.textContent;
+      item.append(folderPath);
+    }
+    item.append(meta);
     noteList.append(item);
   }
 }
 
 function selectFolder(folderId) {
+  sidebarViewMode = 'all';
+  showAllFilesButton.classList.add('is-active');
+  showReminderFilesButton.classList.remove('is-active');
+  showReminderCalendarButton.classList.remove('is-active');
   activeFolderId = folderId;
   renderBreadcrumb();
   renderNoteList();
+}
+
+function setSidebarViewMode(mode, shouldRender = true) {
+  sidebarViewMode = ['reminder', 'calendar'].includes(mode) ? mode : 'all';
+  showAllFilesButton.classList.toggle('is-active', sidebarViewMode === 'all');
+  showReminderFilesButton.classList.toggle('is-active', sidebarViewMode === 'reminder');
+  showReminderCalendarButton.classList.toggle('is-active', sidebarViewMode === 'calendar');
+  if (shouldRender) {
+    renderBreadcrumb();
+    renderNoteList();
+  }
 }
 
 async function moveNoteToFolder(noteId, folderId) {
@@ -1337,24 +1698,35 @@ function renderStorageInfo() {
   if (!storageInfo) {
     return;
   }
+  settingsStoragePath.textContent = storageInfo.notesPath;
+  settingsStoragePath.title = storageInfo.notesPath;
+  resetStorageButton.disabled = storageInfo.isDefault;
 }
 
 function renderReminders() {
   const note = getActiveNote();
   reminderList.innerHTML = '';
+  const reminderCount = note?.reminders?.length || 0;
+  reminderButtonCount.hidden = reminderCount === 0;
+  reminderButtonCount.textContent = String(reminderCount);
+  reminderDialogCount.textContent = `${reminderCount} 个`;
+  reminderDialogNoteTitle.textContent = note?.title || '为当前笔记安排提醒';
+  openReminderConfigButton.title = reminderCount > 0
+    ? `管理 ${reminderCount} 个提醒`
+    : '添加提醒';
 
   if (!note) {
-    const empty = document.createElement('p');
-    empty.className = 'empty-text';
-    empty.textContent = '当前没有打开的笔记。';
+    const empty = document.createElement('div');
+    empty.className = 'reminder-list-empty';
+    empty.innerHTML = '<strong>当前没有打开的笔记</strong><span>打开一篇笔记后即可设置提醒</span>';
     reminderList.append(empty);
     return;
   }
 
   if (!note.reminders.length) {
-    const empty = document.createElement('p');
-    empty.className = 'empty-text';
-    empty.textContent = '还没有提醒日期。';
+    const empty = document.createElement('div');
+    empty.className = 'reminder-list-empty';
+    empty.innerHTML = '<strong>还没有提醒</strong><span>选择日期，为这篇笔记安排第一次提醒</span>';
     reminderList.append(empty);
     return;
   }
@@ -1369,21 +1741,50 @@ function renderReminders() {
   for (const reminder of sortedReminders) {
     const row = document.createElement('div');
     row.className = `reminder-row${reminder.done ? ' done' : ''}`;
-
-    const text = document.createElement('span');
-    const firedCount = Array.isArray(reminder.firedSlots) ? reminder.firedSlots.length : 0;
-    const firedText = firedCount > 0
-      ? ` · 已通知 ${Math.min(firedCount, DAILY_REMINDER_SLOTS.length)}/${DAILY_REMINDER_SLOTS.length}`
+    const dateKey = getReminderDateKey(reminder);
+    const date = parseReminderDate(dateKey);
+    const dateBlock = document.createElement('div');
+    dateBlock.className = 'reminder-date-block';
+    const dateMain = document.createElement('strong');
+    dateMain.textContent = date
+      ? `${date.getMonth() + 1}月${date.getDate()}日`
+      : '日期无效';
+    const dateMeta = document.createElement('span');
+    dateMeta.textContent = date
+      ? `${date.getFullYear()} · ${new Intl.DateTimeFormat('zh-CN', { weekday: 'short' }).format(date)}`
       : '';
-    text.textContent = `${formatDateOnly(getReminderDateKey(reminder))}${firedText}`;
+    dateBlock.append(dateMain, dateMeta);
+
+    const reminderInfo = document.createElement('div');
+    reminderInfo.className = 'reminder-row-info';
+    const firedCount = Array.isArray(reminder.firedSlots) ? reminder.firedSlots.length : 0;
+    const status = document.createElement('span');
+    status.className = `reminder-status${reminder.done ? ' is-done' : ''}`;
+    status.textContent = reminder.done
+      ? '已完成'
+      : firedCount > 0
+        ? `已通知 ${Math.min(firedCount, DAILY_REMINDER_SLOTS.length)}/${DAILY_REMINDER_SLOTS.length}`
+        : '待提醒';
+    const slots = document.createElement('div');
+    slots.className = 'reminder-slots';
+    const firedSlots = new Set(reminder.firedSlots || []);
+    for (const slot of DAILY_REMINDER_SLOTS) {
+      const slotBadge = document.createElement('span');
+      slotBadge.className = firedSlots.has(slot) ? 'is-fired' : '';
+      slotBadge.textContent = slot;
+      slots.append(slotBadge);
+    }
+    reminderInfo.append(status, slots);
 
     const removeButton = document.createElement('button');
-    removeButton.className = 'text-button';
+    removeButton.className = 'reminder-remove-button';
     removeButton.type = 'button';
-    removeButton.textContent = '移除';
+    removeButton.title = '移除提醒';
+    removeButton.setAttribute('aria-label', `移除 ${dateMain.textContent} 的提醒`);
+    removeButton.innerHTML = '<svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M2.5 4h11M6 4V2.5h4V4M5 6.5v5M8 6.5v5M11 6.5v5M4 4l.7 9.5h6.6L12 4" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
     removeButton.addEventListener('click', () => removeReminder(reminder.id));
 
-    row.append(text, removeButton);
+    row.append(dateBlock, reminderInfo, removeButton);
     reminderList.append(row);
   }
 }
@@ -1424,6 +1825,7 @@ function renderEditor() {
     titleInput.value = activeNote.title || '';
     setEditorValue(activeNote.content || '');
     markdownEditor?.refresh?.();
+    restoreWorkspaceTabViewState(getWorkspaceTabKey('note', activeNote.id), 'editor');
   }
 
   isRenderingEditor = false;
@@ -1578,12 +1980,12 @@ function renderPdfOutline(items) {
   pdfOutlineList.append(createPdfOutlineItems(items));
 }
 
-async function loadPdfPreview(pdf) {
+async function loadPdfPreview(pdf, initialZoom = 1) {
   destroyPdfPreview();
-  pdfZoom = 1;
-  pdfZoomValue.textContent = '100%';
-  pdfZoomOut.disabled = false;
-  pdfZoomIn.disabled = false;
+  pdfZoom = Math.min(2, Math.max(0.5, Number(initialZoom) || 1));
+  pdfZoomValue.textContent = `${Math.round(pdfZoom * 100)}%`;
+  pdfZoomOut.disabled = pdfZoom <= 0.5;
+  pdfZoomIn.disabled = pdfZoom >= 2;
   pdfOutline.hidden = false;
   pdfOutlineToggle.classList.add('is-active');
   showPdfStatus('正在加载 PDF…');
@@ -1692,9 +2094,13 @@ function renderPdf() {
   pdfMeta.textContent = `PDF 文档 · ${formatFileSize(pdf.size)} · 创建于 ${formatListDateTime(pdf.createdAt)} · 修改于 ${formatListDateTime(pdf.updatedAt)}`;
   pdfPath.textContent = pdf.path;
   pdfPath.title = pdf.path;
+  const tabKey = getWorkspaceTabKey('pdf', pdf.id);
+  const viewState = workspaceTabViewStates.get(tabKey);
   renderNoteList();
   renderWorkspaceTabs();
-  loadPdfPreview(pdf).catch((error) => showPdfStatus(`PDF 加载失败：${error.message}`, true));
+  loadPdfPreview(pdf, viewState?.pdfZoom)
+    .then(() => restoreWorkspaceTabViewState(tabKey, pdfPages))
+    .catch((error) => showPdfStatus(`PDF 加载失败：${error.message}`, true));
 }
 
 function showFilePreviewStatus(message) {
@@ -1962,7 +2368,7 @@ function renderWordPreview(html) {
   }
 }
 
-async function loadResourcePreview(file, version) {
+async function loadResourcePreview(file, version, viewState = {}) {
   try {
     const preview = await window.noticeNote.previewFile(file.id);
     if (version !== filePreviewVersion) {
@@ -1971,17 +2377,28 @@ async function loadResourcePreview(file, version) {
 
     fileViewerContent.innerHTML = '';
     if (preview.kind === 'image') {
-      imageZoom = 1;
+      imageZoom = Math.min(4, Math.max(0.25, Number(viewState.imageZoom) || 1));
       const image = document.createElement('img');
       image.className = 'file-preview-image';
       image.alt = file.name;
-      image.addEventListener('load', () => {
-        const rect = image.getBoundingClientRect();
-        image.dataset.baseWidth = String(rect.width);
-        image.dataset.baseHeight = String(rect.height);
-      }, { once: true });
+      const imageLoaded = new Promise((resolve) => {
+        image.addEventListener('load', () => {
+          const rect = image.getBoundingClientRect();
+          image.dataset.baseWidth = String(rect.width);
+          image.dataset.baseHeight = String(rect.height);
+          if (imageZoom !== 1) {
+            image.style.maxWidth = 'none';
+            image.style.maxHeight = 'none';
+            image.style.width = `${rect.width * imageZoom}px`;
+            image.style.height = `${rect.height * imageZoom}px`;
+          }
+          resolve();
+        }, { once: true });
+        image.addEventListener('error', resolve, { once: true });
+      });
       image.src = preview.fileUrl;
       fileViewerContent.append(image);
+      await imageLoaded;
     } else if (preview.kind === 'word') {
       renderWordPreview(preview.html);
     } else if (preview.kind === 'spreadsheet') {
@@ -2012,11 +2429,15 @@ function renderResourceFile() {
   fileViewerType.textContent = file.typeLabel;
   fileViewerPath.textContent = file.path;
   fileViewerPath.title = file.path;
+  const tabKey = getWorkspaceTabKey('file', file.id);
+  const viewState = workspaceTabViewStates.get(tabKey);
   showFilePreviewStatus('正在加载文件…');
   const version = ++filePreviewVersion;
   renderNoteList();
   renderWorkspaceTabs();
-  loadResourcePreview(file, version).catch(console.error);
+  loadResourcePreview(file, version, viewState)
+    .then(() => restoreWorkspaceTabViewState(tabKey, fileViewerContent))
+    .catch(console.error);
 }
 
 function isEditingActiveNote() {
@@ -2315,13 +2736,13 @@ async function deleteResourceFile(fileId) {
 
 async function boot() {
   setSidebarCollapsed(readBooleanSetting(SIDEBAR_COLLAPSED_KEY));
-  setReminderCollapsed(readBooleanSetting(REMINDER_COLLAPSED_KEY));
   createMarkdownEditor();
   notes = sortNotes(await window.noticeNote.listNotes());
   folders = await window.noticeNote.listFolders();
   pdfFiles = await window.noticeNote.listPdfs();
   resourceFiles = await window.noticeNote.listFiles();
   storageInfo = await window.noticeNote.getStorage();
+  appSettings = await window.noticeNote.getSettings();
   activeNoteId = null;
   workspaceTabs = [];
   activeWorkspaceTabKey = null;
@@ -2382,6 +2803,18 @@ async function boot() {
   });
 }
 
+function renderSettings() {
+  dailyReviewEnabledInput.checked = appSettings?.dailyReviewEnabled !== false;
+  dailyReviewCurrentTitle.textContent = appSettings?.dailyReviewTitle || '今天暂无可回顾文件';
+  renderStorageInfo();
+}
+
+async function openSettings() {
+  appSettings = await window.noticeNote.getSettings();
+  renderSettings();
+  settingsDialog.showModal();
+}
+
 titleInput.addEventListener('input', () => {
   const note = getActiveNote();
   if (note) {
@@ -2400,6 +2833,61 @@ newNoteButton.addEventListener('click', () => {
 });
 refreshButton.addEventListener('click', () => {
   refreshNotes().catch(console.error);
+});
+settingsButton.addEventListener('click', () => {
+  openSettings().catch(console.error);
+});
+closeSettingsDialogButton.addEventListener('click', () => {
+  settingsDialog.close();
+});
+dailyReviewEnabledInput.addEventListener('change', () => {
+  dailyReviewEnabledInput.disabled = true;
+  window.noticeNote.updateSettings({ dailyReviewEnabled: dailyReviewEnabledInput.checked })
+    .then((settings) => {
+      appSettings = settings;
+      renderSettings();
+    })
+    .catch(console.error)
+    .finally(() => {
+      dailyReviewEnabledInput.disabled = false;
+    });
+});
+chooseStorageButton.addEventListener('click', () => {
+  chooseStorageButton.disabled = true;
+  window.noticeNote.chooseStorage()
+    .then((result) => {
+      if (result?.storage) {
+        storageInfo = result.storage;
+        renderStorageInfo();
+      }
+    })
+    .catch(console.error)
+    .finally(() => {
+      chooseStorageButton.disabled = false;
+    });
+});
+resetStorageButton.addEventListener('click', () => {
+  resetStorageButton.disabled = true;
+  window.noticeNote.resetStorage()
+    .then((result) => {
+      if (result?.storage) {
+        storageInfo = result.storage;
+        renderStorageInfo();
+      }
+    })
+    .catch(console.error)
+    .finally(() => {
+      resetStorageButton.disabled = Boolean(storageInfo?.isDefault);
+    });
+});
+showAllFilesButton.addEventListener('click', () => {
+  setSidebarViewMode('all');
+});
+showReminderFilesButton.addEventListener('click', () => {
+  setSidebarViewMode('reminder');
+});
+showReminderCalendarButton.addEventListener('click', () => {
+  setSidebarViewMode('calendar');
 });
 locateCurrentFileButton.addEventListener('click', () => {
   const tab = workspaceTabs.find((item) => {
@@ -2426,20 +2914,18 @@ addReminderButton.addEventListener('click', () => {
   addReminder().catch(console.error);
 });
 openReminderConfigButton.addEventListener('click', () => {
+  renderReminders();
   reminderDialog.showModal();
 });
 closeReminderDialogButton.addEventListener('click', () => {
   reminderDialog.close();
 });
-autoReminderCheckbox.addEventListener('change', () => {
-  if (!autoReminderCheckbox.checked) {
-    return;
-  }
-
+autoReminderButton.addEventListener('click', () => {
+  autoReminderButton.disabled = true;
   addAutoReminders()
     .catch(console.error)
     .finally(() => {
-      autoReminderCheckbox.checked = false;
+      autoReminderButton.disabled = false;
     });
 });
 deleteNoteButton.addEventListener('click', () => {
@@ -2512,13 +2998,6 @@ toggleSidebarButton.addEventListener('click', () => {
 showSidebarButton.addEventListener('click', () => {
   setSidebarCollapsed(false);
 });
-toggleReminderButton.addEventListener('click', () => {
-  setReminderCollapsed(!editorPanel.classList.contains('reminder-collapsed'));
-});
-showReminderButton.addEventListener('click', () => {
-  setReminderCollapsed(false);
-});
-
 // Right-click context menu on note list
 let contextMenu = null;
 
@@ -2574,6 +3053,16 @@ function showContextMenu(x, y, entry = null) {
       contextMenu.append(createContextMenuItem('使用默认应用打开', () => {
         window.noticeNote.openEntryWithDefaultApp(entry).catch(console.error);
       }));
+      const target = entry.type === 'note'
+        ? notes.find((item) => item.id === entry.id)
+        : resourceFiles.find((item) => item.id === entry.id);
+      const isReminderFile = Boolean(target?.isReminderFile);
+      contextMenu.append(createContextMenuItem(
+        isReminderFile ? '取消提醒文件标记' : '标记为提醒文件',
+        () => {
+          window.noticeNote.setReminderFileMark(entry, !isReminderFile).catch(console.error);
+        }
+      ));
     }
     contextMenu.append(
       createContextMenuItem('打开资源管理器', () => {
