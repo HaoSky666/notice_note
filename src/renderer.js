@@ -23,6 +23,13 @@ const editorPanel = document.querySelector('.editor-panel');
 const editorTopbar = document.querySelector('#editorTopbar');
 const refreshButton = document.querySelector('#refreshButton');
 const locateCurrentFileButton = document.querySelector('#locateCurrentFileButton');
+const mobilePairingButton = document.querySelector('#mobilePairingButton');
+const mobilePairingDialog = document.querySelector('#mobilePairingDialog');
+const closeMobilePairingDialogButton = document.querySelector('#closeMobilePairingDialogButton');
+const mobilePairingStatus = document.querySelector('#mobilePairingStatus');
+const mobilePairingQr = document.querySelector('#mobilePairingQr');
+const mobilePairingUrl = document.querySelector('#mobilePairingUrl');
+const copyMobilePairingUrlButton = document.querySelector('#copyMobilePairingUrlButton');
 const settingsButton = document.querySelector('#settingsButton');
 const settingsDialog = document.querySelector('#settingsDialog');
 const closeSettingsDialogButton = document.querySelector('#closeSettingsDialogButton');
@@ -1703,6 +1710,22 @@ function renderStorageInfo() {
   resetStorageButton.disabled = storageInfo.isDefault;
 }
 
+async function openMobilePairingDialog() {
+  mobilePairingStatus.textContent = '正在读取 NATAPP 当前域名...';
+  mobilePairingQr.removeAttribute('src');
+  mobilePairingUrl.value = '';
+  mobilePairingDialog.showModal();
+
+  try {
+    const pairingInfo = await window.noticeNote.getMobilePairingInfo();
+    mobilePairingStatus.textContent = pairingInfo.message;
+    mobilePairingQr.src = pairingInfo.qrDataUrl;
+    mobilePairingUrl.value = pairingInfo.pairingUrl;
+  } catch (error) {
+    mobilePairingStatus.textContent = `生成二维码失败：${error.message}`;
+  }
+}
+
 function renderReminders() {
   const note = getActiveNote();
   reminderList.innerHTML = '';
@@ -2833,6 +2856,18 @@ newNoteButton.addEventListener('click', () => {
 });
 refreshButton.addEventListener('click', () => {
   refreshNotes().catch(console.error);
+});
+mobilePairingButton.addEventListener('click', () => {
+  openMobilePairingDialog().catch(console.error);
+});
+closeMobilePairingDialogButton.addEventListener('click', () => {
+  mobilePairingDialog.close();
+});
+copyMobilePairingUrlButton.addEventListener('click', () => {
+  if (!mobilePairingUrl.value) {
+    return;
+  }
+  navigator.clipboard.writeText(mobilePairingUrl.value).catch(console.error);
 });
 settingsButton.addEventListener('click', () => {
   openSettings().catch(console.error);

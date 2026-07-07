@@ -1,0 +1,11 @@
+{
+  "appId": "com.notice.note",
+  "appName": "Notice Note",
+  "webDir": "src/mobile",
+  "server": {
+    "cleartext": true
+  },
+  "android": {
+    "allowMixedContent": true
+  }
+}

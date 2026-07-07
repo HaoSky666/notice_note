@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Notice Note Mobile</title>
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <main class="app-shell">
+    <section id="contentPanel" hidden>
+      <div class="content-tools">
+        <div class="mobile-toolbar">
+          <div>
+            <h1>Notice Note</h1>
+          </div>
+          <div class="toolbar-actions">
+            <button id="scanPairingButton" class="toolbar-action-button" type="button" aria-label="扫码设置">▣</button>
+            <button id="connectionSettingsButton" class="toolbar-action-button" type="button" aria-label="连接配置">⚙</button>
+            <button id="refreshButton" class="refresh-button" type="button" aria-label="刷新笔记">↻</button>
+          </div>
+        </div>
+        <label class="search-box">
+          <span aria-hidden="true">⌕</span>
+          <input id="searchInput" type="search" placeholder="标题、正文预览、文件夹">
+        </label>
+      </div>
+
+      <nav id="pathBar" class="path-bar" aria-label="当前位置"></nav>
+      <div id="statusText" class="status-text">正在连接桌面端...</div>
+      <div id="noteList" class="note-list"></div>
+    </section>
+
+    <section id="noteDetailPanel" class="note-page" hidden>
+      <div class="note-page-bar">
+        <button id="noteBackButton" class="path-back" type="button">← 返回</button>
+        <p id="noteFolder" class="note-page-path"></p>
+      </div>
+      <article class="note-page-card">
+        <h2 id="noteTitle"></h2>
+        <div id="noteContent" class="markdown-body"></div>
+      </article>
+    </section>
+  </main>
+
+  <dialog id="connectionDialog" class="connection-dialog">
+    <form method="dialog" class="connection-card">
+      <div class="connection-heading">
+        <div>
+          <h2 id="connectionDialogTitle">连接配置</h2>
+          <p id="connectionDialogDescription">填写 NATAPP 服务地址和访问令牌。</p>
+        </div>
+        <button id="closeConnectionDialogButton" class="dialog-close-button" type="button" aria-label="关闭">×</button>
+      </div>
+      <section id="manualConnectionPanel">
+        <label>
+          <span>服务地址</span>
+          <input id="serverInput" type="url" placeholder="例如：http://xxxx.natappfree.cc">
+        </label>
+        <label>
+          <span>访问令牌</span>
+          <span class="token-input-wrap">
+            <input id="tokenInput" type="password" placeholder="粘贴 token">
+            <button id="toggleTokenVisibilityButton" class="token-visibility-button" type="button" aria-label="显示访问令牌">👁</button>
+          </span>
+        </label>
+        <button id="saveConnectionButton" type="button">保存并进入</button>
+      </section>
+      <section id="scannerPanel" class="scanner-panel" hidden>
+        <video id="scannerVideo" playsinline muted></video>
+        <p id="scannerStatus">将二维码放入取景框</p>
+        <button id="stopScanButton" type="button">停止扫码</button>
+      </section>
+    </form>
+  </dialog>
+
+  <script src="./app.js"></script>
+</body>
+</html>

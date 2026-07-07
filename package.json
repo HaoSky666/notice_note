@@ -4,10 +4,14 @@
   "description": "支持 Markdown 笔记和多时间提醒的桌面应用",
   "main": "src/main.js",
   "scripts": {
-    "start": "electron .",
-    "lint": "node --check src/main.js && node --check src/preload.js && node --check src/renderer.js",
+    "start": "chcp 65001 > nul && electron .",
+    "mobile:start": "chcp 65001 > nul && node src/mobile-server.js",
+    "lint": "chcp 65001 > nul && node --check src/main.js && node --check src/preload.js && node --check src/renderer.js",
     "bundle:editor": "vite build --config vite.editor.config.js",
-    "dist": "npm run bundle:editor && electron-builder --win nsis --x64"
+    "android:sync": "chcp 65001 > nul && npx cap sync android",
+    "android:open": "chcp 65001 > nul && npx cap open android",
+    "android:build:debug": "chcp 65001 > nul && npx cap sync android && cd android && .\\gradlew.bat assembleDebug",
+    "dist": "chcp 65001 > nul && npm run bundle:editor && electron-builder --win nsis --x64"
   },
   "keywords": [
     "markdown",
@@ -50,6 +54,9 @@
     }
   },
   "dependencies": {
+    "@capacitor/android": "^8.4.1",
+    "@capacitor/cli": "^8.4.1",
+    "@capacitor/core": "^8.4.1",
     "@codemirror/commands": "^6.10.0",
     "@codemirror/lang-markdown": "^6.5.0",
     "@codemirror/language": "^6.11.3",
@@ -59,7 +66,8 @@
     "exceljs": "^4.4.0",
     "gray-matter": "^4.0.3",
     "mammoth": "^1.12.0",
-    "pdfjs-dist": "^6.1.200"
+    "pdfjs-dist": "^6.1.200",
+    "qrcode": "^1.5.4"
   },
   "overrides": {
     "dompurify": "^3.3.4"

@@ -17,6 +17,7 @@ contextBridge.exposeInMainWorld('noticeNote', {
   resetStorage: () => ipcRenderer.invoke('storage:reset'),
   getSettings: () => ipcRenderer.invoke('settings:get'),
   updateSettings: (settings) => ipcRenderer.invoke('settings:update', settings),
+  getMobilePairingInfo: () => ipcRenderer.invoke('mobile:pairing-info'),
   insertImage: (payload) => ipcRenderer.invoke('images:insert', payload),
   savePastedImage: (payload) => ipcRenderer.invoke('images:save-pasted', payload),
   listPdfs: () => ipcRenderer.invoke('pdfs:list'),

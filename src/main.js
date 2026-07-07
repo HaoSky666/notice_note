@@ -1,5 +1,6 @@
 const { app, BrowserWindow, ipcMain, Notification, dialog, Menu, Tray, clipboard, shell } = require('electron');
 const path = require('node:path');
+const { createServer } = require('node:http');
 const { watch } = require('node:fs');
 const fs = require('node:fs/promises');
 const { randomUUID } = require('node:crypto');
@@ -7,6 +8,7 @@ const { pathToFileURL } = require('node:url');
 const matter = require('gray-matter');
 const mammoth = require('mammoth');
 const ExcelJS = require('exceljs');
+const QRCode = require('qrcode');
 
 const NOTES_DIR_NAME = 'notes';
 const OLD_NOTE_FILE_NAME = 'notes.json';
@@ -18,9 +20,13 @@ const APP_DATA_DIR_NAME = '.notice-note';
 const NOTE_METADATA_FILE_NAME = 'metadata.json';
 const REMINDER_FILE_MARKS_NAME = 'reminder-files.json';
 const NOTE_BACKUP_DIR_NAME = 'backups';
+const MOBILE_SERVER_HOST = '127.0.0.1';
+const MOBILE_SERVER_PORT = 39271;
+const NATAPP_WEB_INTERFACE_URL = 'http://127.0.0.1:4040/api/tunnels';
 
 let mainWindow;
 let tray;
+let mobileServer;
 let notes = [];
 let folders = [];
 let pdfFiles = [];
@@ -39,6 +45,7 @@ let reminderFileMarks = new Set();
 let internalNoteWrites = new Map();
 let dailyReviewEnabled = true;
 let dailyReviewSelection = { date: null, entryKey: null };
+let mobileAccessToken = null;
 
 if (process.platform === 'win32') {
   app.setAppUserModelId('com.notice-note.app');
@@ -97,6 +104,18 @@ function createTray() {
     {
       label: '显示 Notice Note',
       click: showMainWindow
+    },
+    {
+      label: '复制手机访问地址',
+      click: () => {
+        clipboard.writeText(getMobileAccessUrl());
+      }
+    },
+    {
+      label: '复制手机访问令牌',
+      click: () => {
+        clipboard.writeText(mobileAccessToken || '');
+      }
     },
     {
       type: 'separator'
@@ -445,10 +464,14 @@ async function loadConfig() {
     } else {
       notesPath = getDefaultNotesPath();
     }
+    mobileAccessToken = typeof config.mobileAccessToken === 'string' && config.mobileAccessToken
+      ? config.mobileAccessToken
+      : createMobileAccessToken();
   } catch (error) {
     notesPath = getDefaultNotesPath();
     dailyReviewEnabled = true;
     dailyReviewSelection = { date: null, entryKey: null };
+    mobileAccessToken = createMobileAccessToken();
   }
 }
 
@@ -457,8 +480,13 @@ async function saveConfig() {
   await fs.writeFile(getConfigPath(), JSON.stringify({
     notesPath: getNotesPath(),
     dailyReviewEnabled,
-    dailyReviewSelection
+    dailyReviewSelection,
+    mobileAccessToken
   }, null, 2), 'utf8');
+}
+
+function createMobileAccessToken() {
+  return `${randomUUID()}-${randomUUID()}`;
 }
 
 function getResourceDailyReviewKey(filePath) {
@@ -513,6 +541,310 @@ function getAppSettings() {
     dailyReviewEnabled,
     dailyReviewTitle: selectedNote?.title || selectedFile?.name || null
   };
+}
+
+function getMobileStaticDir() {
+  return path.join(__dirname, 'mobile');
+}
+
+function getMobileAccessUrl() {
+  return `http://${MOBILE_SERVER_HOST}:${MOBILE_SERVER_PORT}/?token=${encodeURIComponent(mobileAccessToken)}`;
+}
+
+async function readNatappPublicUrl() {
+  try {
+    const response = await fetch(NATAPP_WEB_INTERFACE_URL);
+    if (!response.ok) {
+      throw new Error(`NATAPP WebInterface 返回 ${response.status}`);
+    }
+    const raw = await response.text();
+    if (raw.trim().startsWith('<')) {
+      const matchedUrl = raw.match(/https?:\/\/[^\s"'<>]+natapp[^\s"'<>]*/i)?.[0];
+      return matchedUrl ? matchedUrl.replace(/\/+$/, '') : null;
+    }
+    const payload = JSON.parse(raw);
+    const tunnels = Array.isArray(payload.tunnels) ? payload.tunnels : [];
+    const webTunnel = tunnels.find((item) => {
+      return typeof item.public_url === 'string' && /^https?:\/\//i.test(item.public_url);
+    });
+    return webTunnel?.public_url?.replace(/\/+$/, '') || null;
+  } catch (error) {
+    console.warn('未读取到 NATAPP 当前域名，将使用本地地址生成二维码。');
+    return null;
+  }
+}
+
+function buildMobilePairingUrl(serverUrl) {
+  const normalizedServerUrl = String(serverUrl || getMobileAccessUrl())
+    .trim()
+    .replace(/\\/g, '/')
+    .replace(/\/+$/, '');
+  const url = new URL(normalizedServerUrl);
+  url.searchParams.set('token', mobileAccessToken);
+  url.searchParams.set('server', normalizedServerUrl);
+  return url.toString();
+}
+
+async function getMobilePairingInfo() {
+  const publicUrl = await readNatappPublicUrl();
+  const serverUrl = publicUrl || `http://${MOBILE_SERVER_HOST}:${MOBILE_SERVER_PORT}`;
+  const pairingUrl = buildMobilePairingUrl(serverUrl);
+  const qrDataUrl = await QRCode.toDataURL(pairingUrl, {
+    errorCorrectionLevel: 'M',
+    margin: 2,
+    width: 320,
+    color: {
+      dark: '#2f241b',
+      light: '#fffaf3'
+    }
+  });
+  return {
+    serverUrl,
+    pairingUrl,
+    qrDataUrl,
+    fromNatapp: Boolean(publicUrl),
+    message: publicUrl
+      ? '已读取 NATAPP 当前域名'
+      : '未读取到 NATAPP 域名，当前二维码使用本地地址；请确认 NATAPP WebInterface 已开启'
+  };
+}
+
+function isPathInside(parentPath, targetPath) {
+  const relativePath = path.relative(parentPath, targetPath);
+  return relativePath === '' || (!relativePath.startsWith('..') && !path.isAbsolute(relativePath));
+}
+
+function getMimeType(filePath) {
+  const extension = path.extname(filePath).toLowerCase();
+  const mimeTypes = {
+    '.html': 'text/html; charset=utf-8',
+    '.css': 'text/css; charset=utf-8',
+    '.js': 'application/javascript; charset=utf-8',
+    '.json': 'application/json; charset=utf-8',
+    '.svg': 'image/svg+xml',
+    '.png': 'image/png',
+    '.jpg': 'image/jpeg',
+    '.jpeg': 'image/jpeg',
+    '.webp': 'image/webp',
+    '.ico': 'image/x-icon'
+  };
+  return mimeTypes[extension] || 'application/octet-stream';
+}
+
+function writeCorsHeaders(response) {
+  response.setHeader('Access-Control-Allow-Origin', '*');
+  response.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type');
+  response.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+}
+
+function writeJson(response, statusCode, payload) {
+  writeCorsHeaders(response);
+  response.writeHead(statusCode, { 'Content-Type': 'application/json; charset=utf-8' });
+  response.end(JSON.stringify(payload));
+}
+
+function isMobileRequestAuthorized(request, requestUrl) {
+  const authorization = request.headers.authorization || '';
+  const bearerToken = authorization.startsWith('Bearer ')
+    ? authorization.slice('Bearer '.length).trim()
+    : '';
+  return requestUrl.searchParams.get('token') === mobileAccessToken
+    || bearerToken === mobileAccessToken;
+}
+
+function getFolderNameById(folderId) {
+  if (!folderId) {
+    return '全部笔记';
+  }
+
+  return folders.find((folder) => folder.id === folderId)?.name || '未命名文件夹';
+}
+
+function getFolderBreadcrumb(folderId) {
+  const folder = folders.find((item) => item.id === folderId);
+  return folder ? getFolderPathParts(folder).join(' / ') : '全部笔记';
+}
+
+function createMobileNoteSummary(note) {
+  const plainContent = String(note.content || '').replace(/\s+/g, ' ').trim();
+  return {
+    id: note.id,
+    title: note.title,
+    folderId: note.folderId || null,
+    folderName: getFolderNameById(note.folderId),
+    folderPath: getFolderBreadcrumb(note.folderId),
+    fileType: note.fileType,
+    createdAt: note.createdAt,
+    updatedAt: note.updatedAt,
+    reminders: note.reminders,
+    isDailyReview: Boolean(note.isDailyReview),
+    isReminderFile: Boolean(note.isReminderFile),
+    preview: plainContent.slice(0, 120)
+  };
+}
+
+function createMobileFolderSummary(folder) {
+  return {
+    id: folder.id,
+    name: folder.name,
+    parentId: folder.parentId || null,
+    path: getFolderPathParts(folder).join(' / ')
+  };
+}
+
+function getMobileLibraryPayload() {
+  return {
+    app: {
+      name: 'Notice Note',
+      storagePath: getNotesPath(),
+      readOnly: true,
+      generatedAt: new Date().toISOString()
+    },
+    folders: folders.map(createMobileFolderSummary),
+    notes: notes.map(createMobileNoteSummary),
+    files: resourceFiles.map((file) => ({
+      id: file.id,
+      name: file.name,
+      folderId: file.folderId || null,
+      folderName: getFolderNameById(file.folderId),
+      folderPath: getFolderBreadcrumb(file.folderId),
+      kind: file.kind,
+      typeLabel: file.typeLabel,
+      size: file.size,
+      updatedAt: file.updatedAt,
+      isDailyReview: Boolean(file.isDailyReview),
+      isReminderFile: Boolean(file.isReminderFile)
+    }))
+  };
+}
+
+function getMobileNotePayload(noteId) {
+  const note = notes.find((item) => item.id === noteId);
+  if (!note) {
+    return null;
+  }
+
+  return {
+    ...createMobileNoteSummary(note),
+    content: note.content || ''
+  };
+}
+
+async function handleMobileApiRequest(request, response, requestUrl) {
+  if (request.method === 'OPTIONS') {
+    writeCorsHeaders(response);
+    response.writeHead(204);
+    response.end();
+    return;
+  }
+
+  if (!isMobileRequestAuthorized(request, requestUrl)) {
+    writeJson(response, 401, { error: '访问令牌无效' });
+    return;
+  }
+
+  if (request.method !== 'GET') {
+    writeJson(response, 405, { error: '当前移动端接口仅支持读取' });
+    return;
+  }
+
+  if (requestUrl.pathname === '/api/health') {
+    writeJson(response, 200, {
+      ok: true,
+      readOnly: true,
+      noteCount: notes.length,
+      folderCount: folders.length,
+      fileCount: resourceFiles.length
+    });
+    return;
+  }
+
+  if (requestUrl.pathname === '/api/library') {
+    writeJson(response, 200, getMobileLibraryPayload());
+    return;
+  }
+
+  const noteMatch = requestUrl.pathname.match(/^\/api\/notes\/([^/]+)$/);
+  if (noteMatch) {
+    const note = getMobileNotePayload(decodeURIComponent(noteMatch[1]));
+    if (!note) {
+      writeJson(response, 404, { error: '笔记不存在' });
+      return;
+    }
+    writeJson(response, 200, note);
+    return;
+  }
+
+  writeJson(response, 404, { error: '接口不存在' });
+}
+
+async function serveMobileStaticFile(response, requestPath) {
+  const staticDir = getMobileStaticDir();
+  const normalizedPath = requestPath === '/' ? '/index.html' : requestPath;
+  const targetPath = path.resolve(staticDir, `.${decodeURIComponent(normalizedPath)}`);
+
+  if (!isPathInside(staticDir, targetPath)) {
+    response.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' });
+    response.end('禁止访问');
+    return;
+  }
+
+  try {
+    const content = await fs.readFile(targetPath);
+    response.writeHead(200, {
+      'Content-Type': getMimeType(targetPath),
+      'Cache-Control': 'no-cache'
+    });
+    response.end(content);
+  } catch (error) {
+    if (error.code === 'ENOENT') {
+      response.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
+      response.end('页面不存在');
+      return;
+    }
+    response.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8' });
+    response.end('读取页面失败');
+  }
+}
+
+function startMobileServer() {
+  if (mobileServer) {
+    return;
+  }
+
+  mobileServer = createServer((request, response) => {
+    Promise.resolve()
+      .then(async () => {
+        const requestUrl = new URL(request.url || '/', getMobileAccessUrl());
+        if (requestUrl.pathname.startsWith('/api/')) {
+          await handleMobileApiRequest(request, response, requestUrl);
+          return;
+        }
+        await serveMobileStaticFile(response, requestUrl.pathname);
+      })
+      .catch((error) => {
+        console.error('移动端服务处理请求失败:', error);
+        writeJson(response, 500, { error: '移动端服务异常' });
+      });
+  });
+
+  mobileServer.on('error', (error) => {
+    console.error('启动移动端服务失败:', error);
+  });
+
+  mobileServer.listen(MOBILE_SERVER_PORT, MOBILE_SERVER_HOST, () => {
+    console.log(`移动端本地访问地址: ${getMobileAccessUrl()}`);
+    console.log(`NATAPP 请反代到: ${MOBILE_SERVER_HOST}:${MOBILE_SERVER_PORT}`);
+  });
+}
+
+function stopMobileServer() {
+  if (!mobileServer) {
+    return;
+  }
+
+  mobileServer.close();
+  mobileServer = null;
 }
 
 async function updateAppSettings(_event, input = {}) {
@@ -1775,6 +2107,7 @@ function scheduleReminderCheck() {
 
 app.whenReady().then(async () => {
   await loadConfig();
+  await saveConfig();
   await loadNotes();
 
   ipcMain.handle('notes:list', () => notes);
@@ -1894,6 +2227,7 @@ app.whenReady().then(async () => {
   ipcMain.handle('storage:reset', resetNotesPath);
   ipcMain.handle('settings:get', () => getAppSettings());
   ipcMain.handle('settings:update', updateAppSettings);
+  ipcMain.handle('mobile:pairing-info', getMobilePairingInfo);
   ipcMain.handle('entries:copy-path', copyLibraryEntryPath);
   ipcMain.handle('entries:show-in-folder', showLibraryEntryInFolder);
   ipcMain.handle('entries:open-default', openLibraryEntry);
@@ -1930,4 +2264,5 @@ app.on('before-quit', () => {
   clearTimeout(pdfReloadTimer);
   clearTimeout(noteReloadTimer);
   pdfWatcher?.close();
+  stopMobileServer();
 });

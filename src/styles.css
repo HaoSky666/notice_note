@@ -3073,3 +3073,79 @@ button {
     min-width: 0;
   }
 }
+
+.mobile-pairing-dialog {
+  width: min(420px, calc(100vw - 36px));
+  border: 0;
+  border-radius: 22px;
+  padding: 0;
+  background: transparent;
+}
+
+.mobile-pairing-dialog::backdrop {
+  background: rgba(35, 28, 19, 0.32);
+  backdrop-filter: blur(4px);
+}
+
+.mobile-pairing-card {
+  display: grid;
+  gap: 16px;
+  padding: 22px;
+  border: 1px solid rgba(216, 203, 184, 0.9);
+  border-radius: 22px;
+  background: #fffaf1;
+  box-shadow: 0 24px 70px rgba(65, 45, 24, 0.24);
+}
+
+.mobile-pairing-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.mobile-pairing-heading h2 {
+  margin: 0;
+  color: #2f2922;
+  font-size: 20px;
+}
+
+.mobile-pairing-heading p {
+  margin: 6px 0 0;
+  color: #8a7b68;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.mobile-pairing-qr-wrap {
+  display: grid;
+  place-items: center;
+  padding: 14px;
+  border: 1px solid #e7dac6;
+  border-radius: 18px;
+  background: #fffdf8;
+}
+
+.mobile-pairing-qr-wrap img {
+  width: 260px;
+  max-width: 100%;
+  height: auto;
+}
+
+.mobile-pairing-url {
+  display: grid;
+  gap: 8px;
+  color: #756857;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.mobile-pairing-url textarea {
+  resize: vertical;
+  border: 1px solid #e0d3bf;
+  border-radius: 12px;
+  padding: 10px;
+  background: #fffdf8;
+  color: #3f3931;
+  font: 12px/1.5 "SFMono-Regular", Consolas, monospace;
+}
