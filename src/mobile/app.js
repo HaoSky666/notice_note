@@ -25,6 +25,7 @@ const noteFolder = document.querySelector('#noteFolder');
 const noteTitle = document.querySelector('#noteTitle');
 const noteContent = document.querySelector('#noteContent');
 
+const NAVIGATION_STATE_KEY = 'notice-note-mobile-state';
 const TOKEN_KEY = 'notice-note-mobile-token';
 const SERVER_KEY = 'notice-note-mobile-server';
 let accessToken = '';
@@ -33,6 +34,15 @@ let library = null;
 let currentFolderId = null;
 let scannerStream = null;
 let scannerTimer = null;
+let isApplyingNavigationState = false;
+let exitPromptExpiresAt = 0;
+let exitPromptTimer = null;
+
+const exitPromptToast = document.createElement('div');
+exitPromptToast.className = 'exit-toast';
+exitPromptToast.setAttribute('role', 'status');
+exitPromptToast.setAttribute('aria-live', 'polite');
+document.body.append(exitPromptToast);
 
 function readConnectionFromUrl() {
   const url = new URL(window.location.href);
@@ -203,10 +213,169 @@ function getApiUrl(path) {
   return `${serverBaseUrl}${path}`;
 }
 
+function createListNavigationState() {
+  return {
+    key: NAVIGATION_STATE_KEY,
+    view: 'list',
+    folderId: currentFolderId
+  };
+}
+
+function createNoteNavigationState(noteId) {
+  return {
+    key: NAVIGATION_STATE_KEY,
+    view: 'note',
+    folderId: currentFolderId,
+    noteId
+  };
+}
+
+function createExitGuardState() {
+  return {
+    key: NAVIGATION_STATE_KEY,
+    view: 'exit-guard'
+  };
+}
+
+function isMobileNavigationState(state) {
+  return state?.key === NAVIGATION_STATE_KEY;
+}
+
+function isAtRootList() {
+  return !currentFolderId && noteDetailPanel.hidden;
+}
+
+function replaceNavigationState(state = createListNavigationState()) {
+  window.history.replaceState(state, document.title);
+}
+
+function pushNavigationState(state = createListNavigationState()) {
+  if (isApplyingNavigationState) {
+    return;
+  }
+  window.history.pushState(state, document.title);
+}
+
+function installNavigationHistory() {
+  replaceNavigationState(createExitGuardState());
+  window.history.pushState(createListNavigationState(), document.title);
+}
+
+function showExitPrompt() {
+  exitPromptExpiresAt = Date.now() + 1800;
+  exitPromptToast.textContent = '再按一次返回退出';
+  exitPromptToast.classList.add('show');
+  clearTimeout(exitPromptTimer);
+  exitPromptTimer = setTimeout(() => {
+    exitPromptToast.classList.remove('show');
+  }, 1800);
+}
+
+function leaveAppOrPage() {
+  if (window.NoticeNoteAndroid?.exitApp) {
+    window.NoticeNoteAndroid.exitApp();
+    return;
+  }
+  const appPlugin = window.Capacitor?.Plugins?.App;
+  if (appPlugin?.exitApp) {
+    appPlugin.exitApp();
+    return;
+  }
+  if (navigator.app?.exitApp) {
+    navigator.app.exitApp();
+    return;
+  }
+  window.history.back();
+}
+
+function navigateToParentFolder() {
+  const folder = getFolderById(currentFolderId);
+  setCurrentFolder(folder?.parentId || null, { pushHistory: false });
+}
+
+function handleMobileSystemBack() {
+  if (connectionDialog.open) {
+    closeConnectionDialog();
+    return;
+  }
+
+  if (!noteDetailPanel.hidden) {
+    showContentPanel();
+    renderLibrary();
+    replaceNavigationState(createListNavigationState());
+    return;
+  }
+
+  if (currentFolderId) {
+    navigateToParentFolder();
+    replaceNavigationState(createListNavigationState());
+    return;
+  }
+
+  if (Date.now() < exitPromptExpiresAt) {
+    leaveAppOrPage();
+    return;
+  }
+
+  showExitPrompt();
+}
+
+function setCurrentFolder(folderId, options = {}) {
+  const { pushHistory = true, resetSearch = true } = options;
+  currentFolderId = folderId || null;
+  if (resetSearch) {
+    searchInput.value = '';
+  }
+  renderLibrary();
+  if (pushHistory) {
+    pushNavigationState(createListNavigationState());
+  }
+}
+
+function applyNavigationState(state) {
+  if (!isMobileNavigationState(state)) {
+    return;
+  }
+
+  if (state.view === 'exit-guard') {
+    if (isAtRootList() && Date.now() < exitPromptExpiresAt) {
+      leaveAppOrPage();
+      return;
+    }
+    showContentPanel();
+    currentFolderId = null;
+    searchInput.value = '';
+    renderLibrary();
+    showExitPrompt();
+    window.history.pushState(createListNavigationState(), document.title);
+    return;
+  }
+
+  isApplyingNavigationState = true;
+  if (state.view === 'note' && state.noteId) {
+    currentFolderId = state.folderId || null;
+    openNote(state.noteId, { pushHistory: false }).catch((error) => {
+      showContentPanel();
+      statusText.textContent = createFriendlyError(error);
+    }).finally(() => {
+      isApplyingNavigationState = false;
+    });
+    return;
+  }
+
+  showContentPanel();
+  currentFolderId = state.folderId || null;
+  renderLibrary();
+  isApplyingNavigationState = false;
+}
+
 function createFriendlyError(error) {
   const message = String(error?.message || '');
   if (!serverBaseUrl) {
     return '还没有配置服务地址。请点击右上角扫码，或进入连接配置填写 NATAPP 地址。';
+  }
+  if (message.includes('加密') || message.includes('decrypt') || message.includes('crypto')) {
+    return '加密通信失败。请重新扫码连接，或确认手机 WebView 支持安全加密。';
   }
   if (message.includes('Invalid URL') || message.includes('parse URL')) {
     return '服务地址格式不正确。请填写完整地址，例如：http://xxxx.natappfree.cc';
@@ -223,14 +392,82 @@ function createFriendlyError(error) {
   return '连接失败。请检查服务地址和访问令牌后重试。';
 }
 
+function arrayBufferToBase64(buffer) {
+  const bytes = new Uint8Array(buffer);
+  let binary = '';
+  for (const byte of bytes) {
+    binary += String.fromCharCode(byte);
+  }
+  return btoa(binary);
+}
+
+function base64ToArrayBuffer(value) {
+  const binary = atob(value);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index);
+  }
+  return bytes.buffer;
+}
+
+async function getMobileCryptoKey() {
+  if (!window.crypto?.subtle) {
+    throw new Error('当前环境不支持 crypto.subtle 加密');
+  }
+
+  const tokenBytes = new TextEncoder().encode(accessToken);
+  const digest = await window.crypto.subtle.digest('SHA-256', tokenBytes);
+  return window.crypto.subtle.importKey(
+    'raw',
+    digest,
+    { name: 'AES-GCM' },
+    false,
+    ['encrypt', 'decrypt']
+  );
+}
+
+async function encryptMobilePayload(payload) {
+  const iv = window.crypto.getRandomValues(new Uint8Array(12));
+  const key = await getMobileCryptoKey();
+  const encoded = new TextEncoder().encode(JSON.stringify(payload));
+  const encrypted = await window.crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, encoded);
+  return {
+    encrypted: true,
+    iv: arrayBufferToBase64(iv.buffer),
+    data: arrayBufferToBase64(encrypted)
+  };
+}
+
+async function decryptMobilePayload(envelope) {
+  if (!envelope || envelope.encrypted !== true || !envelope.iv || !envelope.data) {
+    throw new Error('加密响应格式不正确');
+  }
+
+  const key = await getMobileCryptoKey();
+  const decrypted = await window.crypto.subtle.decrypt(
+    { name: 'AES-GCM', iv: base64ToArrayBuffer(envelope.iv) },
+    key,
+    base64ToArrayBuffer(envelope.data)
+  );
+  return JSON.parse(new TextDecoder().decode(decrypted));
+}
+
 async function requestJson(path) {
   try {
-    const response = await fetch(getApiUrl(path), {
-      headers: {
-        Authorization: `Bearer ${accessToken}`
-      }
+    const encryptedRequest = await encryptMobilePayload({
+      method: 'GET',
+      path
     });
-    const payload = await response.json().catch(() => ({}));
+    const response = await fetch(getApiUrl('/api/secure'), {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(encryptedRequest)
+    });
+    const encryptedPayload = await response.json().catch(() => ({}));
+    const payload = await decryptMobilePayload(encryptedPayload);
     if (!response.ok) {
       throw new Error(payload.error || `HTTP ${response.status}`);
     }
@@ -508,9 +745,11 @@ function renderPathBar() {
   backButton.textContent = currentFolderId ? '← 返回' : '根目录';
   backButton.disabled = !currentFolderId;
   backButton.addEventListener('click', () => {
-    const folder = getFolderById(currentFolderId);
-    currentFolderId = folder?.parentId || null;
-    renderLibrary();
+    if (isMobileNavigationState(window.history.state) && currentFolderId) {
+      window.history.back();
+      return;
+    }
+    navigateToParentFolder();
   });
 
   const breadcrumb = document.createElement('div');
@@ -520,9 +759,7 @@ function renderPathBar() {
   rootButton.type = 'button';
   rootButton.textContent = '全部文件';
   rootButton.addEventListener('click', () => {
-    currentFolderId = null;
-    searchInput.value = '';
-    renderLibrary();
+    setCurrentFolder(null);
   });
   breadcrumb.append(rootButton);
 
@@ -535,9 +772,7 @@ function renderPathBar() {
     folderButton.type = 'button';
     folderButton.textContent = folder.name;
     folderButton.addEventListener('click', () => {
-      currentFolderId = folder.id;
-      searchInput.value = '';
-      renderLibrary();
+      setCurrentFolder(folder.id);
     });
     breadcrumb.append(separator, folderButton);
   }
@@ -651,7 +886,8 @@ function renderLibrary() {
   }
 }
 
-async function openNote(noteId) {
+async function openNote(noteId, options = {}) {
+  const { pushHistory = true } = options;
   statusText.textContent = '正在读取笔记...';
   const note = await requestJson(`/api/notes/${encodeURIComponent(noteId)}`);
   noteFolder.textContent = `${note.folderPath || '全部笔记'} · 更新 ${formatDateTime(note.updatedAt)}`;
@@ -660,6 +896,9 @@ async function openNote(noteId) {
   showNoteDetailPanel();
   window.scrollTo({ top: 0, behavior: 'smooth' });
   renderLibrary();
+  if (pushHistory) {
+    pushNavigationState(createNoteNavigationState(noteId));
+  }
 }
 
 async function loadLibrary() {
@@ -674,6 +913,7 @@ async function loadLibrary() {
 
 const initialConnection = getInitialConnection();
 saveConnection(initialConnection.server, initialConnection.token);
+installNavigationHistory();
 
 saveConnectionButton.addEventListener('click', () => {
   saveConnection(serverInput.value, tokenInput.value);
@@ -723,18 +963,27 @@ refreshButton.addEventListener('click', () => {
 });
 
 noteBackButton.addEventListener('click', () => {
+  if (isMobileNavigationState(window.history.state) && window.history.state.view === 'note') {
+    window.history.back();
+    return;
+  }
   showContentPanel();
   renderLibrary();
+  replaceNavigationState(createListNavigationState());
 });
 
 searchInput.addEventListener('input', renderLibrary);
 
+window.addEventListener('popstate', (event) => {
+  applyNavigationState(event.state);
+});
+
+window.addEventListener('notice-note-mobile-back', handleMobileSystemBack);
+
 noteList.addEventListener('click', (event) => {
   const folderCard = event.target.closest('.folder-card');
   if (folderCard) {
-    currentFolderId = folderCard.dataset.folderId;
-    searchInput.value = '';
-    renderLibrary();
+    setCurrentFolder(folderCard.dataset.folderId);
     return;
   }
 

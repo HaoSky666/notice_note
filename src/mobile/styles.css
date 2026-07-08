@@ -65,7 +65,15 @@ h1 {
 }
 
 .refresh-button,
-.toolbar-action-button,
+.toolbar-action-button {
+  border: 0;
+  border-radius: 999px;
+  background: rgba(255, 250, 243, 0.86);
+  color: var(--accent);
+  border: 1px solid rgba(94, 67, 40, 0.12);
+  box-shadow: 0 8px 18px rgba(86, 58, 27, 0.08);
+}
+
 .token-panel button {
   border: 0;
   border-radius: 999px;
@@ -95,11 +103,7 @@ h1 {
   place-items: center;
   width: 42px;
   height: 42px;
-  background: rgba(255, 250, 243, 0.86);
-  color: var(--accent);
-  border: 1px solid rgba(94, 67, 40, 0.12);
   font-size: 19px;
-  box-shadow: 0 8px 18px rgba(86, 58, 27, 0.08);
 }
 
 .refresh-button:active,
@@ -587,6 +591,30 @@ h1 {
   color: var(--muted);
   line-height: 1.7;
   text-align: center;
+}
+
+.exit-toast {
+  position: fixed;
+  right: 50%;
+  bottom: max(22px, env(safe-area-inset-bottom));
+  z-index: 30;
+  max-width: calc(100vw - 32px);
+  padding: 10px 16px;
+  border-radius: 999px;
+  background: rgba(47, 36, 27, 0.92);
+  color: #fff7ed;
+  box-shadow: 0 14px 32px rgba(47, 36, 27, 0.26);
+  font-size: 14px;
+  font-weight: 800;
+  opacity: 0;
+  pointer-events: none;
+  transform: translate(50%, 12px);
+  transition: opacity 160ms ease, transform 160ms ease;
+}
+
+.exit-toast.show {
+  opacity: 1;
+  transform: translate(50%, 0);
 }
 
 .note-page {

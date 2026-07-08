@@ -43,7 +43,6 @@ const newNoteOption = document.querySelector('#newNoteOption');
 const newFolderOption = document.querySelector('#newFolderOption');
 const breadcrumb = document.querySelector('#breadcrumb');
 const showAllFilesButton = document.querySelector('#showAllFilesButton');
-const showReminderFilesButton = document.querySelector('#showReminderFilesButton');
 const showReminderCalendarButton = document.querySelector('#showReminderCalendarButton');
 const pdfViewer = document.querySelector('#pdfViewer');
 const pdfTitle = document.querySelector('#pdfTitle');
@@ -1171,7 +1170,6 @@ function renderNoteList() {
 function selectFolder(folderId) {
   sidebarViewMode = 'all';
   showAllFilesButton.classList.add('is-active');
-  showReminderFilesButton.classList.remove('is-active');
   showReminderCalendarButton.classList.remove('is-active');
   activeFolderId = folderId;
   renderBreadcrumb();
@@ -1179,9 +1177,8 @@ function selectFolder(folderId) {
 }
 
 function setSidebarViewMode(mode, shouldRender = true) {
-  sidebarViewMode = ['reminder', 'calendar'].includes(mode) ? mode : 'all';
+  sidebarViewMode = mode === 'calendar' ? mode : 'all';
   showAllFilesButton.classList.toggle('is-active', sidebarViewMode === 'all');
-  showReminderFilesButton.classList.toggle('is-active', sidebarViewMode === 'reminder');
   showReminderCalendarButton.classList.toggle('is-active', sidebarViewMode === 'calendar');
   if (shouldRender) {
     renderBreadcrumb();
@@ -2917,9 +2914,6 @@ resetStorageButton.addEventListener('click', () => {
 });
 showAllFilesButton.addEventListener('click', () => {
   setSidebarViewMode('all');
-});
-showReminderFilesButton.addEventListener('click', () => {
-  setSidebarViewMode('reminder');
 });
 showReminderCalendarButton.addEventListener('click', () => {
   setSidebarViewMode('calendar');

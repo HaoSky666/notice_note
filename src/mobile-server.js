@@ -1,7 +1,7 @@
 const { createServer } = require('node:http');
 const path = require('node:path');
 const fs = require('node:fs/promises');
-const { randomUUID } = require('node:crypto');
+const { createCipheriv, createDecipheriv, createHash, randomBytes, randomUUID } = require('node:crypto');
 const matter = require('gray-matter');
 
 const NOTES_DIR_NAME = 'notes';
@@ -332,7 +332,7 @@ function getMimeType(filePath) {
 function writeCorsHeaders(response) {
   response.setHeader('Access-Control-Allow-Origin', '*');
   response.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type');
-  response.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+  response.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
 }
 
 function writeJson(response, statusCode, payload) {
@@ -341,13 +341,128 @@ function writeJson(response, statusCode, payload) {
   response.end(JSON.stringify(payload));
 }
 
+function getMobileCryptoKey(token = mobileAccessToken) {
+  return createHash('sha256').update(String(token || ''), 'utf8').digest();
+}
+
+function encryptMobilePayload(payload, token = mobileAccessToken) {
+  const iv = randomBytes(12);
+  const cipher = createCipheriv('aes-256-gcm', getMobileCryptoKey(token), iv);
+  const encrypted = Buffer.concat([
+    cipher.update(JSON.stringify(payload), 'utf8'),
+    cipher.final()
+  ]);
+  const tag = cipher.getAuthTag();
+  return {
+    encrypted: true,
+    iv: iv.toString('base64'),
+    data: Buffer.concat([encrypted, tag]).toString('base64')
+  };
+}
+
+function decryptMobilePayload(envelope, token = mobileAccessToken) {
+  if (!envelope || envelope.encrypted !== true || !envelope.iv || !envelope.data) {
+    throw new Error('加密请求格式不正确');
+  }
+
+  const raw = Buffer.from(envelope.data, 'base64');
+  if (raw.length <= 16) {
+    throw new Error('加密请求内容不完整');
+  }
+
+  const decipher = createDecipheriv(
+    'aes-256-gcm',
+    getMobileCryptoKey(token),
+    Buffer.from(envelope.iv, 'base64')
+  );
+  decipher.setAuthTag(raw.subarray(raw.length - 16));
+  const decrypted = Buffer.concat([
+    decipher.update(raw.subarray(0, raw.length - 16)),
+    decipher.final()
+  ]);
+  return JSON.parse(decrypted.toString('utf8'));
+}
+
+function writeEncryptedJson(response, statusCode, payload, token = mobileAccessToken) {
+  writeJson(response, statusCode, encryptMobilePayload(payload, token));
+}
+
+async function readRequestJson(request) {
+  const chunks = [];
+  for await (const chunk of request) {
+    chunks.push(chunk);
+  }
+  const raw = Buffer.concat(chunks).toString('utf8').trim();
+  return raw ? JSON.parse(raw) : {};
+}
+
 function isMobileRequestAuthorized(request, requestUrl) {
+  return getMobileRequestToken(request, requestUrl) === mobileAccessToken;
+}
+
+function getMobileRequestToken(request, requestUrl) {
   const authorization = request.headers.authorization || '';
   const bearerToken = authorization.startsWith('Bearer ')
     ? authorization.slice('Bearer '.length).trim()
     : '';
-  return requestUrl.searchParams.get('token') === mobileAccessToken
-    || bearerToken === mobileAccessToken;
+  return bearerToken || requestUrl.searchParams.get('token') || '';
+}
+
+function handleMobileApiPayload(apiRequest, library) {
+  const method = String(apiRequest?.method || 'GET').toUpperCase();
+  const requestPath = String(apiRequest?.path || '');
+  if (method !== 'GET') {
+    return {
+      statusCode: 405,
+      payload: { error: '当前移动端接口仅支持读取' }
+    };
+  }
+
+  if (requestPath === '/api/health') {
+    return {
+      statusCode: 200,
+      payload: {
+        ok: true,
+        readOnly: true,
+        standalone: true,
+        noteCount: library.notes.length,
+        folderCount: library.folders.length,
+        fileCount: library.files.length
+      }
+    };
+  }
+
+  if (requestPath === '/api/library') {
+    const { noteDetails, ...payload } = library;
+    return {
+      statusCode: 200,
+      payload
+    };
+  }
+
+  const noteMatch = requestPath.match(/^\/api\/notes\/([^/]+)$/);
+  if (noteMatch) {
+    const noteId = decodeURIComponent(noteMatch[1]);
+    const note = library.noteDetails.find((item) => item.id === noteId);
+    if (!note) {
+      return {
+        statusCode: 404,
+        payload: { error: '笔记不存在' }
+      };
+    }
+    return {
+      statusCode: 200,
+      payload: {
+        ...createMobileNoteSummary(note, library.folders),
+        content: note.content || ''
+      }
+    };
+  }
+
+  return {
+    statusCode: 404,
+    payload: { error: '接口不存在' }
+  };
 }
 
 async function handleMobileApiRequest(request, response, requestUrl) {
@@ -358,52 +473,35 @@ async function handleMobileApiRequest(request, response, requestUrl) {
     return;
   }
 
+  const requestToken = getMobileRequestToken(request, requestUrl);
   if (!isMobileRequestAuthorized(request, requestUrl)) {
+    if (requestToken) {
+      writeEncryptedJson(response, 401, { error: '访问令牌无效' }, requestToken);
+      return;
+    }
     writeJson(response, 401, { error: '访问令牌无效' });
     return;
   }
 
-  if (request.method !== 'GET') {
-    writeJson(response, 405, { error: '当前移动端接口仅支持读取' });
+  if (requestUrl.pathname !== '/api/secure') {
+    writeEncryptedJson(response, 426, { error: '请使用加密接口访问移动端数据' });
     return;
   }
 
-  const library = await loadLibrary();
-
-  if (requestUrl.pathname === '/api/health') {
-    writeJson(response, 200, {
-      ok: true,
-      readOnly: true,
-      standalone: true,
-      noteCount: library.notes.length,
-      folderCount: library.folders.length,
-      fileCount: library.files.length
-    });
+  if (request.method !== 'POST') {
+    writeEncryptedJson(response, 405, { error: '加密接口仅支持 POST' });
     return;
   }
 
-  if (requestUrl.pathname === '/api/library') {
-    const { noteDetails, ...payload } = library;
-    writeJson(response, 200, payload);
-    return;
+  try {
+    const envelope = await readRequestJson(request);
+    const apiRequest = decryptMobilePayload(envelope);
+    const library = await loadLibrary();
+    const { statusCode, payload } = handleMobileApiPayload(apiRequest, library);
+    writeEncryptedJson(response, statusCode, payload);
+  } catch (error) {
+    writeEncryptedJson(response, 400, { error: '加密请求解析失败' });
   }
-
-  const noteMatch = requestUrl.pathname.match(/^\/api\/notes\/([^/]+)$/);
-  if (noteMatch) {
-    const noteId = decodeURIComponent(noteMatch[1]);
-    const note = library.noteDetails.find((item) => item.id === noteId);
-    if (!note) {
-      writeJson(response, 404, { error: '笔记不存在' });
-      return;
-    }
-    writeJson(response, 200, {
-      ...createMobileNoteSummary(note, library.folders),
-      content: note.content || ''
-    });
-    return;
-  }
-
-  writeJson(response, 404, { error: '接口不存在' });
 }
 
 async function serveMobileStaticFile(response, requestPath) {
