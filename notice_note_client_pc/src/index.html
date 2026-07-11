@@ -284,6 +284,28 @@
             <span>今日回顾</span>
             <strong id="dailyReviewCurrentTitle">尚未选择</strong>
           </div>
+          <div class="settings-dingtalk-card">
+            <div class="settings-storage-heading">
+              <div>
+                <strong>NATAPP 钉钉通知</strong>
+                <p>每小时推送一次当前 NATAPP 地址和手机访问地址。</p>
+              </div>
+            </div>
+            <label class="settings-field">
+              <span>机器人 Webhook</span>
+              <input id="dingtalkWebhookInput" type="url" placeholder="https://oapi.dingtalk.com/robot/send?...">
+            </label>
+            <label class="settings-field">
+              <span>签名密钥</span>
+              <input id="dingtalkSecretInput" type="password" placeholder="SEC...">
+            </label>
+            <p id="dingtalkNotificationStatus" class="settings-dingtalk-status"></p>
+            <div class="settings-storage-actions">
+              <button id="clearDingtalkConfigButton" class="secondary-button" type="button">清除配置</button>
+              <button id="saveDingtalkConfigButton" class="secondary-button" type="button">保存</button>
+              <button id="testDingtalkNotificationButton" class="primary-button" type="button">发送测试消息</button>
+            </div>
+          </div>
           <div class="settings-storage-card">
             <div class="settings-storage-heading">
               <div>
@@ -300,6 +322,16 @@
         </section>
       </form>
     </dialog>
+    <div id="imageLightbox" class="image-lightbox" role="dialog" aria-modal="true" aria-label="图片预览" hidden>
+      <div class="image-lightbox-zoom-controls" aria-label="图片缩放">
+        <button id="zoomOutImageLightboxButton" class="image-lightbox-control" type="button" title="缩小" aria-label="缩小图片">−</button>
+        <button id="zoomInImageLightboxButton" class="image-lightbox-control" type="button" title="放大" aria-label="放大图片">+</button>
+      </div>
+      <button id="closeImageLightboxButton" class="image-lightbox-close" type="button" title="关闭" aria-label="关闭图片预览">×</button>
+      <div id="imageLightboxStage" class="image-lightbox-stage">
+        <img id="imageLightboxImage" class="image-lightbox-image" alt="">
+      </div>
+    </div>
     <script src="./vendor/editor.bundle.js"></script>
     <script src="./renderer.js"></script>
   </body>

@@ -8,15 +8,15 @@ module.exports = defineConfig({
     closeBundle() {
       fs.copyFileSync(
         require.resolve('pdfjs-dist/build/pdf.worker.min.mjs'),
-        path.resolve(__dirname, 'src/vendor/pdf.worker.min.mjs')
+        path.resolve(__dirname, 'notice_note_client_pc/src/vendor/pdf.worker.min.mjs')
       );
     }
   }],
   build: {
-    outDir: path.resolve(__dirname, 'src/vendor'),
+    outDir: path.resolve(__dirname, 'notice_note_client_pc/src/vendor'),
     emptyOutDir: false,
     lib: {
-      entry: path.resolve(__dirname, 'src/editor-entry.js'),
+      entry: path.resolve(__dirname, 'notice_note_client_pc/src/editor-entry.js'),
       name: 'NoticeNoteEditorBundle',
       formats: ['iife'],
       fileName: () => 'editor.bundle.js'

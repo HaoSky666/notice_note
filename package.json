@@ -2,16 +2,18 @@
   "name": "notice-note",
   "version": "0.1.0",
   "description": "支持 Markdown 笔记和多时间提醒的桌面应用",
-  "main": "src/main.js",
+  "main": "notice_note_client_pc/src/main.js",
   "scripts": {
-    "start": "chcp 65001 > nul && electron .",
-    "mobile:start": "chcp 65001 > nul && node src/mobile-server.js",
-    "lint": "chcp 65001 > nul && node --check src/main.js && node --check src/preload.js && node --check src/renderer.js",
-    "bundle:editor": "vite build --config vite.editor.config.js",
-    "android:sync": "chcp 65001 > nul && npx cap sync android",
-    "android:open": "chcp 65001 > nul && npx cap open android",
-    "android:build:debug": "chcp 65001 > nul && npx cap sync android && cd android && .\\gradlew.bat assembleDebug",
-    "dist": "chcp 65001 > nul && npm run bundle:editor && electron-builder --win nsis --x64"
+    "start:pc": "chcp 65001 > nul && electron .",
+    "start:app": "chcp 65001 > nul && cd notice_note_client_app && npx cap run android",
+    "start:server": "chcp 65001 > nul && node notice_note_server/server.js",
+    "sync:app": "chcp 65001 > nul && cd notice_note_client_app && npx cap sync android",
+    "open:app": "chcp 65001 > nul && cd notice_note_client_app && npx cap open android",
+    "bundle:pc": "vite build --config vite.editor.config.js",
+    "build:pc": "chcp 65001 > nul && npm run bundle:pc && electron-builder --win nsis --x64",
+    "build:app": "chcp 65001 > nul && cd notice_note_client_app && npx cap sync android && cd android && .\\gradlew.bat copyDebugApkToRelease",
+    "build:all": "npm run build:pc && npm run build:app",
+    "lint": "chcp 65001 > nul && node --check notice_note_client_pc/src/main.js && node --check notice_note_client_pc/src/preload.js && node --check notice_note_client_pc/src/renderer.js && node --check notice_note_client_app/src/app.js && node --check notice_note_server/server.js"
   },
   "keywords": [
     "markdown",
@@ -25,10 +27,11 @@
     "appId": "com.notice-note.app",
     "productName": "Notice Note",
     "directories": {
-      "output": "dist"
+      "output": "release/pc"
     },
     "files": [
-      "src/**/*",
+      "notice_note_client_pc/**/*",
+      "notice_note_client_app/src/**/*",
       "node_modules/**/*",
       "package.json"
     ],
@@ -59,6 +62,7 @@
   },
   "dependencies": {
     "@capacitor/android": "^8.4.1",
+    "@capacitor/app": "^8.1.0",
     "@capacitor/cli": "^8.4.1",
     "@capacitor/core": "^8.4.1",
     "@codemirror/commands": "^6.10.0",
@@ -71,7 +75,8 @@
     "gray-matter": "^4.0.3",
     "mammoth": "^1.12.0",
     "pdfjs-dist": "^6.1.200",
-    "qrcode": "^1.5.4"
+    "qrcode": "^1.5.4",
+    "sharp": "^0.35.3"
   },
   "overrides": {
     "dompurify": "^3.3.4"

@@ -35,6 +35,12 @@ const settingsDialog = document.querySelector('#settingsDialog');
 const closeSettingsDialogButton = document.querySelector('#closeSettingsDialogButton');
 const dailyReviewEnabledInput = document.querySelector('#dailyReviewEnabledInput');
 const dailyReviewCurrentTitle = document.querySelector('#dailyReviewCurrentTitle');
+const dingtalkWebhookInput = document.querySelector('#dingtalkWebhookInput');
+const dingtalkSecretInput = document.querySelector('#dingtalkSecretInput');
+const dingtalkNotificationStatus = document.querySelector('#dingtalkNotificationStatus');
+const saveDingtalkConfigButton = document.querySelector('#saveDingtalkConfigButton');
+const clearDingtalkConfigButton = document.querySelector('#clearDingtalkConfigButton');
+const testDingtalkNotificationButton = document.querySelector('#testDingtalkNotificationButton');
 const settingsStoragePath = document.querySelector('#settingsStoragePath');
 const chooseStorageButton = document.querySelector('#chooseStorageButton');
 const resetStorageButton = document.querySelector('#resetStorageButton');
@@ -74,6 +80,12 @@ const viewerSearchCount = document.querySelector('#viewerSearchCount');
 const viewerSearchPrevious = document.querySelector('#viewerSearchPrevious');
 const viewerSearchNext = document.querySelector('#viewerSearchNext');
 const viewerSearchClose = document.querySelector('#viewerSearchClose');
+const imageLightbox = document.querySelector('#imageLightbox');
+const imageLightboxStage = document.querySelector('#imageLightboxStage');
+const imageLightboxImage = document.querySelector('#imageLightboxImage');
+const closeImageLightboxButton = document.querySelector('#closeImageLightboxButton');
+const zoomOutImageLightboxButton = document.querySelector('#zoomOutImageLightboxButton');
+const zoomInImageLightboxButton = document.querySelector('#zoomInImageLightboxButton');
 
 let notes = [];
 let folders = [];
@@ -112,6 +124,114 @@ editorEmptyState.className = 'editor-empty-state';
 editorEmptyState.hidden = true;
 editorEmptyState.innerHTML = '<h2>欢迎使用 Notice Note</h2><p>从左侧打开一个文件，或点击右上角 + 新建内容。</p>';
 contentShell.append(editorEmptyState);
+
+let imageLightboxPreviousFocus = null;
+let imageLightboxZoom = 1;
+const IMAGE_LIGHTBOX_MIN_ZOOM = 0.25;
+const IMAGE_LIGHTBOX_MAX_ZOOM = 5;
+
+function updateImageLightboxZoomControls() {
+  const canZoom = Number(imageLightboxImage.dataset.baseWidth) > 0;
+  zoomOutImageLightboxButton.disabled = !canZoom || imageLightboxZoom <= IMAGE_LIGHTBOX_MIN_ZOOM;
+  zoomInImageLightboxButton.disabled = !canZoom || imageLightboxZoom >= IMAGE_LIGHTBOX_MAX_ZOOM;
+}
+
+function resetImageLightboxZoom() {
+  imageLightboxZoom = 1;
+  delete imageLightboxImage.dataset.baseWidth;
+  delete imageLightboxImage.dataset.baseHeight;
+  imageLightboxImage.style.width = '';
+  imageLightboxImage.style.height = '';
+  imageLightboxImage.style.maxWidth = '';
+  imageLightboxImage.style.maxHeight = '';
+  imageLightboxStage.scrollTop = 0;
+  imageLightboxStage.scrollLeft = 0;
+  updateImageLightboxZoomControls();
+}
+
+function captureImageLightboxBaseSize() {
+  const rect = imageLightboxImage.getBoundingClientRect();
+  if (!rect.width || !rect.height) {
+    return;
+  }
+  imageLightboxImage.dataset.baseWidth = String(rect.width);
+  imageLightboxImage.dataset.baseHeight = String(rect.height);
+  updateImageLightboxZoomControls();
+}
+
+function changeImageLightboxZoom(step) {
+  const baseWidth = Number(imageLightboxImage.dataset.baseWidth);
+  const baseHeight = Number(imageLightboxImage.dataset.baseHeight);
+  if (!baseWidth || !baseHeight) {
+    return;
+  }
+  const nextZoom = Math.min(
+    IMAGE_LIGHTBOX_MAX_ZOOM,
+    Math.max(IMAGE_LIGHTBOX_MIN_ZOOM, imageLightboxZoom + step)
+  );
+  if (nextZoom === imageLightboxZoom) {
+    return;
+  }
+  imageLightboxZoom = nextZoom;
+  imageLightboxImage.style.maxWidth = 'none';
+  imageLightboxImage.style.maxHeight = 'none';
+  imageLightboxImage.style.width = `${baseWidth * imageLightboxZoom}px`;
+  imageLightboxImage.style.height = `${baseHeight * imageLightboxZoom}px`;
+  updateImageLightboxZoomControls();
+}
+
+function openImageLightbox(image) {
+  const src = image.currentSrc || image.src;
+  if (!src) {
+    return;
+  }
+  imageLightboxPreviousFocus = document.activeElement;
+  resetImageLightboxZoom();
+  imageLightboxImage.src = src;
+  imageLightboxImage.alt = image.alt || '图片预览';
+  imageLightbox.hidden = false;
+  document.body.classList.add('image-lightbox-open');
+  if (imageLightboxImage.complete) {
+    captureImageLightboxBaseSize();
+  } else {
+    imageLightboxImage.addEventListener('load', captureImageLightboxBaseSize, { once: true });
+  }
+  closeImageLightboxButton.focus();
+}
+
+function closeImageLightbox() {
+  if (imageLightbox.hidden) {
+    return;
+  }
+  imageLightbox.hidden = true;
+  resetImageLightboxZoom();
+  imageLightboxImage.removeAttribute('src');
+  imageLightboxImage.alt = '';
+  document.body.classList.remove('image-lightbox-open');
+  if (imageLightboxPreviousFocus?.isConnected) {
+    imageLightboxPreviousFocus.focus();
+  }
+  imageLightboxPreviousFocus = null;
+}
+
+function resolveNoteImageSrc(src) {
+  const imageSource = String(src || '').trim();
+  if (!imageSource || /^(?:[a-z][a-z\d+.-]*:|\/\/|\/|#)/i.test(imageSource)) {
+    return imageSource;
+  }
+
+  const activeNote = getActiveNote();
+  if (!activeNote?.sourceUrl || !storageInfo?.notesUrl) {
+    return imageSource;
+  }
+
+  try {
+    const resolvedUrl = new URL(imageSource, activeNote.sourceUrl);
+    return resolvedUrl.href.startsWith(storageInfo.notesUrl) ? resolvedUrl.href : '';
+  } catch {
+    return '';
+  }
+}
 
 function readBooleanSetting(key) {
   return localStorage.getItem(key) === 'true';
@@ -681,7 +801,9 @@ function renderBreadcrumb() {
   const rootBtn = document.createElement('button');
   rootBtn.className = `breadcrumb-item breadcrumb-root${activeFolderId === null ? ' active' : ''}`;
   rootBtn.textContent = '全部文件';
-  rootBtn.addEventListener('click', () => selectFolder(null));
+  rootBtn.addEventListener('click', () => {
+    openFolderWithAccessCheck(null).catch(console.error);
+  });
   makeBreadcrumbDropTarget(rootBtn, null);
   breadcrumb.append(rootBtn);
 
@@ -691,7 +813,9 @@ function renderBreadcrumb() {
     btn.className = `breadcrumb-item breadcrumb-child${folder.id === activeFolderId ? ' active' : ''}`;
     btn.textContent = folder.name;
     btn.title = folder.name;
-    btn.addEventListener('click', () => selectFolder(folder.id));
+    btn.addEventListener('click', () => {
+      openFolderWithAccessCheck(folder.id).catch(console.error);
+    });
     makeBreadcrumbDropTarget(btn, folder.id);
     breadcrumb.append(btn);
   }
@@ -953,6 +1077,17 @@ function renderNoteList() {
     const icon = document.createElement('span');
     icon.className = 'folder-icon';
     icon.innerHTML = '<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M1.5 2.5h4.3l1.5-1h6.7a1 1 0 0 1 1 1v11a1 1 0 0 1-1 1h-13a1 1 0 0 1-1-1v-10a1 1 0 0 1 1-1z" fill="#e8a849" stroke="#c48a30" stroke-width="0.8"/><path d="M1.5 6h13" stroke="#c48a30" stroke-width="0.6"/></svg>';
+    if (folder.isProtected) {
+      const lockBadge = document.createElement('span');
+      lockBadge.className = `folder-lock-badge${folder.isUnlocked ? ' is-unlocked' : ''}`;
+      lockBadge.title = folder.isUnlocked ? '当前会话已解锁' : '进入前需要输入密码';
+      if (folder.isUnlocked) {
+        lockBadge.innerHTML = '<svg width="10" height="10" viewBox="0 0 16 16" fill="none"><rect x="3" y="7" width="10" height="7" rx="1.2" stroke="currentColor" stroke-width="1.5"/><path d="M5 7V5a3 3 0 0 1 5.5-1.6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" fill="none"/></svg>';
+      } else {
+        lockBadge.innerHTML = '<svg width="10" height="10" viewBox="0 0 16 16" fill="none"><rect x="3" y="7" width="10" height="7" rx="1.2" stroke="currentColor" stroke-width="1.5"/><path d="M5 7V5a3 3 0 0 1 6 0v2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" fill="none"/></svg>';
+      }
+      icon.append(lockBadge);
+    }
 
     const name = document.createElement('span');
     name.className = 'folder-name';
@@ -997,7 +1132,9 @@ function renderNoteList() {
 
     actions.append(renameBtn, deleteBtn);
     item.append(icon, name, counts, actions);
-    item.addEventListener('click', () => selectFolder(folder.id));
+    item.addEventListener('click', () => {
+      openFolderWithAccessCheck(folder.id).catch(console.error);
+    });
     noteList.append(item);
   }
 
@@ -1174,6 +1311,44 @@ function selectFolder(folderId) {
   activeFolderId = folderId;
   renderBreadcrumb();
   renderNoteList();
+}
+
+function getFolderAncestorIds(folderId) {
+  const ancestors = new Set();
+  let current = folderId ? folders.find((f) => f.id === folderId) : null;
+  while (current) {
+    ancestors.add(current.id);
+    current = current.parentId ? folders.find((f) => f.id === current.parentId) : null;
+  }
+  return ancestors;
+}
+
+async function relockFoldersOnNavigate(targetFolderId) {
+  if (targetFolderId === activeFolderId) {
+    return;
+  }
+  const ancestors = getFolderAncestorIds(targetFolderId);
+  const toLock = folders.filter((f) =>
+    f.isProtected && f.isUnlocked && !ancestors.has(f.id)
+  );
+  if (toLock.length === 0) {
+    return;
+  }
+  for (const f of toLock) {
+    f.isUnlocked = false;
+    await window.noticeNote.lockFolder(f.id);
+  }
+}
+
+async function openFolderWithAccessCheck(folderId) {
+  await relockFoldersOnNavigate(folderId);
+  if (folderId) {
+    const unlocked = await promptUnlockFolder(folderId);
+    if (!unlocked) {
+      return;
+    }
+  }
+  selectFolder(folderId);
 }
 
 function setSidebarViewMode(mode, shouldRender = true) {
@@ -1442,6 +1617,99 @@ function showFolderNameDialog(defaultName) {
   });
 }
 
+function showFolderPasswordDialog(title, confirmLabel = '确定') {
+  return new Promise((resolve) => {
+    const dialog = document.createElement('div');
+    dialog.className = 'folder-dialog';
+    dialog.innerHTML = `
+      <div class="folder-dialog-content">
+        <label>${title}</label>
+        <input type="password" id="folderPasswordInput" placeholder="输入密码" autofocus>
+        <div class="folder-dialog-actions">
+          <button class="secondary-button" id="folderPasswordCancel">取消</button>
+          <button class="primary-button" id="folderPasswordConfirm">${confirmLabel}</button>
+        </div>
+      </div>
+    `;
+    document.body.append(dialog);
+
+    const input = dialog.querySelector('#folderPasswordInput');
+    const cancelBtn = dialog.querySelector('#folderPasswordCancel');
+    const confirmBtn = dialog.querySelector('#folderPasswordConfirm');
+    input.focus();
+
+    const close = (value) => {
+      dialog.remove();
+      resolve(value);
+    };
+
+    cancelBtn.addEventListener('click', () => close(null));
+    confirmBtn.addEventListener('click', () => close(input.value));
+    input.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') {
+        close(input.value);
+      }
+      if (event.key === 'Escape') {
+        close(null);
+      }
+    });
+  });
+}
+
+async function promptUnlockFolder(folderId) {
+  const folder = folders.find((item) => item.id === folderId);
+  if (!folder?.isProtected || folder.isUnlocked) {
+    return true;
+  }
+
+  const password = await showFolderPasswordDialog(`输入「${folder.name}」的访问密码`, '解锁');
+  if (!password) {
+    return false;
+  }
+
+  try {
+    await window.noticeNote.unlockFolder(folderId, password);
+    await refreshNotes();
+    return true;
+  } catch (error) {
+    alert(error.message || '密码不正确');
+    return false;
+  }
+}
+
+async function setFolderPasswordForFolder(folderId) {
+  const folder = folders.find((item) => item.id === folderId);
+  if (!folder) {
+    return;
+  }
+  const password = await showFolderPasswordDialog(`为「${folder.name}」设置访问密码`, folder.isProtected ? '更新密码' : '设置密码');
+  if (!password) {
+    return;
+  }
+  try {
+    await window.noticeNote.setFolderPassword(folderId, password);
+    await refreshNotes();
+  } catch (error) {
+    alert(error.message || '设置密码失败');
+  }
+}
+
+async function clearFolderPasswordForFolder(folderId) {
+  const folder = folders.find((item) => item.id === folderId);
+  if (!folder) {
+    return;
+  }
+  if (!confirm(`确定清除文件夹「${folder.name}」的访问密码吗？`)) {
+    return;
+  }
+  try {
+    await window.noticeNote.clearFolderPassword(folderId);
+    await refreshNotes();
+  } catch (error) {
+    alert(error.message || '清除密码失败');
+  }
+}
+
 async function deleteFolder(folderId) {
   const folder = folders.find(f => f.id === folderId);
   if (!folder) return;
@@ -1609,6 +1877,300 @@ async function handlePastedImage(file) {
   }
 
   return `${result.markdown}\n`;
+}
+
+async function handlePastedHtml(htmlText, plainText) {
+  const note = getActiveNote();
+  if (!note) {
+    return plainText || '';
+  }
+
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(htmlText, 'text/html');
+  const imgElements = [...doc.querySelectorAll('img')];
+  const imageSrcs = imgElements
+    .map((img) => img.getAttribute('src'))
+    .filter(Boolean);
+
+  const imageMarkdownMap = new Map();
+  for (const src of imageSrcs) {
+    if (imageMarkdownMap.has(src)) {
+      continue;
+    }
+    try {
+      let result = null;
+      if (src.startsWith('data:')) {
+        const match = /^data:([^;]+);base64,(.*)$/.exec(src);
+        if (match) {
+          const byteString = atob(match[2]);
+          const bytes = new Uint8Array(byteString.length);
+          for (let i = 0; i < byteString.length; i++) {
+            bytes[i] = byteString.charCodeAt(i);
+          }
+          const ext = match[1].includes('png') ? '.png'
+            : match[1].includes('gif') ? '.gif'
+            : match[1].includes('webp') ? '.webp'
+            : match[1].includes('svg') ? '.svg'
+            : '.jpg';
+          result = await window.noticeNote.savePastedImage({
+            noteId: note.id,
+            image: {
+              fileName: `pasted-${Date.now()}${ext}`,
+              mimeType: match[1],
+              bytes: Array.from(bytes)
+            }
+          });
+        }
+      } else if (/^https?:\/\//i.test(src)) {
+        result = await window.noticeNote.saveImageFromUrl({
+          noteId: note.id,
+          imageUrl: src
+        });
+      }
+
+      if (result?.markdown) {
+        imageMarkdownMap.set(src, result.markdown);
+      } else {
+        imageMarkdownMap.set(src, '');
+      }
+    } catch (error) {
+      console.error('保存粘贴图片失败:', error);
+      imageMarkdownMap.set(src, '');
+    }
+  }
+
+  for (const img of imgElements) {
+    const src = img.getAttribute('src');
+    const alt = img.getAttribute('alt') || '图片';
+    const markdown = imageMarkdownMap.get(src);
+    if (markdown) {
+      img.replaceWith(doc.createTextNode(`\n${markdown}\n`));
+    } else {
+      img.replaceWith(doc.createTextNode(alt));
+    }
+  }
+
+  doc.querySelectorAll('style, script, meta, link, title').forEach((el) => el.remove());
+
+  let text = htmlToMarkdown(doc.body) || plainText || '';
+  if (plainText && hasDroppedHtmlText(doc.body, text)) {
+    const fallbackText = plainText.replace(/\r\n?/g, '\n').trim();
+    const savedImages = [...new Set([...imageMarkdownMap.values()].filter(Boolean))];
+    text = [fallbackText, ...savedImages].filter(Boolean).join('\n\n');
+    console.warn('富文本转换检测到文本缺失，已使用纯文本内容兜底。');
+  }
+  text = text.replace(/\n{3,}/g, '\n\n').trim();
+  return text ? `${text}\n` : '';
+}
+
+function normalizeComparableText(value) {
+  return String(value || '')
+    .replace(/\\([\\|])/g, '$1')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function hasDroppedHtmlText(root, markdown) {
+  const convertedText = normalizeComparableText(markdown);
+  const walker = root.ownerDocument.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  let searchOffset = 0;
+  let node = walker.nextNode();
+  while (node) {
+    const sourceText = normalizeComparableText(node.textContent);
+    if (sourceText) {
+      const foundAt = convertedText.indexOf(sourceText, searchOffset);
+      if (foundAt === -1) {
+        return true;
+      }
+      searchOffset = foundAt + sourceText.length;
+    }
+    node = walker.nextNode();
+  }
+  return false;
+}
+
+function htmlToMarkdown(root) {
+  const parts = [];
+
+  function push(text, preserveLineBreak = false) {
+    if (!preserveLineBreak && text === '\n' && parts.length > 0) {
+      const last = parts[parts.length - 1];
+      if (last === '\n') {
+        return;
+      }
+      if (typeof last === 'string' && last.endsWith('\n')) {
+        return;
+      }
+    }
+    parts.push(text);
+  }
+
+  function isBlankBlock(element) {
+    const text = String(element.textContent || '')
+      .replace(/[\u00a0\u200b]/g, '')
+      .trim();
+    if (text) {
+      return false;
+    }
+    return !element.querySelector('hr, table, pre, ul, ol, blockquote');
+  }
+
+  function getListDepth(listElement) {
+    let depth = 0;
+    let parent = listElement.parentElement;
+    while (parent) {
+      const tag = parent.tagName?.toLowerCase();
+      if (tag === 'ul' || tag === 'ol') {
+        depth++;
+      }
+      parent = parent.parentElement;
+    }
+    return depth;
+  }
+
+  function renderList(listElement) {
+    const ordered = listElement.tagName.toLowerCase() === 'ol';
+    const indent = '    '.repeat(getListDepth(listElement));
+    let index = 1;
+    push('\n');
+
+    for (const child of listElement.children) {
+      const tag = child.tagName.toLowerCase();
+      if (tag === 'li') {
+        push(`${indent}${ordered ? `${index}.` : '-'} `);
+        walkNode(child);
+        push('\n');
+        index++;
+      } else if (tag === 'ul' || tag === 'ol') {
+        // 兼容部分网页剪贴板把子列表放成同级节点的非标准结构。
+        renderList(child);
+      } else {
+        walkNode(child);
+      }
+    }
+  }
+
+  function walkNode(node) {
+    for (const child of node.childNodes) {
+      if (child.nodeType === Node.TEXT_NODE) {
+        const text = child.textContent.replace(/\s+/g, ' ');
+        if (text.trim()) {
+          push(text);
+        }
+      } else if (child.nodeType === Node.ELEMENT_NODE) {
+        const tag = child.tagName.toLowerCase();
+        switch (tag) {
+          case 'br':
+            push('\n', true);
+            break;
+          case 'p':
+          case 'div':
+            if (isBlankBlock(child)) {
+              push('\n', true);
+            } else {
+              walkNode(child);
+              push('\n');
+            }
+            break;
+          case 'h1': case 'h2': case 'h3':
+          case 'h4': case 'h5': case 'h6': {
+            const level = Number(tag[1]);
+            push('\n');
+            push('#'.repeat(level) + ' ');
+            walkNode(child);
+            push('\n');
+            break;
+          }
+          case 'strong':
+          case 'b':
+            push('**');
+            walkNode(child);
+            push('**');
+            break;
+          case 'em':
+          case 'i':
+            push('*');
+            walkNode(child);
+            push('*');
+            break;
+          case 'u':
+          case 'ins':
+            walkNode(child);
+            break;
+          case 's':
+          case 'del':
+          case 'strike':
+            push('~~');
+            walkNode(child);
+            push('~~');
+            break;
+          case 'a': {
+            const href = child.getAttribute('href') || '';
+            const label = child.textContent || '';
+            if (href && /^https?:\/\//i.test(href)) {
+              push(`[${label}](${href})`);
+            } else {
+              walkNode(child);
+            }
+            break;
+          }
+          case 'ul':
+          case 'ol':
+            renderList(child);
+            break;
+          case 'li':
+            walkNode(child);
+            break;
+          case 'blockquote':
+            push('\n');
+            {
+              const inner = htmlToMarkdown(child);
+              push(inner.split('\n').map((l) => l.trim() ? `> ${l}` : '').join('\n'));
+            }
+            push('\n');
+            break;
+          case 'hr':
+            push('\n---\n');
+            break;
+          case 'table':
+            push('\n');
+            {
+              const rows = [...child.querySelectorAll('tr')];
+              rows.forEach((tr, rowIdx) => {
+                const cells = [...tr.querySelectorAll('th, td')];
+                const cellTexts = cells.map((cell) => {
+                  const t = htmlToMarkdown(cell).trim();
+                  return t.replace(/\|/g, '\\|');
+                });
+                push(`| ${cellTexts.join(' | ')} |\n`);
+                if (rowIdx === 0) {
+                  push(`| ${cellTexts.map(() => '---').join(' | ')} |\n`);
+                }
+              });
+            }
+            break;
+          case 'pre':
+            push('\n```\n');
+            push(child.textContent);
+            push('\n```\n');
+            break;
+          case 'code':
+            push('`');
+            push(child.textContent);
+            push('`');
+            break;
+          case 'img':
+            break;
+          default:
+            walkNode(child);
+            break;
+        }
+      }
+    }
+  }
+
+  walkNode(root);
+  return parts.join('').replace(/\n{3,}/g, '\n\n').trim();
 }
 
 function readReminderNotifications() {
@@ -2517,8 +3079,9 @@ function createMarkdownEditor() {
     initialValue: '',
     placeholder: '点击这里记录 Markdown 笔记。',
     isPlainText: () => ['txt', 'json'].includes(getActiveNote()?.fileType),
-    resolveImageSrc: (src) => src,
+    resolveImageSrc: resolveNoteImageSrc,
     onPasteImage: handlePastedImage,
+    onPasteHtml: handlePastedHtml,
     onError: (error) => {
       console.error('图片处理失败:', error);
     },
@@ -2826,6 +3389,21 @@ async function boot() {
 function renderSettings() {
   dailyReviewEnabledInput.checked = appSettings?.dailyReviewEnabled !== false;
   dailyReviewCurrentTitle.textContent = appSettings?.dailyReviewTitle || '今天暂无可回顾文件';
+  dingtalkWebhookInput.value = appSettings?.dingtalkRobotWebhook || '';
+  dingtalkSecretInput.value = '';
+  if (!appSettings?.dingtalkRobotConfigured) {
+    dingtalkNotificationStatus.textContent = '未配置，不会发送通知';
+    dingtalkNotificationStatus.dataset.state = 'inactive';
+  } else if (appSettings.lastNatappCheckError) {
+    dingtalkNotificationStatus.textContent = `上次检查失败：${appSettings.lastNatappCheckError}`;
+    dingtalkNotificationStatus.dataset.state = 'error';
+  } else {
+    const lastPush = appSettings.lastNatappPushAt
+      ? new Date(appSettings.lastNatappPushAt).toLocaleString('zh-CN', { hour12: false })
+      : '尚未推送';
+    dingtalkNotificationStatus.textContent = `已启用，每小时推送一次；上次推送：${lastPush}`;
+    dingtalkNotificationStatus.dataset.state = 'active';
+  }
   renderStorageInfo();
 }
 
@@ -2882,6 +3460,56 @@ dailyReviewEnabledInput.addEventListener('change', () => {
     .catch(console.error)
     .finally(() => {
       dailyReviewEnabledInput.disabled = false;
+    });
+});
+saveDingtalkConfigButton.addEventListener('click', () => {
+  saveDingtalkConfigButton.disabled = true;
+  window.noticeNote.updateSettings({
+    dingtalkRobotWebhook: dingtalkWebhookInput.value,
+    dingtalkRobotSecret: dingtalkSecretInput.value
+  })
+    .then((settings) => {
+      appSettings = settings;
+      renderSettings();
+    })
+    .catch((error) => {
+      dingtalkNotificationStatus.textContent = `保存失败：${error.message}`;
+      dingtalkNotificationStatus.dataset.state = 'error';
+    })
+    .finally(() => {
+      saveDingtalkConfigButton.disabled = false;
+    });
+});
+clearDingtalkConfigButton.addEventListener('click', () => {
+  clearDingtalkConfigButton.disabled = true;
+  window.noticeNote.updateSettings({ clearDingtalkRobot: true })
+    .then((settings) => {
+      appSettings = settings;
+      renderSettings();
+    })
+    .catch((error) => {
+      dingtalkNotificationStatus.textContent = `清除失败：${error.message}`;
+      dingtalkNotificationStatus.dataset.state = 'error';
+    })
+    .finally(() => {
+      clearDingtalkConfigButton.disabled = false;
+    });
+});
+testDingtalkNotificationButton.addEventListener('click', () => {
+  testDingtalkNotificationButton.disabled = true;
+  dingtalkNotificationStatus.textContent = '正在发送测试消息...';
+  dingtalkNotificationStatus.dataset.state = 'pending';
+  window.noticeNote.testDingtalkNotification()
+    .then((result) => {
+      dingtalkNotificationStatus.textContent = `测试消息已发送；NATAPP 地址：${result.publicUrl}`;
+      dingtalkNotificationStatus.dataset.state = 'active';
+    })
+    .catch((error) => {
+      dingtalkNotificationStatus.textContent = `发送失败：${error.message}`;
+      dingtalkNotificationStatus.dataset.state = 'error';
+    })
+    .finally(() => {
+      testDingtalkNotificationButton.disabled = false;
     });
 });
 chooseStorageButton.addEventListener('click', () => {
@@ -3078,6 +3706,27 @@ function showContextMenu(x, y, entry = null) {
     contextMenu.append(createContextMenuItem('复制绝对路径', () => {
       window.noticeNote.copyEntryPath(entry).catch(console.error);
     }));
+    if (entry.type === 'folder') {
+      const folder = folders.find((item) => item.id === entry.id);
+      if (folder) {
+        contextMenu.append(createContextMenuItem(
+          folder.isProtected ? '修改密码' : '设置密码',
+          () => {
+            setFolderPasswordForFolder(folder.id).catch(console.error);
+          }
+        ));
+        if (folder.isProtected && !folder.isUnlocked) {
+          contextMenu.append(createContextMenuItem('输入密码解锁', () => {
+            promptUnlockFolder(folder.id).catch(console.error);
+          }));
+        }
+        if (folder.isProtected) {
+          contextMenu.append(createContextMenuItem('清除密码', () => {
+            clearFolderPasswordForFolder(folder.id).catch(console.error);
+          }));
+        }
+      }
+    }
     if (entry.type !== 'folder') {
       contextMenu.append(createContextMenuItem('使用默认应用打开', () => {
         window.noticeNote.openEntryWithDefaultApp(entry).catch(console.error);
@@ -3191,8 +3840,38 @@ document.addEventListener('click', (e) => {
   }
 });
 
+document.addEventListener('click', (event) => {
+  const image = event.target.closest?.('.cm-rendered-image img, .word-preview img, .file-preview-image');
+  if (!image) {
+    return;
+  }
+  event.preventDefault();
+  openImageLightbox(image);
+});
+
+closeImageLightboxButton.addEventListener('click', closeImageLightbox);
+zoomOutImageLightboxButton.addEventListener('click', () => changeImageLightboxZoom(-0.25));
+zoomInImageLightboxButton.addEventListener('click', () => changeImageLightboxZoom(0.25));
+imageLightbox.addEventListener('click', (event) => {
+  if (event.target === imageLightbox) {
+    closeImageLightbox();
+  }
+});
+imageLightbox.addEventListener('wheel', (event) => {
+  if (imageLightbox.hidden || event.deltaY === 0) {
+    return;
+  }
+  event.preventDefault();
+  changeImageLightboxZoom(event.deltaY < 0 ? 0.15 : -0.15);
+}, { passive: false });
+
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
+    if (!imageLightbox.hidden) {
+      e.preventDefault();
+      closeImageLightbox();
+      return;
+    }
     hideContextMenu();
     notificationPanel.hidden = true;
   }

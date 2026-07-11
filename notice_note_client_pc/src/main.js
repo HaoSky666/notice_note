@@ -3,12 +3,23 @@ const path = require('node:path');
 const { createServer } = require('node:http');
 const { watch } = require('node:fs');
 const fs = require('node:fs/promises');
-const { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes, randomUUID } = require('node:crypto');
-const { pathToFileURL } = require('node:url');
+const {
+  createCipheriv,
+  createDecipheriv,
+  createHash,
+  createHmac,
+  randomBytes,
+  randomUUID,
+  scryptSync,
+  timingSafeEqual
+} = require('node:crypto');
+const { pathToFileURL, fileURLToPath } = require('node:url');
+const { gzipSync } = require('node:zlib');
 const matter = require('gray-matter');
 const mammoth = require('mammoth');
 const ExcelJS = require('exceljs');
 const QRCode = require('qrcode');
+const sharp = require('sharp');
 
 const NOTES_DIR_NAME = 'notes';
 const OLD_NOTE_FILE_NAME = 'notes.json';
@@ -20,10 +31,20 @@ const APP_DATA_DIR_NAME = '.notice-note';
 const NOTE_METADATA_FILE_NAME = 'metadata.json';
 const REMINDER_FILE_MARKS_NAME = 'reminder-files.json';
 const NOTE_BACKUP_DIR_NAME = 'backups';
+const MOBILE_IMAGE_CACHE_DIR_NAME = 'mobile-image-cache';
+const MOBILE_IMAGE_CACHE_VERSION = 2;
+const MOBILE_IMAGE_MAX_WIDTH = 1080;
+const MOBILE_IMAGE_JPEG_QUALITY = 82;
+const MOBILE_IMAGE_MIN_OPTIMIZE_BYTES = 256 * 1024;
+const MOBILE_IMAGE_CACHE_MAX_AGE = 30 * 24 * 60 * 60;
+const MOBILE_IMAGE_OPTIMIZABLE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.webp', '.bmp']);
+const MOBILE_UNLOCK_SESSION_MAX_AGE = 30 * 60 * 1000;
 const MOBILE_SERVER_HOST = '127.0.0.1';
 const MOBILE_SERVER_PORT = 39271;
 const NATAPP_WEB_INTERFACE_URL = 'http://127.0.0.1:4040/api/tunnels';
 const NATAPP_CHANGE_CHECK_INTERVAL = 60 * 60 * 1000;
+const NATAPP_RETRY_INTERVAL = 5 * 60 * 1000;
+const NATAPP_REQUEST_TIMEOUT = 15 * 1000;
 const APP_ICON_PATH = path.join(__dirname, 'assets', 'tray.png');
 
 let mainWindow;
@@ -52,6 +73,11 @@ let mobileAccessToken = null;
 let dingtalkRobotWebhook = '';
 let dingtalkRobotSecret = '';
 let lastNatappPublicUrl = '';
+let lastNatappCheckAt = '';
+let lastNatappPushAt = '';
+let lastNatappCheckError = '';
+const unlockedFolderIds = new Set();
+const mobileUnlockSessions = new Map();
 
 if (process.platform === 'win32') {
   app.setAppUserModelId('com.notice-note.app');
@@ -174,6 +200,10 @@ function getNoteAssetDir(noteId) {
 
 function getAppDataPath() {
   return path.join(getNotesPath(), APP_DATA_DIR_NAME);
+}
+
+function getMobileImageCacheDir() {
+  return path.join(getAppDataPath(), MOBILE_IMAGE_CACHE_DIR_NAME);
 }
 
 function getNoteMetadataPath() {
@@ -496,6 +526,15 @@ async function loadConfig() {
     lastNatappPublicUrl = typeof config.lastNatappPublicUrl === 'string'
       ? config.lastNatappPublicUrl.trim()
       : '';
+    lastNatappCheckAt = typeof config.lastNatappCheckAt === 'string'
+      ? config.lastNatappCheckAt
+      : '';
+    lastNatappPushAt = typeof config.lastNatappPushAt === 'string'
+      ? config.lastNatappPushAt
+      : '';
+    lastNatappCheckError = typeof config.lastNatappCheckError === 'string'
+      ? config.lastNatappCheckError
+      : '';
   } catch (error) {
     notesPath = getDefaultNotesPath();
     dailyReviewEnabled = true;
@@ -504,6 +543,9 @@ async function loadConfig() {
     dingtalkRobotWebhook = '';
     dingtalkRobotSecret = '';
     lastNatappPublicUrl = '';
+    lastNatappCheckAt = '';
+    lastNatappPushAt = '';
+    lastNatappCheckError = '';
   }
 }
 
@@ -516,7 +558,10 @@ async function saveConfig() {
     mobileAccessToken,
     dingtalkRobotWebhook,
     dingtalkRobotSecret,
-    lastNatappPublicUrl
+    lastNatappPublicUrl,
+    lastNatappCheckAt,
+    lastNatappPushAt,
+    lastNatappCheckError
   }, null, 2), 'utf8');
 }
 
@@ -574,12 +619,18 @@ function getAppSettings() {
   const selectedFile = resourceFiles.find((file) => file.isDailyReview);
   return {
     dailyReviewEnabled,
-    dailyReviewTitle: selectedNote?.title || selectedFile?.name || null
+    dailyReviewTitle: selectedNote?.title || selectedFile?.name || null,
+    dingtalkRobotWebhook,
+    dingtalkRobotConfigured: isDingtalkRobotConfigured(),
+    lastNatappPublicUrl: lastNatappPublicUrl || null,
+    lastNatappCheckAt: lastNatappCheckAt || null,
+    lastNatappPushAt: lastNatappPushAt || null,
+    lastNatappCheckError: lastNatappCheckError || null
   };
 }
 
 function getMobileStaticDir() {
-  return path.join(__dirname, 'mobile');
+  return path.resolve(__dirname, '../../notice_note_client_app/src');
 }
 
 function getMobileAccessUrl() {
@@ -588,7 +639,9 @@ function getMobileAccessUrl() {
 
 async function readNatappPublicUrl() {
   try {
-    const response = await fetch(NATAPP_WEB_INTERFACE_URL);
+    const response = await fetch(NATAPP_WEB_INTERFACE_URL, {
+      signal: AbortSignal.timeout(NATAPP_REQUEST_TIMEOUT)
+    });
     if (!response.ok) {
       throw new Error(`NATAPP WebInterface 返回 ${response.status}`);
     }
@@ -601,7 +654,11 @@ async function readNatappPublicUrl() {
 }
 
 function normalizeNatappTunnel(input = {}) {
-  const publicUrl = input.public_url || input.PublicUrl || input.publicUrl || '';
+  const publicUrl = input.public_url
+    || input.PublicUrl
+    || input.publicUrl
+    || input.ConnCtx?.Tunnel?.PublicUrl
+    || '';
   const localAddr = input.config?.addr
     || input.Config?.Addr
     || input.local_addr
@@ -617,6 +674,7 @@ function normalizeNatappTunnel(input = {}) {
 
 function findCurrentNatappUrl(payload) {
   const tunnelGroups = [
+    payload?.Txns,
     payload?.tunnels,
     payload?.Tunnels,
     payload?.Tunnels?.Tunnels,
@@ -661,6 +719,11 @@ function parseNatappPublicUrl(raw) {
     return tunnelUrlMatch[1].replace(/\/+$/, '');
   }
 
+  const plainUrlMatch = text.match(/https?:\/\/[a-z0-9.-]*natapp(?:free)?\.cc/i);
+  if (plainUrlMatch) {
+    return plainUrlMatch[0].replace(/\/+$/, '');
+  }
+
   return null;
 }
 
@@ -703,11 +766,11 @@ function formatNatappChangeTime(value = new Date()) {
   }).format(value);
 }
 
-async function sendNatappChangeToDingtalk(publicUrl) {
+async function sendNatappAddressToDingtalk(publicUrl, isTest = false) {
   const pairingUrl = buildMobilePairingUrl(publicUrl);
   const markdown = [
-    '### Notice Note NATAPP 地址已变更',
-    `- 新地址：${publicUrl}`,
+    isTest ? '### Notice Note NATAPP 钉钉通知测试' : '### Notice Note NATAPP 地址通知',
+    `- 当前地址：${publicUrl}`,
     `- 检测时间：${formatNatappChangeTime()}`,
     `- 本地服务：${MOBILE_SERVER_HOST}:${MOBILE_SERVER_PORT}`,
     `- 服务地址：${publicUrl}`,
@@ -722,7 +785,7 @@ async function sendNatappChangeToDingtalk(publicUrl) {
     body: JSON.stringify({
       msgtype: 'markdown',
       markdown: {
-        title: 'Notice Note NATAPP 地址变更',
+        title: isTest ? 'Notice Note NATAPP 钉钉通知测试' : 'Notice Note NATAPP 地址通知',
         text: markdown
       }
     })
@@ -738,36 +801,61 @@ async function checkNatappAddressChange() {
     return;
   }
 
+  lastNatappCheckAt = new Date().toISOString();
   const currentNatappUrl = await readNatappPublicUrl();
   if (!currentNatappUrl) {
-    return;
+    throw new Error('未读取到 NATAPP 当前公网地址');
   }
 
-  if (!lastNatappPublicUrl) {
-    lastNatappPublicUrl = currentNatappUrl;
-    await saveConfig();
-    return;
-  }
-
-  if (currentNatappUrl === lastNatappPublicUrl) {
-    return;
-  }
-
-  await sendNatappChangeToDingtalk(currentNatappUrl);
+  await sendNatappAddressToDingtalk(currentNatappUrl);
   lastNatappPublicUrl = currentNatappUrl;
+  lastNatappPushAt = new Date().toISOString();
+  lastNatappCheckError = '';
   await saveConfig();
 }
 
-function scheduleNatappAddressCheck() {
-  clearInterval(natappChangeTimer);
+async function recordNatappCheckFailure(error) {
+  lastNatappCheckAt = new Date().toISOString();
+  lastNatappCheckError = String(error?.message || 'NATAPP 地址检查失败');
+  await saveConfig();
+}
+
+async function testNatappDingtalkNotification() {
   if (!isDingtalkRobotConfigured()) {
+    throw new Error('请先填写钉钉机器人 Webhook 和签名密钥');
+  }
+  const currentNatappUrl = await readNatappPublicUrl();
+  if (!currentNatappUrl) {
+    throw new Error('未读取到 NATAPP 当前公网地址');
+  }
+  await sendNatappAddressToDingtalk(currentNatappUrl, true);
+  lastNatappCheckAt = new Date().toISOString();
+  lastNatappPushAt = lastNatappCheckAt;
+  lastNatappCheckError = '';
+  lastNatappPublicUrl = currentNatappUrl;
+  await saveConfig();
+  return { publicUrl: currentNatappUrl };
+}
+
+function scheduleNatappAddressCheck(delay = NATAPP_CHANGE_CHECK_INTERVAL) {
+  clearTimeout(natappChangeTimer);
+  if (!isDingtalkRobotConfigured() || isQuitting) {
     return;
   }
-  natappChangeTimer = setInterval(() => {
-    checkNatappAddressChange().catch((error) => {
+  natappChangeTimer = setTimeout(async () => {
+    let nextDelay = NATAPP_CHANGE_CHECK_INTERVAL;
+    try {
+      await checkNatappAddressChange();
+    } catch (error) {
+      nextDelay = NATAPP_RETRY_INTERVAL;
       console.warn('NATAPP 地址检查失败:', error.message);
-    });
-  }, NATAPP_CHANGE_CHECK_INTERVAL);
+      await recordNatappCheckFailure(error).catch((saveError) => {
+        console.warn('保存 NATAPP 地址检查状态失败:', saveError.message);
+      });
+    } finally {
+      scheduleNatappAddressCheck(nextDelay);
+    }
+  }, delay);
 }
 
 async function getMobilePairingInfo() {
@@ -811,9 +899,111 @@ function getMimeType(filePath) {
     '.jpg': 'image/jpeg',
     '.jpeg': 'image/jpeg',
     '.webp': 'image/webp',
+    '.bmp': 'image/bmp',
     '.ico': 'image/x-icon'
   };
   return mimeTypes[extension] || 'application/octet-stream';
+}
+
+function getMobileImageCacheKey(filePath, sourceStats) {
+  return createHash('sha256')
+    .update([
+      path.resolve(filePath),
+      String(sourceStats.size),
+      String(Math.trunc(sourceStats.mtimeMs)),
+      String(MOBILE_IMAGE_CACHE_VERSION),
+      String(MOBILE_IMAGE_MAX_WIDTH),
+      String(MOBILE_IMAGE_JPEG_QUALITY)
+    ].join('\n'))
+    .digest('hex');
+}
+
+async function readMobileImageCache(cacheKey) {
+  const candidates = [
+    { extension: '.jpg', mimeType: 'image/jpeg' },
+    { extension: '.png', mimeType: 'image/png' }
+  ];
+
+  for (const candidate of candidates) {
+    const cachePath = path.join(getMobileImageCacheDir(), `${cacheKey}${candidate.extension}`);
+    try {
+      return {
+        content: await fs.readFile(cachePath),
+        mimeType: candidate.mimeType,
+        cacheKey
+      };
+    } catch (error) {
+      if (error.code !== 'ENOENT') {
+        throw error;
+      }
+    }
+  }
+
+  return null;
+}
+
+async function createOptimizedMobileImage(filePath, sourceStats) {
+  const extension = path.extname(filePath).toLowerCase();
+  if (!MOBILE_IMAGE_OPTIMIZABLE_EXTENSIONS.has(extension)
+    || sourceStats.size < MOBILE_IMAGE_MIN_OPTIMIZE_BYTES) {
+    return null;
+  }
+
+  const cacheKey = getMobileImageCacheKey(filePath, sourceStats);
+  const cachedImage = await readMobileImageCache(cacheKey);
+  if (cachedImage) {
+    return cachedImage;
+  }
+
+  const sourceImage = sharp(filePath, { failOn: 'none' });
+  const metadata = await sourceImage.metadata();
+  if (!metadata.width || !metadata.height || Number(metadata.pages || 1) > 1) {
+    return null;
+  }
+
+  const outputImage = sourceImage
+    .rotate()
+    .resize({
+      width: MOBILE_IMAGE_MAX_WIDTH,
+      fit: 'inside',
+      withoutEnlargement: true
+    });
+  let preserveTransparency = false;
+  if (metadata.hasAlpha) {
+    const pixelStats = await sharp(filePath, { failOn: 'none' }).stats();
+    preserveTransparency = !pixelStats.isOpaque;
+  }
+  const outputExtension = preserveTransparency ? '.png' : '.jpg';
+  const outputMimeType = preserveTransparency ? 'image/png' : 'image/jpeg';
+  const content = await (preserveTransparency
+    ? outputImage.png({ compressionLevel: 9, adaptiveFiltering: true })
+    : outputImage.jpeg({
+      quality: MOBILE_IMAGE_JPEG_QUALITY,
+      mozjpeg: true,
+      chromaSubsampling: '4:4:4'
+    })).toBuffer();
+
+  if (!content.length || content.length >= sourceStats.size) {
+    return null;
+  }
+
+  await fs.mkdir(getMobileImageCacheDir(), { recursive: true });
+  await fs.writeFile(path.join(getMobileImageCacheDir(), `${cacheKey}${outputExtension}`), content);
+  return {
+    content,
+    mimeType: outputMimeType,
+    cacheKey
+  };
+}
+
+function createMobileImageEtag(filePath, sourceStats, variantKey = 'original') {
+  const signature = [
+    path.resolve(filePath),
+    String(sourceStats.size),
+    String(Math.trunc(sourceStats.mtimeMs)),
+    variantKey
+  ].join('\n');
+  return `"${createHash('sha256').update(signature).digest('hex').slice(0, 32)}"`;
 }
 
 function writeCorsHeaders(response) {
@@ -835,13 +1025,15 @@ function getMobileCryptoKey(token = mobileAccessToken) {
 function encryptMobilePayload(payload, token = mobileAccessToken) {
   const iv = randomBytes(12);
   const cipher = createCipheriv('aes-256-gcm', getMobileCryptoKey(token), iv);
+  const compressed = gzipSync(Buffer.from(JSON.stringify(payload), 'utf8'));
   const encrypted = Buffer.concat([
-    cipher.update(JSON.stringify(payload), 'utf8'),
+    cipher.update(compressed),
     cipher.final()
   ]);
   const tag = cipher.getAuthTag();
   return {
     encrypted: true,
+    compression: 'gzip',
     iv: iv.toString('base64'),
     data: Buffer.concat([encrypted, tag]).toString('base64')
   };
@@ -895,6 +1087,42 @@ function getMobileRequestToken(request, requestUrl) {
   return bearerToken || requestUrl.searchParams.get('token') || '';
 }
 
+function normalizeMobileSessionId(value) {
+  const sessionId = String(value || '').trim();
+  return /^[a-z0-9_-]{16,128}$/i.test(sessionId) ? sessionId : '';
+}
+
+function cleanupMobileUnlockSessions(now = Date.now()) {
+  for (const [sessionId, session] of mobileUnlockSessions) {
+    if (now - session.lastSeenAt > MOBILE_UNLOCK_SESSION_MAX_AGE) {
+      mobileUnlockSessions.delete(sessionId);
+    }
+  }
+}
+
+function getMobileUnlockSession(sessionId) {
+  cleanupMobileUnlockSessions();
+  if (!sessionId) {
+    return { unlockedFolderIds: new Set(), lastSeenAt: Date.now() };
+  }
+
+  let session = mobileUnlockSessions.get(sessionId);
+  if (!session) {
+    session = { unlockedFolderIds: new Set(), lastSeenAt: Date.now() };
+    mobileUnlockSessions.set(sessionId, session);
+  } else {
+    session.lastSeenAt = Date.now();
+  }
+  return session;
+}
+
+function clearMobileUnlockSession(sessionId, unlockedSet) {
+  unlockedSet.clear();
+  if (sessionId) {
+    mobileUnlockSessions.delete(sessionId);
+  }
+}
+
 function getFolderNameById(folderId) {
   if (!folderId) {
     return '全部笔记';
@@ -926,46 +1154,52 @@ function createMobileNoteSummary(note) {
   };
 }
 
-function createMobileFolderSummary(folder) {
+function createMobileFolderSummary(folder, mobileUnlockedFolderIds, visibleNotes) {
   return {
     id: folder.id,
     name: folder.name,
     parentId: folder.parentId || null,
-    path: getFolderPathParts(folder).join(' / ')
+    path: getFolderPathParts(folder).join(' / '),
+    isProtected: isFolderProtected(folder),
+    isUnlocked: mobileUnlockedFolderIds.has(folder.id),
+    noteCount: visibleNotes.filter((note) => note.folderId === folder.id).length
   };
 }
 
-function getMobileLibraryPayload() {
+function getMobileLibraryPayload(mobileUnlockedFolderIds, options = {}) {
+  const visibleFolders = folders.filter((folder) => isFolderVisibleToClient(folder, mobileUnlockedFolderIds));
+  const visibleNotes = getVisibleNotes(mobileUnlockedFolderIds);
+  const folderId = options.folderId || null;
+  const keyword = String(options.query || '').trim().toLocaleLowerCase('zh-CN');
+  const summaries = visibleNotes.map(createMobileNoteSummary);
+  const selectedNotes = keyword
+    ? summaries.filter((note) => [note.title, note.preview, note.folderName, note.folderPath]
+      .some((value) => String(value || '').toLocaleLowerCase('zh-CN').includes(keyword)))
+    : summaries.filter((note) => (note.folderId || null) === folderId);
   return {
     app: {
       name: 'Notice Note',
       storagePath: getNotesPath(),
-      readOnly: true,
+      readOnly: false,
       generatedAt: new Date().toISOString()
     },
-    folders: folders.map(createMobileFolderSummary),
-    notes: notes.map(createMobileNoteSummary),
-    files: resourceFiles.map((file) => ({
-      id: file.id,
-      name: file.name,
-      folderId: file.folderId || null,
-      folderName: getFolderNameById(file.folderId),
-      folderPath: getFolderBreadcrumb(file.folderId),
-      kind: file.kind,
-      typeLabel: file.typeLabel,
-      size: file.size,
-      updatedAt: file.updatedAt,
-      isDailyReview: Boolean(file.isDailyReview),
-      isReminderFile: Boolean(file.isReminderFile)
-    }))
+    folders: visibleFolders.map((folder) => createMobileFolderSummary(
+      folder,
+      mobileUnlockedFolderIds,
+      visibleNotes
+    )),
+    notes: selectedNotes,
+    total: selectedNotes.length,
+    files: []
   };
 }
 
-function getMobileNotePayload(noteId) {
+function getMobileNotePayload(noteId, mobileUnlockedFolderIds) {
   const note = notes.find((item) => item.id === noteId);
   if (!note) {
     return null;
   }
+  assertFolderAccessible(note.folderId, mobileUnlockedFolderIds);
 
   return {
     ...createMobileNoteSummary(note),
@@ -973,9 +1207,168 @@ function getMobileNotePayload(noteId) {
   };
 }
 
-function handleMobileApiPayload(apiRequest) {
+function isRelativeMarkdownImagePath(value) {
+  return Boolean(value) && !/^(?:[a-z][a-z\d+.-]*:|\/\/|\/|#)/i.test(value);
+}
+
+function convertNoteImages(content, noteSourcePath) {
+  const text = String(content || '');
+  const notesDir = path.resolve(getNotesPath());
+  return text.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (match, alt, imageSource) => {
+    try {
+      const source = String(imageSource || '').trim();
+      let filePath;
+      if (source.startsWith('file:')) {
+        filePath = path.resolve(fileURLToPath(source));
+      } else if (noteSourcePath && isRelativeMarkdownImagePath(source)) {
+        const relativePath = decodeURIComponent(source.split(/[?#]/, 1)[0]);
+        filePath = path.resolve(path.dirname(noteSourcePath), relativePath);
+      } else {
+        return match;
+      }
+      if (!isPathInside(notesDir, filePath)) {
+        return match;
+      }
+      const relPath = path.relative(notesDir, filePath).replace(/\\/g, '/');
+      return `![${alt}](mobile-image://${relPath})`;
+    } catch {
+      return match;
+    }
+  });
+}
+
+async function handleMobileApiPayload(apiRequest, mobileUnlockedFolderIds, sessionId) {
   const method = String(apiRequest?.method || 'GET').toUpperCase();
   const requestPath = String(apiRequest?.path || '');
+  if (requestPath === '/api/image-data' && method === 'POST') {
+    const src = apiRequest.src;
+    if (!src) {
+      return { statusCode: 400, payload: { error: '缺少 src 参数' } };
+    }
+    const notesDir = path.resolve(getNotesPath());
+    let filePath;
+    try {
+      if (src.startsWith('file:')) {
+        filePath = path.resolve(fileURLToPath(src));
+      } else {
+        filePath = path.resolve(notesDir, src);
+      }
+    } catch {
+      return { statusCode: 400, payload: { error: '图片路径无效' } };
+    }
+    if (!isPathInside(notesDir, filePath)) {
+      return { statusCode: 403, payload: { error: '禁止访问' } };
+    }
+    try {
+      const buffer = await fs.readFile(filePath);
+      const mimeType = getMimeType(filePath);
+      return {
+        statusCode: 200,
+        payload: {
+          data: buffer.toString('base64'),
+          mimeType
+        }
+      };
+    } catch {
+      return { statusCode: 404, payload: { error: '图片不存在' } };
+    }
+  }
+
+  const updateNoteMatch = requestPath.match(/^\/api\/notes\/([^/]+)$/);
+  if (updateNoteMatch && method === 'PUT') {
+    try {
+      const noteId = decodeURIComponent(updateNoteMatch[1]);
+      const note = notes.find((item) => item.id === noteId);
+      if (!note) {
+        return { statusCode: 404, payload: { error: '笔记不存在' } };
+      }
+      assertFolderAccessible(note.folderId, mobileUnlockedFolderIds);
+      const updatedNote = await upsertNote(null, {
+        ...note,
+        title: String(apiRequest.title || '').trim() || '未命名笔记',
+        content: String(apiRequest.content || '')
+      });
+      const payload = getMobileNotePayload(updatedNote.id, mobileUnlockedFolderIds);
+      return {
+        statusCode: 200,
+        payload: {
+          ...payload,
+          editableContent: payload.content,
+          content: convertNoteImages(payload.content, noteFileMap.get(updatedNote.id))
+        }
+      };
+    } catch (error) {
+      if (error.code === 'FOLDER_LOCKED') {
+        return {
+          statusCode: 423,
+          payload: {
+            error: error.message,
+            code: error.code,
+            folderId: error.folderId,
+            folderName: error.folderName
+          }
+        };
+      }
+      throw error;
+    }
+  }
+
+  if (method === 'POST') {
+    if (requestPath === '/api/session/lock') {
+      clearMobileUnlockSession(sessionId, mobileUnlockedFolderIds);
+      return {
+        statusCode: 200,
+        payload: { ok: true }
+      };
+    }
+    const unlockMatch = requestPath.match(/^\/api\/folders\/([^/]+)\/unlock$/);
+    if (unlockMatch) {
+      if (!sessionId) {
+        return {
+          statusCode: 426,
+          payload: { error: '当前移动端版本过旧，请安装最新版后再解锁加密文件夹' }
+        };
+      }
+      const folder = getFolderById(decodeURIComponent(unlockMatch[1]));
+      if (!folder) {
+        return {
+          statusCode: 404,
+          payload: { error: '文件夹不存在' }
+        };
+      }
+      if (!isFolderProtected(folder)) {
+        return {
+          statusCode: 200,
+          payload: sanitizeFolderForClient(folder, mobileUnlockedFolderIds)
+        };
+      }
+      if (!verifyFolderPassword(folder, apiRequest.password)) {
+        return {
+          statusCode: 401,
+          payload: { error: '密码不正确' }
+        };
+      }
+      mobileUnlockedFolderIds.add(folder.id);
+      return {
+        statusCode: 200,
+        payload: sanitizeFolderForClient(folder, mobileUnlockedFolderIds)
+      };
+    }
+    const lockMatch = requestPath.match(/^\/api\/folders\/([^/]+)\/lock$/);
+    if (lockMatch) {
+      const folderId = decodeURIComponent(lockMatch[1]);
+      mobileUnlockedFolderIds.delete(folderId);
+      return {
+        statusCode: 200,
+        payload: { ok: true }
+      };
+    }
+    return {
+      statusCode: 405,
+      payload: { error: '当前移动端接口不支持该操作' }
+    };
+  }
+
   if (method !== 'GET') {
     return {
       statusCode: 405,
@@ -988,7 +1381,7 @@ function handleMobileApiPayload(apiRequest) {
       statusCode: 200,
       payload: {
         ok: true,
-        readOnly: true,
+        readOnly: false,
         noteCount: notes.length,
         folderCount: folders.length,
         fileCount: resourceFiles.length
@@ -999,23 +1392,43 @@ function handleMobileApiPayload(apiRequest) {
   if (requestPath === '/api/library') {
     return {
       statusCode: 200,
-      payload: getMobileLibraryPayload()
+      payload: getMobileLibraryPayload(mobileUnlockedFolderIds, apiRequest)
     };
   }
 
   const noteMatch = requestPath.match(/^\/api\/notes\/([^/]+)$/);
   if (noteMatch) {
-    const note = getMobileNotePayload(decodeURIComponent(noteMatch[1]));
-    if (!note) {
+    try {
+      const note = getMobileNotePayload(decodeURIComponent(noteMatch[1]), mobileUnlockedFolderIds);
+      if (!note) {
+        return {
+          statusCode: 404,
+          payload: { error: '笔记不存在' }
+        };
+      }
+      const inlinedContent = convertNoteImages(note.content, noteFileMap.get(note.id));
       return {
-        statusCode: 404,
-        payload: { error: '笔记不存在' }
+        statusCode: 200,
+        payload: {
+          ...note,
+          editableContent: note.content,
+          content: inlinedContent
+        }
       };
+    } catch (error) {
+      if (error.code === 'FOLDER_LOCKED') {
+        return {
+          statusCode: 423,
+          payload: {
+            error: error.message,
+            code: error.code,
+            folderId: error.folderId,
+            folderName: error.folderName
+          }
+        };
+      }
+      throw error;
     }
-    return {
-      statusCode: 200,
-      payload: note
-    };
   }
 
   return {
@@ -1042,6 +1455,11 @@ async function handleMobileApiRequest(request, response, requestUrl) {
     return;
   }
 
+  if (requestUrl.pathname === '/api/image' && request.method === 'GET') {
+    await serveMobileImage(request, response, requestUrl);
+    return;
+  }
+
   if (requestUrl.pathname !== '/api/secure') {
     writeEncryptedJson(response, 426, { error: '请使用加密接口访问移动端数据' });
     return;
@@ -1055,10 +1473,81 @@ async function handleMobileApiRequest(request, response, requestUrl) {
   try {
     const envelope = await readRequestJson(request);
     const apiRequest = decryptMobilePayload(envelope);
-    const { statusCode, payload } = handleMobileApiPayload(apiRequest);
+    const sessionId = normalizeMobileSessionId(apiRequest.sessionId);
+    const session = getMobileUnlockSession(sessionId);
+    const { statusCode, payload } = await handleMobileApiPayload(
+      apiRequest,
+      session.unlockedFolderIds,
+      sessionId
+    );
     writeEncryptedJson(response, statusCode, payload);
   } catch (error) {
     writeEncryptedJson(response, 400, { error: '加密请求解析失败' });
+  }
+}
+
+async function serveMobileImage(request, response, requestUrl) {
+  const src = requestUrl.searchParams.get('src');
+  if (!src) {
+    response.writeHead(400, { 'Content-Type': 'text/plain; charset=utf-8' });
+    response.end('缺少 src 参数');
+    return;
+  }
+
+  const notesDir = path.resolve(getNotesPath());
+  let filePath;
+  try {
+    if (src.startsWith('file:')) {
+      filePath = path.resolve(fileURLToPath(src));
+    } else {
+      filePath = path.resolve(notesDir, decodeURIComponent(src));
+    }
+  } catch {
+    response.writeHead(400, { 'Content-Type': 'text/plain; charset=utf-8' });
+    response.end('图片路径无效');
+    return;
+  }
+
+  if (!isPathInside(notesDir, filePath)) {
+    response.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' });
+    response.end('禁止访问');
+    return;
+  }
+
+  try {
+    const sourceStats = await fs.stat(filePath);
+    if (!sourceStats.isFile()) {
+      throw new Error('图片路径不是文件');
+    }
+    let optimizedImage = null;
+    try {
+      optimizedImage = await createOptimizedMobileImage(filePath, sourceStats);
+    } catch (error) {
+      console.warn('生成移动端图片缓存失败，将返回原图:', error.message);
+    }
+    const content = optimizedImage?.content || await fs.readFile(filePath);
+    const mimeType = optimizedImage?.mimeType || getMimeType(filePath);
+    const etag = createMobileImageEtag(filePath, sourceStats, optimizedImage?.cacheKey);
+    writeCorsHeaders(response);
+    if (request.headers['if-none-match'] === etag) {
+      response.writeHead(304, {
+        'Cache-Control': `private, max-age=${MOBILE_IMAGE_CACHE_MAX_AGE}`,
+        ETag: etag
+      });
+      response.end();
+      return;
+    }
+    response.writeHead(200, {
+      'Content-Type': mimeType,
+      'Content-Length': content.length,
+      'Cache-Control': `private, max-age=${MOBILE_IMAGE_CACHE_MAX_AGE}`,
+      ETag: etag,
+      'X-Content-Type-Options': 'nosniff'
+    });
+    response.end(content);
+  } catch {
+    response.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
+    response.end('图片不存在');
   }
 }
 
@@ -1075,9 +1564,10 @@ async function serveMobileStaticFile(response, requestPath) {
 
   try {
     const content = await fs.readFile(targetPath);
+    const isHtml = path.extname(targetPath).toLowerCase() === '.html';
     response.writeHead(200, {
       'Content-Type': getMimeType(targetPath),
-      'Cache-Control': 'no-cache'
+      'Cache-Control': isHtml ? 'no-cache' : 'public, max-age=86400'
     });
     response.end(content);
   } catch (error) {
@@ -1132,15 +1622,107 @@ function stopMobileServer() {
 }
 
 async function updateAppSettings(_event, input = {}) {
-  dailyReviewEnabled = Boolean(input.dailyReviewEnabled);
-  if (!dailyReviewEnabled) {
-    dailyReviewSelection = { date: null, entryKey: null };
+  if (Object.hasOwn(input, 'dailyReviewEnabled')) {
+    dailyReviewEnabled = Boolean(input.dailyReviewEnabled);
+    if (!dailyReviewEnabled) {
+      dailyReviewSelection = { date: null, entryKey: null };
+    }
+    updateDailyReviewSelection();
   }
-  updateDailyReviewSelection();
+
+  if (input.clearDingtalkRobot) {
+    dingtalkRobotWebhook = '';
+    dingtalkRobotSecret = '';
+    lastNatappPublicUrl = '';
+  } else {
+    if (Object.hasOwn(input, 'dingtalkRobotWebhook')) {
+      const webhook = String(input.dingtalkRobotWebhook || '').trim();
+      if (webhook) {
+        const webhookUrl = new URL(webhook);
+        if (webhookUrl.protocol !== 'https:') {
+          throw new Error('钉钉机器人 Webhook 必须使用 HTTPS 地址');
+        }
+      }
+      dingtalkRobotWebhook = webhook;
+    }
+    if (Object.hasOwn(input, 'dingtalkRobotSecret')) {
+      const secret = String(input.dingtalkRobotSecret || '').trim();
+      if (secret) {
+        dingtalkRobotSecret = secret;
+      }
+    }
+  }
+
   await saveConfig();
+  scheduleNatappAddressCheck();
   sendNotesChanged();
   sendPdfFilesChanged();
   return getAppSettings();
+}
+
+async function setFolderPassword(_event, folderId, password) {
+  const folder = getFolderById(folderId);
+  if (!folder) {
+    throw new Error('文件夹不存在');
+  }
+  const normalizedPassword = String(password || '').trim();
+  if (normalizedPassword.length < 1) {
+    throw new Error('密码不能为空');
+  }
+  const { salt, hash } = hashFolderPassword(normalizedPassword);
+  folder.passwordSalt = salt;
+  folder.passwordHash = hash;
+  unlockedFolderIds.delete(folder.id);
+  const metaPath = path.join(getFolderPath(folder.id), '.folder.json');
+  await fs.writeFile(metaPath, JSON.stringify(folder, null, 2), 'utf8');
+  sendFoldersChanged();
+  sendNotesChanged();
+  sendPdfFilesChanged();
+  return sanitizeFolderForClient(folder);
+}
+
+async function clearFolderPassword(_event, folderId) {
+  const folder = getFolderById(folderId);
+  if (!folder) {
+    throw new Error('文件夹不存在');
+  }
+  folder.passwordSalt = '';
+  folder.passwordHash = '';
+  unlockedFolderIds.delete(folder.id);
+  const metaPath = path.join(getFolderPath(folder.id), '.folder.json');
+  await fs.writeFile(metaPath, JSON.stringify(folder, null, 2), 'utf8');
+  sendFoldersChanged();
+  sendNotesChanged();
+  sendPdfFilesChanged();
+  return sanitizeFolderForClient(folder);
+}
+
+async function unlockFolder(_event, folderId, password) {
+  const folder = getFolderById(folderId);
+  if (!folder) {
+    throw new Error('文件夹不存在');
+  }
+  if (!isFolderProtected(folder)) {
+    return sanitizeFolderForClient(folder);
+  }
+  if (!verifyFolderPassword(folder, password)) {
+    throw new Error('密码不正确');
+  }
+  unlockedFolderIds.add(folder.id);
+  sendFoldersChanged();
+  sendNotesChanged();
+  sendPdfFilesChanged();
+  return sanitizeFolderForClient(folder);
+}
+
+async function lockFolder(_event, folderId) {
+  if (!folderId) {
+    return;
+  }
+  unlockedFolderIds.delete(folderId);
+  sendFoldersChanged();
+  sendNotesChanged();
+  sendPdfFilesChanged();
 }
 
 function createEmptyNote() {
@@ -1275,7 +1857,9 @@ async function scanFolderDirectory(dirPath, parentId) {
       id: data.id || getStableFolderId(folderPath),
       name: data.name || entry.name,
       parentId,
-      createdAt: data.createdAt || new Date().toISOString()
+      createdAt: data.createdAt || new Date().toISOString(),
+      passwordSalt: typeof data.passwordSalt === 'string' ? data.passwordSalt : '',
+      passwordHash: typeof data.passwordHash === 'string' ? data.passwordHash : ''
     };
     folders.push(folder);
     await scanFolderDirectory(folderPath, folder.id);
@@ -1305,7 +1889,9 @@ async function createFolder(_event, name, parentId) {
     id: randomUUID(),
     name: folderName,
     parentId: normalizedParentId,
-    createdAt: new Date().toISOString()
+    createdAt: new Date().toISOString(),
+    passwordSalt: '',
+    passwordHash: ''
   };
 
   const metaPath = path.join(folderPath, '.folder.json');
@@ -1398,9 +1984,110 @@ function getStableFolderId(folderPath) {
   return `path:${relativePath.toLocaleLowerCase('zh-CN')}`;
 }
 
+function getFolderById(folderId) {
+  return folders.find((folder) => folder.id === folderId) || null;
+}
+
+function isFolderProtected(folder) {
+  return Boolean(folder?.passwordHash && folder?.passwordSalt);
+}
+
+function sanitizeFolderForClient(folder, unlockedSet = unlockedFolderIds) {
+  return {
+    id: folder.id,
+    name: folder.name,
+    parentId: folder.parentId || null,
+    createdAt: folder.createdAt,
+    isProtected: isFolderProtected(folder),
+    isUnlocked: unlockedSet.has(folder.id)
+  };
+}
+
+function hashFolderPassword(password, salt = randomBytes(16).toString('hex')) {
+  const normalizedPassword = String(password || '');
+  return {
+    salt,
+    hash: scryptSync(normalizedPassword, salt, 64).toString('hex')
+  };
+}
+
+function verifyFolderPassword(folder, password) {
+  if (!isFolderProtected(folder)) {
+    return true;
+  }
+  const expected = Buffer.from(folder.passwordHash, 'hex');
+  const actual = Buffer.from(hashFolderPassword(password, folder.passwordSalt).hash, 'hex');
+  return expected.length === actual.length && timingSafeEqual(expected, actual);
+}
+
+function getLockedFolderForFolderId(folderId, unlockedSet = unlockedFolderIds, includeSelf = true) {
+  let current = folderId ? getFolderById(folderId) : null;
+  while (current) {
+    const isSelf = current.id === folderId;
+    if ((includeSelf || !isSelf) && isFolderProtected(current) && !unlockedSet.has(current.id)) {
+      return current;
+    }
+    current = current.parentId ? getFolderById(current.parentId) : null;
+  }
+  return null;
+}
+
+function assertFolderAccessible(folderId, unlockedSet = unlockedFolderIds) {
+  const lockedFolder = getLockedFolderForFolderId(folderId, unlockedSet, true);
+  if (!lockedFolder) {
+    return;
+  }
+  const error = new Error(`文件夹「${lockedFolder.name}」已加密，请先输入密码`);
+  error.code = 'FOLDER_LOCKED';
+  error.folderId = lockedFolder.id;
+  error.folderName = lockedFolder.name;
+  throw error;
+}
+
+function isFolderVisibleToClient(folder, unlockedSet = unlockedFolderIds) {
+  return !getLockedFolderForFolderId(folder.parentId, unlockedSet, true);
+}
+
+function getVisibleFolders(unlockedSet = unlockedFolderIds) {
+  return folders
+    .filter((folder) => isFolderVisibleToClient(folder, unlockedSet))
+    .map((folder) => sanitizeFolderForClient(folder, unlockedSet));
+}
+
+function createClientNote(note) {
+  const sourcePath = noteFileMap.get(note.id);
+  return {
+    ...note,
+    sourceUrl: sourcePath ? pathToFileURL(sourcePath).href : null
+  };
+}
+
+function getVisibleNotes(unlockedSet = unlockedFolderIds) {
+  return notes
+    .filter((note) => !getLockedFolderForFolderId(note.folderId, unlockedSet, true))
+    .map(createClientNote);
+}
+
+function getVisibleResourceFiles(unlockedSet = unlockedFolderIds) {
+  return resourceFiles.filter((file) => !getLockedFolderForFolderId(file.folderId, unlockedSet, true));
+}
+
+function getVisiblePdfFiles(unlockedSet = unlockedFolderIds) {
+  return pdfFiles.filter((file) => !getLockedFolderForFolderId(file.folderId, unlockedSet, true));
+}
+
+function cleanupUnlockedFolders() {
+  const validFolderIds = new Set(folders.map((folder) => folder.id));
+  for (const folderId of [...unlockedFolderIds]) {
+    if (!validFolderIds.has(folderId)) {
+      unlockedFolderIds.delete(folderId);
+    }
+  }
+}
+
 function sendFoldersChanged() {
   if (mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.webContents.send('folders:changed', folders);
+    mainWindow.webContents.send('folders:changed', getVisibleFolders());
   }
 }
 
@@ -1484,6 +2171,7 @@ async function performLoadNotes() {
   if (updateDailyReviewSelection()) {
     await saveConfig();
   }
+  cleanupUnlockedFolders();
 }
 
 async function scanDirectory(dirPath, folderId, storedMetadataByPath, claimedMetadataIds) {
@@ -1653,8 +2341,8 @@ async function performLoadPdfFiles() {
 
 function sendPdfFilesChanged() {
   if (mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.webContents.send('pdfs:changed', pdfFiles);
-    mainWindow.webContents.send('files:changed', resourceFiles);
+    mainWindow.webContents.send('pdfs:changed', getVisiblePdfFiles());
+    mainWindow.webContents.send('files:changed', getVisibleResourceFiles());
   }
 }
 
@@ -1771,6 +2459,7 @@ async function previewResourceFile(fileId) {
   if (!file || !file.canOpen) {
     throw new Error('该文件类型不支持预览');
   }
+  assertFolderAccessible(file.folderId);
 
   if (file.kind === 'image') {
     return { kind: 'image', fileUrl: file.fileUrl };
@@ -1936,6 +2625,13 @@ async function setReminderFileMark(_event, entry, marked) {
 }
 
 async function copyLibraryEntryPath(_event, entry) {
+  if (entry?.type === 'note') {
+    assertFolderAccessible(notes.find((item) => item.id === entry.id)?.folderId || null);
+  } else if (entry?.type === 'file') {
+    assertFolderAccessible(resourceFiles.find((item) => item.id === entry.id)?.folderId || null);
+  } else if (entry?.type === 'folder') {
+    assertFolderAccessible(entry.id);
+  }
   const targetPath = resolveLibraryEntryPath(entry);
   if (!targetPath) {
     throw new Error('路径不存在');
@@ -1946,6 +2642,13 @@ async function copyLibraryEntryPath(_event, entry) {
 }
 
 async function showLibraryEntryInFolder(_event, entry) {
+  if (entry?.type === 'note') {
+    assertFolderAccessible(notes.find((item) => item.id === entry.id)?.folderId || null);
+  } else if (entry?.type === 'file') {
+    assertFolderAccessible(resourceFiles.find((item) => item.id === entry.id)?.folderId || null);
+  } else if (entry?.type === 'folder') {
+    assertFolderAccessible(entry.id);
+  }
   const targetPath = resolveLibraryEntryPath(entry);
   if (!targetPath) {
     throw new Error('路径不存在');
@@ -1964,6 +2667,11 @@ async function showLibraryEntryInFolder(_event, entry) {
 }
 
 async function openLibraryEntry(_event, entry) {
+  if (entry?.type === 'note') {
+    assertFolderAccessible(notes.find((item) => item.id === entry.id)?.folderId || null);
+  } else if (entry?.type === 'file') {
+    assertFolderAccessible(resourceFiles.find((item) => item.id === entry.id)?.folderId || null);
+  }
   const targetPath = resolveLibraryEntryPath(entry);
   if (!targetPath || entry?.type === 'folder') {
     throw new Error('文件不存在');
@@ -2081,10 +2789,12 @@ async function saveNote(note) {
 }
 
 function getStorageInfo() {
+  const notesPath = getNotesPath();
   return {
-    notesPath: getNotesPath(),
+    notesPath,
+    notesUrl: pathToFileURL(`${path.resolve(notesPath)}${path.sep}`).href,
     defaultNotesPath: getDefaultNotesPath(),
-    isDefault: getNotesPath() === getDefaultNotesPath(),
+    isDefault: notesPath === getDefaultNotesPath(),
     format: 'markdown'
   };
 }
@@ -2139,7 +2849,7 @@ function normalizeNote(input) {
 
 function sendNotesChanged() {
   if (mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.webContents.send('notes:changed', notes);
+    mainWindow.webContents.send('notes:changed', getVisibleNotes());
   }
 }
 
@@ -2394,14 +3104,19 @@ app.whenReady().then(async () => {
   await saveConfig();
   await loadNotes();
 
-  ipcMain.handle('notes:list', () => notes);
+  ipcMain.handle('notes:list', () => getVisibleNotes());
   ipcMain.handle('library:refresh', async () => {
     await loadNotes();
     scheduleReminderCheck();
-    return { notes, folders, pdfFiles, resourceFiles };
+    return {
+      notes: getVisibleNotes(),
+      folders: getVisibleFolders(),
+      pdfFiles: getVisiblePdfFiles(),
+      resourceFiles: getVisibleResourceFiles()
+    };
   });
-  ipcMain.handle('pdfs:list', () => pdfFiles);
-  ipcMain.handle('files:list', () => resourceFiles);
+  ipcMain.handle('pdfs:list', () => getVisiblePdfFiles());
+  ipcMain.handle('files:list', () => getVisibleResourceFiles());
   ipcMain.handle('files:preview', (_event, fileId) => previewResourceFile(fileId));
   ipcMain.handle('files:delete', deleteResourceFile);
   ipcMain.handle('files:move', moveResourceFile);
@@ -2410,19 +3125,23 @@ app.whenReady().then(async () => {
     if (updateDailyReviewSelection()) {
       await saveConfig();
     }
-    return pdfFiles;
+    return getVisiblePdfFiles();
   });
   ipcMain.handle('pdfs:read', async (_event, pdfId) => {
     const pdf = pdfFiles.find((item) => item.id === pdfId);
     if (!pdf) {
       throw new Error('PDF 文件不存在');
     }
+    assertFolderAccessible(pdf.folderId);
 
     const buffer = await fs.readFile(pdf.path);
     return buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength);
   });
-  ipcMain.handle('notes:save', upsertNote);
-  ipcMain.handle('notes:delete', deleteNote);
+  ipcMain.handle('notes:save', async (event, input) => createClientNote(await upsertNote(event, input)));
+  ipcMain.handle('notes:delete', async (event, noteId) => {
+    await deleteNote(event, noteId);
+    return getVisibleNotes();
+  });
   ipcMain.handle('notes:create', async (_event, folderId) => {
     const note = createEmptyNote();
     note.folderId = folderId || null;
@@ -2430,7 +3149,7 @@ app.whenReady().then(async () => {
     sortNotesByCreatedAt();
     await saveNote(note);
     sendNotesChanged();
-    return note;
+    return createClientNote(note);
   });
   ipcMain.handle('notes:move', async (_event, noteId, folderId) => {
     const note = notes.find(n => n.id === noteId);
@@ -2454,12 +3173,16 @@ app.whenReady().then(async () => {
     note.updatedAt = new Date().toISOString();
     await saveNote(note);
     sendNotesChanged();
-    return note;
+    return createClientNote(note);
   });
-  ipcMain.handle('folders:list', () => folders);
+  ipcMain.handle('folders:list', () => getVisibleFolders());
   ipcMain.handle('folders:create', createFolder);
   ipcMain.handle('folders:rename', renameFolder);
   ipcMain.handle('folders:delete', deleteFolder);
+  ipcMain.handle('folders:set-password', setFolderPassword);
+  ipcMain.handle('folders:clear-password', clearFolderPassword);
+  ipcMain.handle('folders:unlock', unlockFolder);
+  ipcMain.handle('folders:lock', lockFolder);
   ipcMain.handle('folders:move', async (_event, folderId, targetFolderId) => {
     const folder = folders.find(f => f.id === folderId);
     if (!folder) throw new Error('文件夹不存在');
@@ -2511,6 +3234,7 @@ app.whenReady().then(async () => {
   ipcMain.handle('storage:reset', resetNotesPath);
   ipcMain.handle('settings:get', () => getAppSettings());
   ipcMain.handle('settings:update', updateAppSettings);
+  ipcMain.handle('settings:test-dingtalk', testNatappDingtalkNotification);
   ipcMain.handle('mobile:pairing-info', getMobilePairingInfo);
   ipcMain.handle('entries:copy-path', copyLibraryEntryPath);
   ipcMain.handle('entries:show-in-folder', showLibraryEntryInFolder);
@@ -2524,6 +3248,39 @@ app.whenReady().then(async () => {
 
     return saveClipboardImageForNote(payload.noteId, payload.image);
   });
+  ipcMain.handle('images:save-from-url', async (_event, payload) => {
+    if (!payload || !payload.noteId || !payload.imageUrl) {
+      return null;
+    }
+
+    try {
+      const { net } = require('electron');
+      const response = await net.fetch(payload.imageUrl, {
+        redirect: 'follow',
+        headers: { 'User-Agent': 'Mozilla/5.0' }
+      });
+      if (!response.ok) {
+        return null;
+      }
+      const buffer = Buffer.from(await response.arrayBuffer());
+      const contentType = response.headers.get('content-type') || '';
+      const ext = contentType.includes('png') ? '.png'
+        : contentType.includes('gif') ? '.gif'
+        : contentType.includes('webp') ? '.webp'
+        : contentType.includes('bmp') ? '.bmp'
+        : contentType.includes('svg') ? '.svg'
+        : '.jpg';
+      const fileName = `pasted-${Date.now()}${ext}`;
+      return saveClipboardImageForNote(payload.noteId, {
+        fileName,
+        mimeType: contentType,
+        bytes: Array.from(new Uint8Array(buffer))
+      });
+    } catch (error) {
+      console.error('下载图片失败:', error);
+      return null;
+    }
+  });
 
   Menu.setApplicationMenu(null);
   createWindow();
@@ -2533,6 +3290,9 @@ app.whenReady().then(async () => {
   scheduleNatappAddressCheck();
   checkNatappAddressChange().catch((error) => {
     console.warn('启动时检查 NATAPP 地址失败:', error.message);
+    recordNatappCheckFailure(error).catch((saveError) => {
+      console.warn('保存 NATAPP 地址检查状态失败:', saveError.message);
+    });
   });
 
   app.on('activate', () => {
@@ -2551,7 +3311,7 @@ app.on('before-quit', () => {
   clearTimeout(reminderTimer);
   clearTimeout(pdfReloadTimer);
   clearTimeout(noteReloadTimer);
-  clearInterval(natappChangeTimer);
+  clearTimeout(natappChangeTimer);
   pdfWatcher?.close();
   stopMobileServer();
 });

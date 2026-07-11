@@ -1,7 +1,7 @@
 {
   "appId": "com.notice.note",
   "appName": "Notice Note",
-  "webDir": "src/mobile",
+  "webDir": "src",
   "server": {
     "cleartext": true
   },

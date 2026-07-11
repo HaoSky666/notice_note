@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Notice Note Mobile</title>
-  <link rel="stylesheet" href="./styles.css">
+  <link rel="stylesheet" href="./styles.css?v=3">
 </head>
 <body>
   <main class="app-shell">
@@ -35,10 +35,33 @@
       <div class="note-page-bar">
         <button id="noteBackButton" class="path-back" type="button">← 返回</button>
         <p id="noteFolder" class="note-page-path"></p>
+        <button id="editNoteButton" class="note-edit-button" type="button" title="编辑笔记" aria-label="编辑笔记" hidden>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M4 20h4l11-11-4-4L4 16v4Z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>
+            <path d="m13.8 6.2 4 4" stroke="currentColor" stroke-width="1.8"/>
+          </svg>
+        </button>
       </div>
       <article class="note-page-card">
-        <h2 id="noteTitle"></h2>
-        <div id="noteContent" class="markdown-body"></div>
+        <div id="noteView">
+          <h2 id="noteTitle"></h2>
+          <div id="noteContent" class="markdown-body"></div>
+        </div>
+        <form id="noteEditor" class="note-editor" hidden>
+          <label class="note-editor-field">
+            <span>标题</span>
+            <input id="noteTitleInput" type="text" maxlength="200" autocomplete="off">
+          </label>
+          <label class="note-editor-field">
+            <span>正文</span>
+            <textarea id="noteContentInput" rows="18" spellcheck="true"></textarea>
+          </label>
+          <p id="noteEditStatus" class="note-edit-status" role="status"></p>
+          <div class="note-editor-actions">
+            <button id="cancelNoteEditButton" class="note-editor-cancel" type="button">取消</button>
+            <button id="saveNoteEditButton" class="note-editor-save" type="submit">保存</button>
+          </div>
+        </form>
       </article>
     </section>
   </main>
@@ -74,6 +97,17 @@
     </form>
   </dialog>
 
-  <script src="./app.js"></script>
+  <div id="imageLightbox" class="image-lightbox" role="dialog" aria-modal="true" aria-label="图片预览" hidden>
+    <div class="image-lightbox-zoom-controls" aria-label="图片缩放">
+      <button id="zoomOutImageLightboxButton" class="image-lightbox-control" type="button" aria-label="缩小图片">−</button>
+      <button id="zoomInImageLightboxButton" class="image-lightbox-control" type="button" aria-label="放大图片">+</button>
+    </div>
+    <button id="closeImageLightboxButton" class="image-lightbox-close" type="button" aria-label="关闭图片预览">×</button>
+    <div id="imageLightboxStage" class="image-lightbox-stage">
+      <img id="imageLightboxImage" class="image-lightbox-image" alt="">
+    </div>
+  </div>
+
+  <script src="./app.js?v=3"></script>
 </body>
 </html>

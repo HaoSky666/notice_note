@@ -47,14 +47,32 @@ function isPrefixActive(view, line, prefixEnd) {
   });
 }
 
-function replaceWithEmpty(builder, from, to) {
+function addDecoration(items, from, to, decoration) {
+  items.push({ from, to, decoration, order: items.length });
+}
+
+function addSortedDecorations(builder, items) {
+  items
+    .sort((left, right) => {
+      return left.from - right.from
+        || left.decoration.startSide - right.decoration.startSide
+        || left.to - right.to
+        || left.decoration.endSide - right.decoration.endSide
+        || left.order - right.order;
+    })
+    .forEach((item) => {
+      builder.add(item.from, item.to, item.decoration);
+    });
+}
+
+function replaceWithEmpty(items, from, to) {
   if (from < to) {
-    builder.add(from, to, Decoration.replace({ widget: new EmptyWidget() }));
+    addDecoration(items, from, to, Decoration.replace({ widget: new EmptyWidget() }));
   }
 }
 
-function addLineClass(builder, line, className) {
-  builder.add(line.from, line.from, Decoration.line({ class: className }));
+function addLineClass(items, line, className) {
+  addDecoration(items, line.from, line.from, Decoration.line({ class: className }));
 }
 
 function insertMarkdownAtSelection(view, value) {
@@ -81,8 +99,8 @@ function getListDepth(indentText) {
   return Math.min(4, Math.floor(getIndentColumns(indentText) / 2) + 1);
 }
 
-function addListLineClass(builder, line, depth) {
-  addLineClass(builder, line, `cm-list-line cm-list-depth-${depth}`);
+function addListLineClass(items, line, depth) {
+  addLineClass(items, line, `cm-list-line cm-list-depth-${depth}`);
 }
 
 function collectFencedCodeBlocks(doc) {
@@ -156,6 +174,7 @@ function buildLivePreviewDecorations(view, options = {}, codeBlocks = []) {
     return builder.finish();
   }
 
+  const items = [];
   for (const { from, to } of view.visibleRanges) {
     let pos = from;
     while (pos <= to) {
@@ -173,17 +192,18 @@ function buildLivePreviewDecorations(view, options = {}, codeBlocks = []) {
             : 'cm-code-block-content';
         const isEditing = isCodeBlockActive(view, codeBlock);
         const editingClass = isEditing ? ' cm-code-block-editing' : '';
-        addLineClass(builder, line, `cm-code-block-line ${positionClass}${editingClass}`);
+        addLineClass(items, line, `cm-code-block-line ${positionClass}${editingClass}`);
 
         if (!isEditing) {
           if (line.number === codeBlock.startLine) {
-            builder.add(
+            addDecoration(
+              items,
               line.from,
               line.to,
               Decoration.replace({ widget: new CodeFenceWidget(codeBlock.language) })
             );
           } else if (line.number === codeBlock.endLine) {
-            replaceWithEmpty(builder, line.from, line.to);
+            replaceWithEmpty(items, line.from, line.to);
           }
         }
 
@@ -197,8 +217,9 @@ function buildLivePreviewDecorations(view, options = {}, codeBlocks = []) {
       const unordered = /^(\s*)([-*+])\s+/.exec(text);
       if (unordered && !isPrefixActive(view, line, line.from + unordered[0].length)) {
         const depth = getListDepth(unordered[1]);
-        addListLineClass(builder, line, depth);
-        builder.add(
+        addListLineClass(items, line, depth);
+        addDecoration(
+          items,
           line.from,
           line.from + unordered[0].length,
           Decoration.replace({ widget: new BulletWidget(depth) })
@@ -208,8 +229,9 @@ function buildLivePreviewDecorations(view, options = {}, codeBlocks = []) {
       const ordered = /^(\s*)(\d+\.)\s+/.exec(text);
       if (ordered && !isPrefixActive(view, line, line.from + ordered[0].length)) {
         const depth = getListDepth(ordered[1]);
-        addListLineClass(builder, line, depth);
-        builder.add(
+        addListLineClass(items, line, depth);
+        addDecoration(
+          items,
           line.from,
           line.from + ordered[0].length,
           Decoration.replace({ widget: new OrderedMarkerWidget(ordered[2], depth) })
@@ -219,22 +241,23 @@ function buildLivePreviewDecorations(view, options = {}, codeBlocks = []) {
       if (!isLineActive(view, line)) {
         const heading = /^(#{1,6})\s+/.exec(text);
         if (heading) {
-          addLineClass(builder, line, `cm-heading-line cm-heading-${heading[1].length}`);
-          replaceWithEmpty(builder, line.from, line.from + heading[0].length);
+          addLineClass(items, line, `cm-heading-line cm-heading-${heading[1].length}`);
+          replaceWithEmpty(items, line.from, line.from + heading[0].length);
         }
 
         const quote = /^(\s*>+\s*)/.exec(text);
         if (quote) {
-          addLineClass(builder, line, 'cm-quote-line');
-          replaceWithEmpty(builder, line.from, line.from + quote[1].length);
+          addLineClass(items, line, 'cm-quote-line');
+          replaceWithEmpty(items, line.from, line.from + quote[1].length);
         }
 
         const image = /!\[([^\]]*)\]\(([^)]+)\)/g;
         for (const match of text.matchAll(image)) {
           const start = line.from + match.index;
           const src = options.resolveImageSrc?.(match[2].trim()) || match[2].trim();
-          addLineClass(builder, line, 'cm-image-line');
-          builder.add(
+          addLineClass(items, line, 'cm-image-line');
+          addDecoration(
+            items,
             start,
             start + match[0].length,
             Decoration.replace({ widget: new ImageWidget(match[1], src) })
@@ -244,23 +267,23 @@ function buildLivePreviewDecorations(view, options = {}, codeBlocks = []) {
         const inlineCode = /`([^`]+)`/g;
         for (const match of text.matchAll(inlineCode)) {
           const start = line.from + match.index;
-          replaceWithEmpty(builder, start, start + 1);
-          builder.add(start + 1, start + match[0].length - 1, Decoration.mark({ class: 'cm-inline-code-rendered' }));
-          replaceWithEmpty(builder, start + match[0].length - 1, start + match[0].length);
+          replaceWithEmpty(items, start, start + 1);
+          addDecoration(items, start + 1, start + match[0].length - 1, Decoration.mark({ class: 'cm-inline-code-rendered' }));
+          replaceWithEmpty(items, start + match[0].length - 1, start + match[0].length);
         }
 
         const bold = /(\*\*|__)(.+?)\1/g;
         for (const match of text.matchAll(bold)) {
           const start = line.from + match.index;
-          replaceWithEmpty(builder, start, start + 2);
-          replaceWithEmpty(builder, start + match[0].length - 2, start + match[0].length);
+          replaceWithEmpty(items, start, start + 2);
+          replaceWithEmpty(items, start + match[0].length - 2, start + match[0].length);
         }
 
         const italic = /(^|[^*_])([*_])([^*_]+?)\2/g;
         for (const match of text.matchAll(italic)) {
           const markerStart = line.from + match.index + match[1].length;
-          replaceWithEmpty(builder, markerStart, markerStart + 1);
-          replaceWithEmpty(builder, markerStart + match[0].length - match[1].length - 1, markerStart + match[0].length - match[1].length);
+          replaceWithEmpty(items, markerStart, markerStart + 1);
+          replaceWithEmpty(items, markerStart + match[0].length - match[1].length - 1, markerStart + match[0].length - match[1].length);
         }
       }
 
@@ -271,6 +294,7 @@ function buildLivePreviewDecorations(view, options = {}, codeBlocks = []) {
     }
   }
 
+  addSortedDecorations(builder, items);
   return builder.finish();
 }
 
@@ -399,21 +423,21 @@ function createNoticeNoteEditor(options) {
           paste: (event, view) => {
             const imageFile = [...(event.clipboardData?.files || [])]
               .find((file) => file.type.startsWith('image/'));
-            if (!imageFile || typeof options.onPasteImage !== 'function') {
-              return false;
+            if (imageFile && typeof options.onPasteImage === 'function') {
+              event.preventDefault();
+              options.onPasteImage(imageFile)
+                .then((markdownText) => {
+                  if (markdownText) {
+                    insertMarkdownAtSelection(view, markdownText);
+                  }
+                })
+                .catch((error) => {
+                  options.onError?.(error);
+                });
+              return true;
             }
 
-            event.preventDefault();
-            options.onPasteImage(imageFile)
-              .then((markdownText) => {
-                if (markdownText) {
-                  insertMarkdownAtSelection(view, markdownText);
-                }
-              })
-              .catch((error) => {
-                options.onError?.(error);
-              });
-            return true;
+            return false;
           }
         }),
         keymap.of([
@@ -460,6 +484,26 @@ function createNoticeNoteEditor(options) {
       ]
     })
   });
+
+  const contentDOM = view.contentDOM;
+  contentDOM.addEventListener('paste', (event) => {
+    const htmlText = event.clipboardData?.getData('text/html') || '';
+    if (!htmlText.includes('<img') || typeof options.onPasteHtml !== 'function') {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    const plainText = event.clipboardData?.getData('text/plain') || '';
+    options.onPasteHtml(htmlText, plainText)
+      .then((markdownText) => {
+        if (markdownText) {
+          insertMarkdownAtSelection(view, markdownText);
+        }
+      })
+      .catch((error) => {
+        options.onError?.(error);
+      });
+  }, true);
 
   return {
     getMarkdown() {
