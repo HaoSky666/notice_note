@@ -42,6 +42,8 @@ const zoomInImageLightboxButton = document.querySelector('#zoomInImageLightboxBu
 const NAVIGATION_STATE_KEY = 'notice-note-mobile-state';
 const TOKEN_KEY = 'notice-note-mobile-token';
 const SERVER_KEY = 'notice-note-mobile-server';
+const LEGACY_TAILSCALE_HOST = '100.95.22.24';
+const EASYTIER_HOST = '10.144.144.1';
 let accessToken = '';
 let serverBaseUrl = '';
 let library = null;
@@ -206,11 +208,28 @@ function getCurrentPageServerUrl() {
   return normalizeServerUrl(window.location.origin);
 }
 
+function migrateLegacyServerUrl(value) {
+  const normalizedValue = normalizeServerUrl(value);
+  if (!normalizedValue) {
+    return '';
+  }
+  try {
+    const url = new URL(normalizedValue);
+    if (url.hostname === LEGACY_TAILSCALE_HOST) {
+      url.hostname = EASYTIER_HOST;
+      return normalizeServerUrl(url.toString());
+    }
+  } catch (_error) {
+    return normalizedValue;
+  }
+  return normalizedValue;
+}
+
 function getInitialConnection() {
   const urlConnection = readConnectionFromUrl();
   return {
     token: urlConnection.token || window.localStorage.getItem(TOKEN_KEY) || '',
-    server: normalizeServerUrl(
+    server: migrateLegacyServerUrl(
       urlConnection.server
       || window.localStorage.getItem(SERVER_KEY)
       || getCurrentPageServerUrl()
@@ -307,7 +326,7 @@ function openConnectionDialog(message = '', mode = 'manual') {
   connectionDialogTitle.textContent = isScanMode ? '扫码连接' : '连接配置';
   connectionDialogDescription.textContent = isScanMode
     ? '扫描 PC 端生成的连接二维码，自动设置域名和 token。'
-    : '填写 NATAPP 服务地址和访问令牌。';
+    : '填写电脑的 EasyTier 服务地址和访问令牌。';
   manualConnectionPanel.hidden = isScanMode;
   scannerPanel.hidden = !isScanMode;
   if (message) {
@@ -398,6 +417,10 @@ function showExitPrompt() {
 }
 
 function leaveAppOrPage() {
+  if (window.NoticeNoteAndroid?.exitApp) {
+    window.NoticeNoteAndroid.exitApp();
+    return;
+  }
   const appPlugin = window.Capacitor?.Plugins?.App;
   if (appPlugin?.exitApp) {
     appPlugin.exitApp();
@@ -561,6 +584,7 @@ function handleMobileAppStateChange({ isActive }) {
 
 async function installNativeAppHandlers() {
   const appPlugin = window.Capacitor?.Plugins?.App;
+  window.addEventListener('notice-note-mobile-back', handleMobileSystemBack);
   if (!appPlugin?.addListener) {
     document.addEventListener('visibilitychange', () => {
       handleMobileAppStateChange({ isActive: !document.hidden });
@@ -569,7 +593,9 @@ async function installNativeAppHandlers() {
   }
 
   try {
-    await appPlugin.addListener('backButton', handleMobileSystemBack);
+    if (!window.NoticeNoteAndroid) {
+      await appPlugin.addListener('backButton', handleMobileSystemBack);
+    }
     await appPlugin.addListener('appStateChange', handleMobileAppStateChange);
   } catch (error) {
     console.warn('注册原生应用监听失败:', error.message);
@@ -652,16 +678,16 @@ function createFriendlyError(error) {
     return message || '当前文件夹已加密，请先输入密码。';
   }
   if (!serverBaseUrl) {
-    return '还没有配置服务地址。请点击右上角扫码，或进入连接配置填写 NATAPP 地址。';
+    return '还没有配置服务地址。请点击右上角扫码，或填写电脑的 EasyTier 地址。';
   }
   if (message.includes('加密') || message.includes('decrypt') || message.includes('crypto')) {
     return '加密通信失败。请重新扫码连接，或确认手机 WebView 支持安全加密。';
   }
   if (message.includes('Invalid URL') || message.includes('parse URL')) {
-    return '服务地址格式不正确。请填写完整地址，例如：http://xxxx.natappfree.cc';
+    return '服务地址格式不正确。请填写完整地址，例如：http://10.144.144.1:39271';
   }
   if (message.includes('Failed to fetch') || message.includes('NetworkError')) {
-    return '暂时连接不上桌面端。请确认电脑服务、NATAPP 隧道和网络都在运行。';
+    return '暂时连接不上桌面端。请确认电脑和手机已加入同一个 EasyTier 网络，并且电脑服务正在运行。';
   }
   if (message.includes('访问令牌无效') || message.includes('401')) {
     return '访问令牌不正确。请重新扫码，或在连接配置里更新 token。';
@@ -1465,13 +1491,14 @@ async function openNote(noteId, options = {}) {
   }
 }
 
-async function loadLibrary() {
+async function loadLibrary(forceRefresh = false) {
   const requestId = ++libraryRequestId;
   showContentPanel();
   statusText.textContent = '正在连接桌面端...';
   const nextLibrary = await requestApi('/api/library', 'GET', {
     folderId: currentFolderId,
-    query: searchInput.value.trim()
+    query: searchInput.value.trim(),
+    refresh: forceRefresh
   });
   if (requestId !== libraryRequestId) {
     return;
@@ -1495,7 +1522,7 @@ saveConnectionButton.addEventListener('click', () => {
     return;
   }
   if (isPackagedApp() && !serverBaseUrl) {
-    openConnectionDialog('App 内请填写 NATAPP 服务地址');
+    openConnectionDialog('App 内请填写电脑的 EasyTier 服务地址');
     return;
   }
   closeConnectionDialog();
@@ -1530,7 +1557,7 @@ toggleTokenVisibilityButton.addEventListener('click', () => {
 });
 
 refreshButton.addEventListener('click', () => {
-  loadLibrary().catch((error) => {
+  loadLibrary(true).catch((error) => {
     renderDisconnectedState(createFriendlyError(error));
   });
 });

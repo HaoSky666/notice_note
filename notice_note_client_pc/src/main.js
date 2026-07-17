@@ -3,11 +3,12 @@ const path = require('node:path');
 const { createServer } = require('node:http');
 const { watch } = require('node:fs');
 const fs = require('node:fs/promises');
+const { networkInterfaces } = require('node:os');
+const { isIP } = require('node:net');
 const {
   createCipheriv,
   createDecipheriv,
   createHash,
-  createHmac,
   randomBytes,
   randomUUID,
   scryptSync,
@@ -39,12 +40,7 @@ const MOBILE_IMAGE_MIN_OPTIMIZE_BYTES = 256 * 1024;
 const MOBILE_IMAGE_CACHE_MAX_AGE = 30 * 24 * 60 * 60;
 const MOBILE_IMAGE_OPTIMIZABLE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.webp', '.bmp']);
 const MOBILE_UNLOCK_SESSION_MAX_AGE = 30 * 60 * 1000;
-const MOBILE_SERVER_HOST = '127.0.0.1';
 const MOBILE_SERVER_PORT = 39271;
-const NATAPP_WEB_INTERFACE_URL = 'http://127.0.0.1:4040/api/tunnels';
-const NATAPP_CHANGE_CHECK_INTERVAL = 60 * 60 * 1000;
-const NATAPP_RETRY_INTERVAL = 5 * 60 * 1000;
-const NATAPP_REQUEST_TIMEOUT = 15 * 1000;
 const APP_ICON_PATH = path.join(__dirname, 'assets', 'tray.png');
 
 let mainWindow;
@@ -55,7 +51,6 @@ let folders = [];
 let pdfFiles = [];
 let resourceFiles = [];
 let reminderTimer;
-let natappChangeTimer;
 let pdfReloadTimer;
 let pdfWatcher;
 let noteReloadTimer;
@@ -70,12 +65,6 @@ let internalNoteWrites = new Map();
 let dailyReviewEnabled = true;
 let dailyReviewSelection = { date: null, entryKey: null };
 let mobileAccessToken = null;
-let dingtalkRobotWebhook = '';
-let dingtalkRobotSecret = '';
-let lastNatappPublicUrl = '';
-let lastNatappCheckAt = '';
-let lastNatappPushAt = '';
-let lastNatappCheckError = '';
 const unlockedFolderIds = new Set();
 const mobileUnlockSessions = new Map();
 
@@ -150,18 +139,6 @@ function createTray() {
     {
       label: '显示 Notice Note',
       click: showMainWindow
-    },
-    {
-      label: '复制手机访问地址',
-      click: () => {
-        clipboard.writeText(getMobileAccessUrl());
-      }
-    },
-    {
-      label: '复制手机访问令牌',
-      click: () => {
-        clipboard.writeText(mobileAccessToken || '');
-      }
     },
     {
       type: 'separator'
@@ -517,35 +494,11 @@ async function loadConfig() {
     mobileAccessToken = typeof config.mobileAccessToken === 'string' && config.mobileAccessToken
       ? config.mobileAccessToken
       : createMobileAccessToken();
-    dingtalkRobotWebhook = typeof config.dingtalkRobotWebhook === 'string'
-      ? config.dingtalkRobotWebhook.trim()
-      : '';
-    dingtalkRobotSecret = typeof config.dingtalkRobotSecret === 'string'
-      ? config.dingtalkRobotSecret.trim()
-      : '';
-    lastNatappPublicUrl = typeof config.lastNatappPublicUrl === 'string'
-      ? config.lastNatappPublicUrl.trim()
-      : '';
-    lastNatappCheckAt = typeof config.lastNatappCheckAt === 'string'
-      ? config.lastNatappCheckAt
-      : '';
-    lastNatappPushAt = typeof config.lastNatappPushAt === 'string'
-      ? config.lastNatappPushAt
-      : '';
-    lastNatappCheckError = typeof config.lastNatappCheckError === 'string'
-      ? config.lastNatappCheckError
-      : '';
   } catch (error) {
     notesPath = getDefaultNotesPath();
     dailyReviewEnabled = true;
     dailyReviewSelection = { date: null, entryKey: null };
     mobileAccessToken = createMobileAccessToken();
-    dingtalkRobotWebhook = '';
-    dingtalkRobotSecret = '';
-    lastNatappPublicUrl = '';
-    lastNatappCheckAt = '';
-    lastNatappPushAt = '';
-    lastNatappCheckError = '';
   }
 }
 
@@ -555,13 +508,7 @@ async function saveConfig() {
     notesPath: getNotesPath(),
     dailyReviewEnabled,
     dailyReviewSelection,
-    mobileAccessToken,
-    dingtalkRobotWebhook,
-    dingtalkRobotSecret,
-    lastNatappPublicUrl,
-    lastNatappCheckAt,
-    lastNatappPushAt,
-    lastNatappCheckError
+    mobileAccessToken
   }, null, 2), 'utf8');
 }
 
@@ -619,13 +566,7 @@ function getAppSettings() {
   const selectedFile = resourceFiles.find((file) => file.isDailyReview);
   return {
     dailyReviewEnabled,
-    dailyReviewTitle: selectedNote?.title || selectedFile?.name || null,
-    dingtalkRobotWebhook,
-    dingtalkRobotConfigured: isDingtalkRobotConfigured(),
-    lastNatappPublicUrl: lastNatappPublicUrl || null,
-    lastNatappCheckAt: lastNatappCheckAt || null,
-    lastNatappPushAt: lastNatappPushAt || null,
-    lastNatappCheckError: lastNatappCheckError || null
+    dailyReviewTitle: selectedNote?.title || selectedFile?.name || null
   };
 }
 
@@ -634,96 +575,31 @@ function getMobileStaticDir() {
 }
 
 function getMobileAccessUrl() {
-  return `http://${MOBILE_SERVER_HOST}:${MOBILE_SERVER_PORT}/?token=${encodeURIComponent(mobileAccessToken)}`;
+  const host = getEasyTierIpv4Address() || '127.0.0.1';
+  return `http://${host}:${MOBILE_SERVER_PORT}/?token=${encodeURIComponent(mobileAccessToken)}`;
 }
 
-async function readNatappPublicUrl() {
-  try {
-    const response = await fetch(NATAPP_WEB_INTERFACE_URL, {
-      signal: AbortSignal.timeout(NATAPP_REQUEST_TIMEOUT)
-    });
-    if (!response.ok) {
-      throw new Error(`NATAPP WebInterface 返回 ${response.status}`);
+function getMobileListenHost() {
+  return String(process.env.NOTICE_NOTE_MOBILE_HOST || '').trim()
+    || getEasyTierIpv4Address()
+    || '127.0.0.1';
+}
+
+function getEasyTierIpv4Address() {
+  const configuredAddress = String(process.env.NOTICE_NOTE_EASYTIER_IP || '').trim();
+  if (configuredAddress) {
+    return isIP(configuredAddress) === 4 ? configuredAddress : null;
+  }
+  const interfaces = networkInterfaces();
+  for (const [name, addresses] of Object.entries(interfaces)) {
+    if (!/easytier|^et(?:[_-]|$)/i.test(name)) {
+      continue;
     }
-    const raw = await response.text();
-    return parseNatappPublicUrl(raw);
-  } catch (error) {
-    console.warn('未读取到 NATAPP 当前域名，将使用本地地址生成二维码。');
-    return null;
-  }
-}
-
-function normalizeNatappTunnel(input = {}) {
-  const publicUrl = input.public_url
-    || input.PublicUrl
-    || input.publicUrl
-    || input.ConnCtx?.Tunnel?.PublicUrl
-    || '';
-  const localAddr = input.config?.addr
-    || input.Config?.Addr
-    || input.local_addr
-    || input.LocalAddr
-    || input.LocalAddress
-    || input.ConnCtx?.Tunnel?.LocalAddr
-    || '';
-  return {
-    publicUrl: String(publicUrl || '').replace(/\/+$/, ''),
-    localAddr: String(localAddr || '')
-  };
-}
-
-function findCurrentNatappUrl(payload) {
-  const tunnelGroups = [
-    payload?.Txns,
-    payload?.tunnels,
-    payload?.Tunnels,
-    payload?.Tunnels?.Tunnels,
-    payload?.tunnels?.tunnels,
-    payload?.UiState?.Tunnels,
-    payload?.uiState?.tunnels
-  ].filter(Array.isArray);
-  const tunnels = tunnelGroups.flat().map(normalizeNatappTunnel);
-  const targetLocalAddr = `${MOBILE_SERVER_HOST}:${MOBILE_SERVER_PORT}`;
-  const matchedTunnels = tunnels.filter((item) => {
-    return item.publicUrl && item.localAddr === targetLocalAddr;
-  });
-  const matchedTunnel = matchedTunnels.find((item) => item.publicUrl.startsWith('https://'))
-    || matchedTunnels[0]
-    || tunnels.find((item) => item.publicUrl.startsWith('https://'))
-    || tunnels.find((item) => item.publicUrl);
-  return matchedTunnel?.publicUrl || null;
-}
-
-function parseNatappPublicUrl(raw) {
-  const text = String(raw || '');
-  const trimmed = text.trim();
-  if (!trimmed) {
-    return null;
-  }
-
-  if (!trimmed.startsWith('<')) {
-    return findCurrentNatappUrl(JSON.parse(trimmed));
-  }
-
-  const dataMatch = text.match(/window\.data\s*=\s*JSON\.parse\("([\s\S]*?)"\);/);
-  if (dataMatch) {
-    const payload = JSON.parse(JSON.parse(`"${dataMatch[1]}"`));
-    const publicUrl = findCurrentNatappUrl(payload);
-    if (publicUrl) {
-      return publicUrl;
+    const address = addresses.find((item) => item.family === 'IPv4' && !item.internal);
+    if (address) {
+      return address.address;
     }
   }
-
-  const tunnelUrlMatch = text.match(/<a[^>]+href=["'](https?:\/\/[^"']+natapp[^"']*)["'][^>]*>\s*\1\s*<\/a>/i);
-  if (tunnelUrlMatch) {
-    return tunnelUrlMatch[1].replace(/\/+$/, '');
-  }
-
-  const plainUrlMatch = text.match(/https?:\/\/[a-z0-9.-]*natapp(?:free)?\.cc/i);
-  if (plainUrlMatch) {
-    return plainUrlMatch[0].replace(/\/+$/, '');
-  }
-
   return null;
 }
 
@@ -738,129 +614,12 @@ function buildMobilePairingUrl(serverUrl) {
   return url.toString();
 }
 
-function isDingtalkRobotConfigured() {
-  return Boolean(dingtalkRobotWebhook && dingtalkRobotSecret);
-}
-
-function buildSignedDingtalkWebhook() {
-  const timestamp = Date.now();
-  const stringToSign = `${timestamp}\n${dingtalkRobotSecret}`;
-  const sign = createHmac('sha256', dingtalkRobotSecret)
-    .update(stringToSign, 'utf8')
-    .digest('base64');
-  const url = new URL(dingtalkRobotWebhook);
-  url.searchParams.set('timestamp', String(timestamp));
-  url.searchParams.set('sign', sign);
-  return url.toString();
-}
-
-function formatNatappChangeTime(value = new Date()) {
-  return new Intl.DateTimeFormat('zh-CN', {
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-    hour12: false
-  }).format(value);
-}
-
-async function sendNatappAddressToDingtalk(publicUrl, isTest = false) {
-  const pairingUrl = buildMobilePairingUrl(publicUrl);
-  const markdown = [
-    isTest ? '### Notice Note NATAPP 钉钉通知测试' : '### Notice Note NATAPP 地址通知',
-    `- 当前地址：${publicUrl}`,
-    `- 检测时间：${formatNatappChangeTime()}`,
-    `- 本地服务：${MOBILE_SERVER_HOST}:${MOBILE_SERVER_PORT}`,
-    `- 服务地址：${publicUrl}`,
-    `- 访问令牌：${mobileAccessToken}`,
-    `- 手机访问：${pairingUrl}`
-  ].join('\n');
-  const response = await fetch(buildSignedDingtalkWebhook(), {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json; charset=utf-8'
-    },
-    body: JSON.stringify({
-      msgtype: 'markdown',
-      markdown: {
-        title: isTest ? 'Notice Note NATAPP 钉钉通知测试' : 'Notice Note NATAPP 地址通知',
-        text: markdown
-      }
-    })
-  });
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok || payload.errcode !== 0) {
-    throw new Error(payload.errmsg || `钉钉机器人返回 ${response.status}`);
-  }
-}
-
-async function checkNatappAddressChange() {
-  if (!isDingtalkRobotConfigured()) {
-    return;
-  }
-
-  lastNatappCheckAt = new Date().toISOString();
-  const currentNatappUrl = await readNatappPublicUrl();
-  if (!currentNatappUrl) {
-    throw new Error('未读取到 NATAPP 当前公网地址');
-  }
-
-  await sendNatappAddressToDingtalk(currentNatappUrl);
-  lastNatappPublicUrl = currentNatappUrl;
-  lastNatappPushAt = new Date().toISOString();
-  lastNatappCheckError = '';
-  await saveConfig();
-}
-
-async function recordNatappCheckFailure(error) {
-  lastNatappCheckAt = new Date().toISOString();
-  lastNatappCheckError = String(error?.message || 'NATAPP 地址检查失败');
-  await saveConfig();
-}
-
-async function testNatappDingtalkNotification() {
-  if (!isDingtalkRobotConfigured()) {
-    throw new Error('请先填写钉钉机器人 Webhook 和签名密钥');
-  }
-  const currentNatappUrl = await readNatappPublicUrl();
-  if (!currentNatappUrl) {
-    throw new Error('未读取到 NATAPP 当前公网地址');
-  }
-  await sendNatappAddressToDingtalk(currentNatappUrl, true);
-  lastNatappCheckAt = new Date().toISOString();
-  lastNatappPushAt = lastNatappCheckAt;
-  lastNatappCheckError = '';
-  lastNatappPublicUrl = currentNatappUrl;
-  await saveConfig();
-  return { publicUrl: currentNatappUrl };
-}
-
-function scheduleNatappAddressCheck(delay = NATAPP_CHANGE_CHECK_INTERVAL) {
-  clearTimeout(natappChangeTimer);
-  if (!isDingtalkRobotConfigured() || isQuitting) {
-    return;
-  }
-  natappChangeTimer = setTimeout(async () => {
-    let nextDelay = NATAPP_CHANGE_CHECK_INTERVAL;
-    try {
-      await checkNatappAddressChange();
-    } catch (error) {
-      nextDelay = NATAPP_RETRY_INTERVAL;
-      console.warn('NATAPP 地址检查失败:', error.message);
-      await recordNatappCheckFailure(error).catch((saveError) => {
-        console.warn('保存 NATAPP 地址检查状态失败:', saveError.message);
-      });
-    } finally {
-      scheduleNatappAddressCheck(nextDelay);
-    }
-  }, delay);
-}
-
 async function getMobilePairingInfo() {
-  const publicUrl = await readNatappPublicUrl();
-  const serverUrl = publicUrl || `http://${MOBILE_SERVER_HOST}:${MOBILE_SERVER_PORT}`;
+  const easyTierAddress = getEasyTierIpv4Address();
+  if (!easyTierAddress) {
+    throw new Error('未检测到 EasyTier IPv4 地址，请确认电脑和手机已加入同一个 EasyTier 网络');
+  }
+  const serverUrl = `http://${easyTierAddress}:${MOBILE_SERVER_PORT}`;
   const pairingUrl = buildMobilePairingUrl(serverUrl);
   const qrDataUrl = await QRCode.toDataURL(pairingUrl, {
     errorCorrectionLevel: 'M',
@@ -875,10 +634,8 @@ async function getMobilePairingInfo() {
     serverUrl,
     pairingUrl,
     qrDataUrl,
-    fromNatapp: Boolean(publicUrl),
-    message: publicUrl
-      ? '已读取 NATAPP 当前域名'
-      : '未读取到 NATAPP 域名，当前二维码使用本地地址；请确认 NATAPP WebInterface 已开启'
+    easyTierAddress,
+    message: `EasyTier 地址：${easyTierAddress}`
   };
 }
 
@@ -1606,9 +1363,9 @@ function startMobileServer() {
     console.error('启动移动端服务失败:', error);
   });
 
-  mobileServer.listen(MOBILE_SERVER_PORT, MOBILE_SERVER_HOST, () => {
-    console.log(`移动端本地访问地址: ${getMobileAccessUrl()}`);
-    console.log(`NATAPP 请反代到: ${MOBILE_SERVER_HOST}:${MOBILE_SERVER_PORT}`);
+  mobileServer.listen(MOBILE_SERVER_PORT, getMobileListenHost(), () => {
+    const publicHost = getEasyTierIpv4Address() || getMobileListenHost();
+    console.log(`移动端 EasyTier 访问地址: http://${publicHost}:${MOBILE_SERVER_PORT}`);
   });
 }
 
@@ -1630,31 +1387,7 @@ async function updateAppSettings(_event, input = {}) {
     updateDailyReviewSelection();
   }
 
-  if (input.clearDingtalkRobot) {
-    dingtalkRobotWebhook = '';
-    dingtalkRobotSecret = '';
-    lastNatappPublicUrl = '';
-  } else {
-    if (Object.hasOwn(input, 'dingtalkRobotWebhook')) {
-      const webhook = String(input.dingtalkRobotWebhook || '').trim();
-      if (webhook) {
-        const webhookUrl = new URL(webhook);
-        if (webhookUrl.protocol !== 'https:') {
-          throw new Error('钉钉机器人 Webhook 必须使用 HTTPS 地址');
-        }
-      }
-      dingtalkRobotWebhook = webhook;
-    }
-    if (Object.hasOwn(input, 'dingtalkRobotSecret')) {
-      const secret = String(input.dingtalkRobotSecret || '').trim();
-      if (secret) {
-        dingtalkRobotSecret = secret;
-      }
-    }
-  }
-
   await saveConfig();
-  scheduleNatappAddressCheck();
   sendNotesChanged();
   sendPdfFilesChanged();
   return getAppSettings();
@@ -3103,6 +2836,7 @@ app.whenReady().then(async () => {
   await loadConfig();
   await saveConfig();
   await loadNotes();
+  startMobileServer();
 
   ipcMain.handle('notes:list', () => getVisibleNotes());
   ipcMain.handle('library:refresh', async () => {
@@ -3234,7 +2968,6 @@ app.whenReady().then(async () => {
   ipcMain.handle('storage:reset', resetNotesPath);
   ipcMain.handle('settings:get', () => getAppSettings());
   ipcMain.handle('settings:update', updateAppSettings);
-  ipcMain.handle('settings:test-dingtalk', testNatappDingtalkNotification);
   ipcMain.handle('mobile:pairing-info', getMobilePairingInfo);
   ipcMain.handle('entries:copy-path', copyLibraryEntryPath);
   ipcMain.handle('entries:show-in-folder', showLibraryEntryInFolder);
@@ -3287,13 +3020,6 @@ app.whenReady().then(async () => {
   createTray();
   watchPdfFiles();
   scheduleReminderCheck();
-  scheduleNatappAddressCheck();
-  checkNatappAddressChange().catch((error) => {
-    console.warn('启动时检查 NATAPP 地址失败:', error.message);
-    recordNatappCheckFailure(error).catch((saveError) => {
-      console.warn('保存 NATAPP 地址检查状态失败:', saveError.message);
-    });
-  });
 
   app.on('activate', () => {
     showMainWindow();
@@ -3311,7 +3037,6 @@ app.on('before-quit', () => {
   clearTimeout(reminderTimer);
   clearTimeout(pdfReloadTimer);
   clearTimeout(noteReloadTimer);
-  clearTimeout(natappChangeTimer);
   pdfWatcher?.close();
   stopMobileServer();
 });

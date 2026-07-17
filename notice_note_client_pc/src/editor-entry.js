@@ -1,7 +1,7 @@
-import { EditorState, RangeSetBuilder } from '@codemirror/state';
+import { EditorState, RangeSetBuilder, StateField } from '@codemirror/state';
 import { EditorView, Decoration, ViewPlugin, WidgetType, keymap, placeholder } from '@codemirror/view';
 import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirror/commands';
-import { markdown } from '@codemirror/lang-markdown';
+import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
 import { syntaxHighlighting, HighlightStyle } from '@codemirror/language';
 import { tags } from '@lezer/highlight';
 import { getDocument, GlobalWorkerOptions, TextLayer } from 'pdfjs-dist';
@@ -110,14 +110,14 @@ function collectFencedCodeBlocks(doc) {
   for (let lineNumber = 1; lineNumber <= doc.lines; lineNumber++) {
     const line = doc.line(lineNumber);
     if (!opening) {
-      const fence = /^```(?:\s*([\w-]+))?\s*$/.exec(line.text);
+      const fence = /^\s{0,3}```(?:\s*([\w-]+))?\s*$/.exec(line.text);
       if (fence) {
         opening = { lineNumber, language: fence[1] || '' };
       }
       continue;
     }
 
-    if (/^```\s*$/.test(line.text)) {
+    if (/^\s{0,3}```\s*$/.test(line.text)) {
       blocks.push({
         startLine: opening.lineNumber,
         endLine: lineNumber,
@@ -128,6 +128,146 @@ function collectFencedCodeBlocks(doc) {
   }
 
   return blocks;
+}
+
+function splitTableRow(text) {
+  const trimmed = text.trim().replace(/^\|/, '').replace(/\|$/, '');
+  const cells = [];
+  let cell = '';
+  let escaped = false;
+
+  for (const char of trimmed) {
+    if (escaped) {
+      cell += char === '|' ? '|' : `\\${char}`;
+      escaped = false;
+    } else if (char === '\\') {
+      escaped = true;
+    } else if (char === '|') {
+      cells.push(cell.trim());
+      cell = '';
+    } else {
+      cell += char;
+    }
+  }
+  if (escaped) {
+    cell += '\\';
+  }
+  cells.push(cell.trim());
+  return cells;
+}
+
+function isTableSeparatorLine(text) {
+  const cells = splitTableRow(text);
+  return cells.length > 0 && cells.every((cell) => /^:?-{3,}:?$/.test(cell));
+}
+
+function getTableAlignment(separator) {
+  const value = separator.trim();
+  if (value.startsWith(':') && value.endsWith(':')) {
+    return 'center';
+  }
+  if (value.endsWith(':')) {
+    return 'right';
+  }
+  return 'left';
+}
+
+function getTableSeparator(alignment) {
+  if (alignment === 'center') {
+    return ':---:';
+  }
+  if (alignment === 'right') {
+    return '---:';
+  }
+  return '---';
+}
+
+function escapeTableCell(value) {
+  return String(value || '')
+    .replace(/\r?\n/g, ' ')
+    .replace(/\|/g, '\\|')
+    .trim();
+}
+
+function serializeMarkdownTable(rows, alignments) {
+  const columnCount = Math.max(1, alignments.length, ...rows.map((row) => row.length));
+  const normalizedRows = rows.map((row) => {
+    return Array.from({ length: columnCount }, (_value, index) => escapeTableCell(row[index]));
+  });
+  const header = normalizedRows[0] || Array(columnCount).fill('');
+  const separator = Array.from({ length: columnCount }, (_value, index) => {
+    return getTableSeparator(alignments[index] || 'left');
+  });
+  const body = normalizedRows.slice(1);
+  return [header, separator, ...body]
+    .map((row) => `| ${row.join(' | ')} |`)
+    .join('\n');
+}
+
+function collectMarkdownTables(doc) {
+  const tables = [];
+  let lineNumber = 1;
+
+  while (lineNumber < doc.lines) {
+    const headerLine = doc.line(lineNumber);
+    const separatorLine = doc.line(lineNumber + 1);
+    const headerCells = splitTableRow(headerLine.text);
+    if (!headerLine.text.includes('|') || headerCells.length < 2 || !isTableSeparatorLine(separatorLine.text)) {
+      lineNumber += 1;
+      continue;
+    }
+
+    const separatorCells = splitTableRow(separatorLine.text);
+    const rows = [headerCells];
+    let endLine = lineNumber + 1;
+    while (endLine < doc.lines) {
+      const nextLine = doc.line(endLine + 1);
+      if (!nextLine.text.includes('|') || /^\s*$/.test(nextLine.text)) {
+        break;
+      }
+      rows.push(splitTableRow(nextLine.text));
+      endLine += 1;
+    }
+
+    tables.push({
+      startLine: lineNumber,
+      endLine,
+      rows,
+      alignments: separatorCells.map(getTableAlignment)
+    });
+    lineNumber = endLine + 1;
+  }
+
+  return tables;
+}
+
+function buildTableDecorations(state, options = {}) {
+  if (options.isPlainText?.()) {
+    return Decoration.none;
+  }
+
+  const decorations = [];
+  for (const table of collectMarkdownTables(state.doc)) {
+    const from = state.doc.line(table.startLine).from;
+    const to = state.doc.line(table.endLine).to;
+    decorations.push(Decoration.replace({
+      block: true,
+      widget: new MarkdownTableWidget(table.rows, table.alignments, from, to)
+    }).range(from, to));
+  }
+  return Decoration.set(decorations, true);
+}
+
+function createTablePreviewField(options) {
+  return StateField.define({
+    create(state) {
+      return buildTableDecorations(state, options);
+    },
+    update(_decorations, transaction) {
+      return buildTableDecorations(transaction.state, options);
+    },
+    provide: (field) => EditorView.decorations.from(field)
+  });
 }
 
 function selectCurrentCodeBlock(view, options = {}) {
@@ -379,6 +519,470 @@ class CodeFenceWidget extends WidgetType {
   }
 }
 
+class MarkdownTableWidget extends WidgetType {
+  constructor(rows, alignments, sourceFrom, sourceTo) {
+    super();
+    this.rows = rows;
+    this.alignments = alignments;
+    this.sourceFrom = sourceFrom;
+    this.sourceTo = sourceTo;
+    this.openMenu = null;
+  }
+
+  eq(other) {
+    return other.sourceFrom === this.sourceFrom
+      && other.sourceTo === this.sourceTo
+      && JSON.stringify(other.rows) === JSON.stringify(this.rows)
+      && JSON.stringify(other.alignments) === JSON.stringify(this.alignments);
+  }
+
+  updateTable(view, rows, alignments = this.alignments) {
+    view.dispatch({
+      changes: {
+        from: this.sourceFrom,
+        to: this.sourceTo,
+        insert: serializeMarkdownTable(rows, alignments)
+      }
+    });
+  }
+
+  restoreCellFocus(view, rowIndex, columnIndex) {
+    requestAnimationFrame(() => {
+      const wrapper = [...view.dom.querySelectorAll('.cm-markdown-table-wrap')]
+        .find((item) => Number(item.dataset.tableFrom) === this.sourceFrom);
+      const content = wrapper?.querySelector(
+        `.cm-table-cell-content[data-row-index="${rowIndex}"][data-column-index="${columnIndex}"]`
+      );
+      content?.focus();
+    });
+  }
+
+  closeColumnMenu() {
+    this.openMenu?.remove();
+    this.openMenu = null;
+  }
+
+  runColumnAction(view, columnIndex, action) {
+    const rows = this.rows.map((row) => [...row]);
+    const columnCount = Math.max(this.alignments.length, ...rows.map((row) => row.length));
+    rows.forEach((row) => {
+      while (row.length < columnCount) {
+        row.push('');
+      }
+    });
+    const alignments = Array.from({ length: columnCount }, (_value, index) => {
+      return this.alignments[index] || 'left';
+    });
+
+    if (action === 'sort-asc' || action === 'sort-desc') {
+      const direction = action === 'sort-asc' ? 1 : -1;
+      const bodyRows = rows.slice(1).sort((left, right) => {
+        return direction * String(left[columnIndex] || '').localeCompare(
+          String(right[columnIndex] || ''),
+          'zh-CN',
+          { numeric: true, sensitivity: 'base' }
+        );
+      });
+      this.updateTable(view, [rows[0], ...bodyRows], alignments);
+      return;
+    }
+
+    if (action === 'insert-left' || action === 'insert-right') {
+      const insertIndex = columnIndex + (action === 'insert-right' ? 1 : 0);
+      rows.forEach((row) => row.splice(insertIndex, 0, ''));
+      alignments.splice(insertIndex, 0, 'left');
+      this.updateTable(view, rows, alignments);
+      return;
+    }
+
+    if (action === 'move-left' || action === 'move-right') {
+      const targetIndex = columnIndex + (action === 'move-right' ? 1 : -1);
+      if (targetIndex < 0 || targetIndex >= columnCount) {
+        return;
+      }
+      rows.forEach((row) => {
+        [row[columnIndex], row[targetIndex]] = [row[targetIndex], row[columnIndex]];
+      });
+      [alignments[columnIndex], alignments[targetIndex]] = [alignments[targetIndex], alignments[columnIndex]];
+      this.updateTable(view, rows, alignments);
+      return;
+    }
+
+    if (action.startsWith('align-')) {
+      alignments[columnIndex] = action.slice('align-'.length);
+      this.updateTable(view, rows, alignments);
+      return;
+    }
+
+    if (action === 'copy') {
+      rows.forEach((row) => row.splice(columnIndex + 1, 0, row[columnIndex]));
+      alignments.splice(columnIndex + 1, 0, alignments[columnIndex]);
+      this.updateTable(view, rows, alignments);
+      return;
+    }
+
+    if (action === 'delete' && columnCount > 1) {
+      rows.forEach((row) => row.splice(columnIndex, 1));
+      alignments.splice(columnIndex, 1);
+      this.updateTable(view, rows, alignments);
+    }
+  }
+
+  runRowAction(view, rowIndex, action) {
+    const rows = this.rows.map((row) => [...row]);
+    const columnCount = Math.max(this.alignments.length, ...rows.map((row) => row.length));
+    rows.forEach((row) => {
+      while (row.length < columnCount) {
+        row.push('');
+      }
+    });
+
+    if (action === 'insert-above' || action === 'insert-below') {
+      const baseIndex = rowIndex === 0 ? 1 : rowIndex;
+      const insertIndex = baseIndex + (action === 'insert-below' && rowIndex > 0 ? 1 : 0);
+      rows.splice(insertIndex, 0, Array(columnCount).fill(''));
+      this.updateTable(view, rows);
+      return;
+    }
+
+    if (action === 'move-up' || action === 'move-down') {
+      const targetIndex = rowIndex + (action === 'move-down' ? 1 : -1);
+      if (rowIndex <= 0 || targetIndex <= 0 || targetIndex >= rows.length) {
+        return;
+      }
+      [rows[rowIndex], rows[targetIndex]] = [rows[targetIndex], rows[rowIndex]];
+      this.updateTable(view, rows);
+      return;
+    }
+
+    if (action === 'copy' && rowIndex > 0) {
+      rows.splice(rowIndex + 1, 0, [...rows[rowIndex]]);
+      this.updateTable(view, rows);
+      return;
+    }
+
+    if (action === 'delete' && rowIndex > 0) {
+      rows.splice(rowIndex, 1);
+      this.updateTable(view, rows);
+    }
+  }
+
+  mountMenu(menu, left, top) {
+    document.body.append(menu);
+    this.openMenu = menu;
+    const menuRect = menu.getBoundingClientRect();
+    menu.style.left = `${Math.max(8, Math.min(left, window.innerWidth - menuRect.width - 8))}px`;
+    menu.style.top = `${Math.max(8, Math.min(top, window.innerHeight - menuRect.height - 8))}px`;
+    setTimeout(() => {
+      document.addEventListener('pointerdown', (event) => {
+        if (!menu.contains(event.target)) {
+          this.closeColumnMenu();
+        }
+      }, { once: true });
+    });
+  }
+
+  showColumnMenu(view, button, columnIndex) {
+    this.closeColumnMenu();
+    const columnCount = Math.max(this.alignments.length, ...this.rows.map((row) => row.length));
+    const menu = document.createElement('div');
+    menu.className = 'cm-table-column-menu';
+    const groups = [
+      [
+        ['A↓', '按列升序 (A-Z)', 'sort-asc'],
+        ['Z↑', '按列降序 (Z-A)', 'sort-desc']
+      ],
+      [
+        ['▏←', '在左侧新增列', 'insert-left'],
+        ['→▕', '在右侧新增列', 'insert-right']
+      ],
+      [
+        ...(columnIndex > 0 ? [['←', '向左移动列', 'move-left']] : []),
+        ...(columnIndex < columnCount - 1 ? [['→', '向右移动列', 'move-right']] : [])
+      ],
+      [
+        ['☰', '左对齐', 'align-left'],
+        ['≡', '居中对齐', 'align-center'],
+        ['☷', '右对齐', 'align-right']
+      ],
+      [
+        ['▣', '复制列', 'copy'],
+        ['⌫', '删除列', 'delete']
+      ]
+    ];
+
+    groups.filter((group) => group.length > 0).forEach((group, groupIndex) => {
+      if (groupIndex > 0) {
+        menu.append(document.createElement('hr'));
+      }
+      group.forEach(([icon, label, action]) => {
+        const item = document.createElement('button');
+        item.type = 'button';
+        item.className = 'cm-table-column-menu-item';
+        item.disabled = action === 'delete' && columnCount <= 1;
+        const iconElement = document.createElement('span');
+        iconElement.className = 'cm-table-column-menu-icon';
+        iconElement.textContent = icon;
+        const labelElement = document.createElement('span');
+        labelElement.textContent = label;
+        item.append(iconElement, labelElement);
+        item.addEventListener('mousedown', (event) => {
+          event.preventDefault();
+        });
+        item.addEventListener('click', (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          this.closeColumnMenu();
+          this.runColumnAction(view, columnIndex, action);
+        });
+        menu.append(item);
+      });
+    });
+
+    const rect = button.getBoundingClientRect();
+    this.mountMenu(menu, rect.left, rect.bottom + 4);
+  }
+
+  showRowMenu(view, button, rowIndex) {
+    this.closeColumnMenu();
+    const menu = document.createElement('div');
+    menu.className = 'cm-table-column-menu cm-table-row-menu';
+    const groups = [
+      [
+        ['▤', '在上方新增行', 'insert-above', false],
+        ['▥', '在下方新增行', 'insert-below', false]
+      ],
+      [
+        ['↑', '向上移动行', 'move-up', rowIndex <= 1],
+        ['↓', '向下移动行', 'move-down', rowIndex >= this.rows.length - 1]
+      ],
+      [
+        ['▣', '复制行', 'copy', false],
+        ['⌫', '删除行', 'delete', false]
+      ]
+    ];
+
+    groups.forEach((group, groupIndex) => {
+      if (groupIndex > 0) {
+        menu.append(document.createElement('hr'));
+      }
+      group.forEach(([icon, label, action, disabled]) => {
+        const item = document.createElement('button');
+        item.type = 'button';
+        item.className = 'cm-table-column-menu-item';
+        item.disabled = disabled;
+        const iconElement = document.createElement('span');
+        iconElement.className = 'cm-table-column-menu-icon';
+        iconElement.textContent = icon;
+        const labelElement = document.createElement('span');
+        labelElement.textContent = label;
+        item.append(iconElement, labelElement);
+        item.addEventListener('mousedown', (event) => event.preventDefault());
+        item.addEventListener('click', (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          this.closeColumnMenu();
+          this.runRowAction(view, rowIndex, action);
+        });
+        menu.append(item);
+      });
+    });
+
+    const rect = button.getBoundingClientRect();
+    this.mountMenu(menu, rect.right + 4, rect.top);
+  }
+
+  showCellMenu(view, event, rowIndex, columnIndex) {
+    this.closeColumnMenu();
+    const menu = document.createElement('div');
+    menu.className = 'cm-table-column-menu cm-table-cell-menu';
+    if (event.clientX > window.innerWidth - 420) {
+      menu.classList.add('opens-left');
+    }
+    const columnCount = Math.max(this.alignments.length, ...this.rows.map((row) => row.length));
+
+    const appendAction = (container, icon, label, action, type, disabled = false) => {
+      const item = document.createElement('button');
+      item.type = 'button';
+      item.className = 'cm-table-column-menu-item';
+      item.disabled = disabled;
+      const iconElement = document.createElement('span');
+      iconElement.className = 'cm-table-column-menu-icon';
+      iconElement.textContent = icon;
+      const labelElement = document.createElement('span');
+      labelElement.textContent = label;
+      item.append(iconElement, labelElement);
+      item.addEventListener('mousedown', (mouseEvent) => mouseEvent.preventDefault());
+      item.addEventListener('click', (mouseEvent) => {
+        mouseEvent.preventDefault();
+        mouseEvent.stopPropagation();
+        this.closeColumnMenu();
+        if (type === 'row') {
+          this.runRowAction(view, rowIndex, action);
+        } else {
+          this.runColumnAction(view, columnIndex, action);
+        }
+      });
+      container.append(item);
+    };
+
+    const appendSubmenu = (icon, label, actions) => {
+      const host = document.createElement('div');
+      host.className = 'cm-table-submenu-host';
+      const trigger = document.createElement('button');
+      trigger.type = 'button';
+      trigger.className = 'cm-table-column-menu-item cm-table-submenu-trigger';
+      const iconElement = document.createElement('span');
+      iconElement.className = 'cm-table-column-menu-icon';
+      iconElement.textContent = icon;
+      const labelElement = document.createElement('span');
+      labelElement.textContent = label;
+      const arrow = document.createElement('span');
+      arrow.textContent = '›';
+      trigger.append(iconElement, labelElement, arrow);
+      const submenu = document.createElement('div');
+      submenu.className = 'cm-table-column-menu cm-table-submenu';
+      actions.forEach((action) => appendAction(submenu, ...action));
+      host.append(trigger, submenu);
+      menu.append(host);
+    };
+
+    appendSubmenu('▦', '行', [
+      ['↑', '在上方新增行', 'insert-above', 'row'],
+      ['↓', '在下方新增行', 'insert-below', 'row'],
+      ['⇡', '向上移动行', 'move-up', 'row', rowIndex <= 1],
+      ['⇣', '向下移动行', 'move-down', 'row', rowIndex === 0 || rowIndex >= this.rows.length - 1],
+      ['▣', '复制行', 'copy', 'row', rowIndex === 0],
+      ['⌫', '删除行', 'delete', 'row', rowIndex === 0]
+    ]);
+    appendSubmenu('▥', '列', [
+      ['▏←', '在左侧新增列', 'insert-left', 'column'],
+      ['→▕', '在右侧新增列', 'insert-right', 'column'],
+      ['←', '向左移动列', 'move-left', 'column', columnIndex === 0],
+      ['→', '向右移动列', 'move-right', 'column', columnIndex >= columnCount - 1],
+      ['☰', '左对齐', 'align-left', 'column'],
+      ['≡', '居中对齐', 'align-center', 'column'],
+      ['☷', '右对齐', 'align-right', 'column'],
+      ['▣', '复制列', 'copy', 'column'],
+      ['⌫', '删除列', 'delete', 'column', columnCount <= 1]
+    ]);
+    menu.append(document.createElement('hr'));
+    appendAction(menu, 'A↓', '按列升序 (A-Z)', 'sort-asc', 'column');
+    appendAction(menu, 'Z↑', '按列降序 (Z-A)', 'sort-desc', 'column');
+    this.mountMenu(menu, event.clientX, event.clientY);
+  }
+
+  toDOM(view) {
+    const wrapper = document.createElement('div');
+    wrapper.className = 'cm-markdown-table-wrap';
+    wrapper.dataset.tableFrom = String(this.sourceFrom);
+
+    const table = document.createElement('table');
+    table.className = 'cm-markdown-table';
+    this.rows.forEach((row, rowIndex) => {
+      const tableRow = document.createElement('tr');
+      const columnCount = Math.max(this.alignments.length, ...this.rows.map((item) => item.length));
+      Array.from({ length: columnCount }, (_value, columnIndex) => row[columnIndex] || '').forEach((cell, columnIndex) => {
+        const tableCell = document.createElement(rowIndex === 0 ? 'th' : 'td');
+        tableCell.style.textAlign = this.alignments[columnIndex] || 'left';
+        const content = document.createElement('span');
+        content.className = 'cm-table-cell-content';
+        content.contentEditable = 'plaintext-only';
+        content.spellcheck = false;
+        content.textContent = cell;
+        content.dataset.rowIndex = String(rowIndex);
+        content.dataset.columnIndex = String(columnIndex);
+        content.addEventListener('input', () => {
+          while (this.rows[rowIndex].length <= columnIndex) {
+            this.rows[rowIndex].push('');
+          }
+          this.rows[rowIndex][columnIndex] = content.textContent;
+        });
+        content.addEventListener('keydown', (event) => {
+          if (event.key === 'Enter') {
+            event.preventDefault();
+            content.blur();
+          }
+        });
+        content.addEventListener('blur', (event) => {
+          const nextValue = content.textContent.trim();
+          if (nextValue === cell) {
+            return;
+          }
+          const nextCell = event.relatedTarget?.closest?.('.cm-table-cell-content');
+          const nextRowIndex = Number(nextCell?.dataset.rowIndex);
+          const nextColumnIndex = Number(nextCell?.dataset.columnIndex);
+          const shouldRestoreFocus = nextCell?.closest('.cm-markdown-table-wrap') === wrapper;
+          const rows = this.rows.map((item) => [...item]);
+          while (rows[rowIndex].length <= columnIndex) {
+            rows[rowIndex].push('');
+          }
+          rows[rowIndex][columnIndex] = nextValue;
+          this.updateTable(view, rows);
+          if (shouldRestoreFocus) {
+            this.restoreCellFocus(view, nextRowIndex, nextColumnIndex);
+          }
+        });
+        tableCell.append(content);
+        if (rowIndex === 0) {
+          const menuButton = document.createElement('button');
+          menuButton.type = 'button';
+          menuButton.className = 'cm-table-column-menu-button';
+          menuButton.textContent = '⋮';
+          menuButton.title = '列操作';
+          menuButton.setAttribute('aria-label', `第 ${columnIndex + 1} 列操作`);
+          menuButton.addEventListener('mousedown', (event) => {
+            event.preventDefault();
+          });
+          menuButton.addEventListener('click', (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            this.showColumnMenu(view, menuButton, columnIndex);
+          });
+          menuButton.addEventListener('contextmenu', (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            this.showColumnMenu(view, menuButton, columnIndex);
+          });
+          tableCell.append(menuButton);
+        }
+        if (columnIndex === 0 && rowIndex > 0) {
+          const rowMenuButton = document.createElement('button');
+          rowMenuButton.type = 'button';
+          rowMenuButton.className = 'cm-table-row-menu-button';
+          rowMenuButton.textContent = '⋮';
+          rowMenuButton.title = '行操作';
+          rowMenuButton.setAttribute('aria-label', `第 ${rowIndex} 行操作`);
+          rowMenuButton.addEventListener('mousedown', (event) => event.preventDefault());
+          rowMenuButton.addEventListener('click', (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            this.showRowMenu(view, rowMenuButton, rowIndex);
+          });
+          rowMenuButton.addEventListener('contextmenu', (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            this.showRowMenu(view, rowMenuButton, rowIndex);
+          });
+          tableCell.append(rowMenuButton);
+        }
+        tableCell.addEventListener('contextmenu', (event) => {
+          event.preventDefault();
+          this.showCellMenu(view, event, rowIndex, columnIndex);
+        });
+        tableRow.append(tableCell);
+      });
+      table.append(tableRow);
+    });
+    wrapper.append(table);
+    return wrapper;
+  }
+
+  destroy() {
+    this.closeColumnMenu();
+  }
+}
+
 function createLivePreviewPlugin(options) {
   return ViewPlugin.fromClass(class {
     constructor(view) {
@@ -417,7 +1021,7 @@ function createNoticeNoteEditor(options) {
       doc: options.initialValue || '',
       extensions: [
         history(),
-        markdown(),
+        markdown({ base: markdownLanguage }),
         syntaxHighlighting(markdownHighlight),
         EditorView.domEventHandlers({
           paste: (event, view) => {
@@ -447,6 +1051,7 @@ function createNoticeNoteEditor(options) {
           ...historyKeymap
         ]),
         placeholder(options.placeholder || ''),
+        createTablePreviewField(options),
         createLivePreviewPlugin(options),
         EditorView.lineWrapping,
         EditorView.updateListener.of((update) => {

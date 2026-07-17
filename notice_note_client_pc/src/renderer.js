@@ -35,12 +35,6 @@ const settingsDialog = document.querySelector('#settingsDialog');
 const closeSettingsDialogButton = document.querySelector('#closeSettingsDialogButton');
 const dailyReviewEnabledInput = document.querySelector('#dailyReviewEnabledInput');
 const dailyReviewCurrentTitle = document.querySelector('#dailyReviewCurrentTitle');
-const dingtalkWebhookInput = document.querySelector('#dingtalkWebhookInput');
-const dingtalkSecretInput = document.querySelector('#dingtalkSecretInput');
-const dingtalkNotificationStatus = document.querySelector('#dingtalkNotificationStatus');
-const saveDingtalkConfigButton = document.querySelector('#saveDingtalkConfigButton');
-const clearDingtalkConfigButton = document.querySelector('#clearDingtalkConfigButton');
-const testDingtalkNotificationButton = document.querySelector('#testDingtalkNotificationButton');
 const settingsStoragePath = document.querySelector('#settingsStoragePath');
 const chooseStorageButton = document.querySelector('#chooseStorageButton');
 const resetStorageButton = document.querySelector('#resetStorageButton');
@@ -105,6 +99,13 @@ let markdownEditor = null;
 let isRenderingEditor = false;
 let pdfLoadingTask = null;
 let pdfDocument = null;
+let pdfPreviewKey = null;
+let pdfPreviewReadyKey = null;
+let pdfPreviewPromise = null;
+let pdfOutlineEntries = [];
+let pdfOutlineIndexVersion = 0;
+let pdfOutlineHighlightFrame = null;
+let activePdfOutlineButton = null;
 let pdfZoom = 1;
 let pdfLoadVersion = 0;
 let pdfPageRenderVersion = 0;
@@ -2270,7 +2271,7 @@ function renderStorageInfo() {
 }
 
 async function openMobilePairingDialog() {
-  mobilePairingStatus.textContent = '正在读取 NATAPP 当前域名...';
+  mobilePairingStatus.textContent = '正在读取 EasyTier 网络地址...';
   mobilePairingQr.removeAttribute('src');
   mobilePairingUrl.value = '';
   mobilePairingDialog.showModal();
@@ -2381,7 +2382,6 @@ function renderEditor() {
   pdfViewer.hidden = true;
   fileViewer.hidden = true;
   filePreviewVersion++;
-  destroyPdfPreview();
 
   if (!activeNote) {
     activeNoteId = null;
@@ -2422,9 +2422,23 @@ function destroyPdfPreview() {
   pdfLoadingTask?.destroy();
   pdfLoadingTask = null;
   pdfDocument = null;
+  pdfPreviewKey = null;
+  pdfPreviewReadyKey = null;
+  pdfPreviewPromise = null;
+  pdfOutlineEntries = [];
+  pdfOutlineIndexVersion++;
+  if (pdfOutlineHighlightFrame !== null) {
+    cancelAnimationFrame(pdfOutlineHighlightFrame);
+    pdfOutlineHighlightFrame = null;
+  }
+  activePdfOutlineButton = null;
   pdfPages.innerHTML = '';
   pdfPageCount.textContent = '';
   pdfOutlineList.innerHTML = '';
+}
+
+function getPdfPreviewKey(pdf) {
+  return `${pdf.id}:${pdf.size}:${pdf.updatedAt || ''}`;
 }
 
 function showPdfStatus(message, isError = false) {
@@ -2437,7 +2451,7 @@ function showPdfStatus(message, isError = false) {
 
 async function renderPdfPages() {
   if (!pdfDocument) {
-    return;
+    return false;
   }
 
   const version = ++pdfPageRenderVersion;
@@ -2447,7 +2461,7 @@ async function renderPdfPages() {
 
   for (let pageNumber = 1; pageNumber <= documentToRender.numPages; pageNumber++) {
     if (version !== pdfPageRenderVersion) {
-      return;
+      return false;
     }
 
     const page = await documentToRender.getPage(pageNumber);
@@ -2472,6 +2486,7 @@ async function renderPdfPages() {
     textLayer.className = 'textLayer';
     pageElement.append(canvas, textLayer);
     pdfPages.append(pageElement);
+    schedulePdfOutlineHighlight();
 
     const textContent = await page.getTextContent();
     await page.render({
@@ -2481,7 +2496,7 @@ async function renderPdfPages() {
     }).promise;
 
     if (version !== pdfPageRenderVersion) {
-      return;
+      return false;
     }
 
     const layer = new window.noticeNotePdf.TextLayer({
@@ -2495,15 +2510,17 @@ async function renderPdfPages() {
   if (!viewerSearchBar.hidden) {
     updateViewerSearch();
   }
+  schedulePdfOutlineHighlight();
+  return true;
 }
 
-async function getPdfOutlinePageNumber(item) {
-  if (!pdfDocument || !item.dest) {
+async function getPdfOutlineDestination(item, documentToRead = pdfDocument) {
+  if (!documentToRead || !item.dest) {
     return null;
   }
 
   const destination = typeof item.dest === 'string'
-    ? await pdfDocument.getDestination(item.dest)
+    ? await documentToRead.getDestination(item.dest)
     : item.dest;
   if (!Array.isArray(destination) || destination.length === 0) {
     return null;
@@ -2512,11 +2529,155 @@ async function getPdfOutlinePageNumber(item) {
   const pageRef = destination[0];
   const pageIndex = Number.isInteger(pageRef)
     ? pageRef
-    : await pdfDocument.getPageIndex(pageRef);
-  return pageIndex + 1;
+    : await documentToRead.getPageIndex(pageRef);
+  return {
+    pageNumber: pageIndex + 1,
+    destination
+  };
 }
 
-function createPdfOutlineItems(items) {
+function getPdfDestinationTop(destination) {
+  const destinationType = destination?.[1]?.name;
+  if (destinationType === 'XYZ') {
+    return destination[3];
+  }
+  if (destinationType === 'FitH' || destinationType === 'FitBH') {
+    return destination[2];
+  }
+  if (destinationType === 'FitR') {
+    return destination[5];
+  }
+  return null;
+}
+
+async function getPdfDestinationOffsetRatio(target, documentToRead = pdfDocument) {
+  const destinationTop = getPdfDestinationTop(target?.destination);
+  if (!target?.pageNumber || !documentToRead || !Number.isFinite(destinationTop)) {
+    return 0;
+  }
+
+  const page = await documentToRead.getPage(target.pageNumber);
+  const viewport = page.getViewport({ scale: 1 });
+  const viewportY = viewport.convertToViewportPoint(0, destinationTop)[1];
+  return Math.min(1, Math.max(0, viewportY / viewport.height));
+}
+
+async function scrollToPdfOutlineDestination(target, offsetRatio = null) {
+  if (!target?.pageNumber || !pdfDocument) {
+    return;
+  }
+
+  const documentToRead = pdfDocument;
+  let pageElement = pdfPages.querySelector(`[data-page-number="${target.pageNumber}"]`);
+  if (!pageElement && pdfPreviewPromise) {
+    await pdfPreviewPromise;
+    if (pdfDocument !== documentToRead) {
+      return;
+    }
+    pageElement = pdfPages.querySelector(`[data-page-number="${target.pageNumber}"]`);
+  }
+  if (!pageElement) {
+    return;
+  }
+
+  const normalizedOffset = Number.isFinite(offsetRatio)
+    ? offsetRatio
+    : await getPdfDestinationOffsetRatio(target, documentToRead);
+  const offsetWithinPage = pageElement.clientHeight * normalizedOffset;
+
+  const pagesRect = pdfPages.getBoundingClientRect();
+  const pageRect = pageElement.getBoundingClientRect();
+  const targetTop = pdfPages.scrollTop + pageRect.top - pagesRect.top + offsetWithinPage - 16;
+  pdfPages.scrollTo({
+    top: Math.max(0, targetTop),
+    behavior: 'smooth'
+  });
+}
+
+function setActivePdfOutlineButton(button) {
+  if (activePdfOutlineButton === button) {
+    return;
+  }
+  activePdfOutlineButton?.classList.remove('is-current');
+  activePdfOutlineButton = button || null;
+  activePdfOutlineButton?.classList.add('is-current');
+  if (activePdfOutlineButton && !pdfOutline.hidden) {
+    activePdfOutlineButton.scrollIntoView({ block: 'nearest' });
+  }
+}
+
+function updateActivePdfOutline() {
+  pdfOutlineHighlightFrame = null;
+  const pagesRect = pdfPages.getBoundingClientRect();
+  const readerPosition = pdfPages.scrollTop + Math.min(48, pdfPages.clientHeight * 0.12);
+  const pagePositions = new Map();
+  let activeEntry = null;
+  let activePosition = -Infinity;
+  for (const entry of pdfOutlineEntries) {
+    if (!entry.pageNumber || !Number.isFinite(entry.pageOffsetRatio)) {
+      continue;
+    }
+    let pagePosition = pagePositions.get(entry.pageNumber);
+    if (!pagePosition) {
+      const pageElement = pdfPages.querySelector(`[data-page-number="${entry.pageNumber}"]`);
+      if (!pageElement) {
+        continue;
+      }
+      const pageRect = pageElement.getBoundingClientRect();
+      pagePosition = {
+        top: pdfPages.scrollTop + pageRect.top - pagesRect.top,
+        height: pageElement.clientHeight
+      };
+      pagePositions.set(entry.pageNumber, pagePosition);
+    }
+    const entryPosition = pagePosition.top + (pagePosition.height * entry.pageOffsetRatio);
+    if (entryPosition <= readerPosition && entryPosition >= activePosition) {
+      activeEntry = entry;
+      activePosition = entryPosition;
+    }
+  }
+  if (activeEntry) {
+    setActivePdfOutlineButton(activeEntry.button);
+  }
+}
+
+function schedulePdfOutlineHighlight() {
+  if (pdfOutlineHighlightFrame !== null) {
+    return;
+  }
+  pdfOutlineHighlightFrame = requestAnimationFrame(updateActivePdfOutline);
+}
+
+async function indexPdfOutlineEntries(entries) {
+  const version = ++pdfOutlineIndexVersion;
+  const documentToRead = pdfDocument;
+  let nextIndex = 0;
+  const workerCount = Math.min(8, entries.length);
+  const workers = Array.from({ length: workerCount }, async () => {
+    while (version === pdfOutlineIndexVersion && nextIndex < entries.length) {
+      const entry = entries[nextIndex++];
+      try {
+        const target = await getPdfOutlineDestination(entry.item, documentToRead);
+        entry.pageNumber = target?.pageNumber || null;
+        entry.destination = target?.destination || null;
+        entry.pageOffsetRatio = target
+          ? await getPdfDestinationOffsetRatio(target, documentToRead)
+          : null;
+      } catch (_error) {
+        entry.pageNumber = null;
+        entry.destination = null;
+        entry.pageOffsetRatio = null;
+      }
+      schedulePdfOutlineHighlight();
+    }
+  });
+  await Promise.all(workers);
+  if (version === pdfOutlineIndexVersion) {
+    schedulePdfOutlineHighlight();
+  }
+}
+
+function createPdfOutlineItems(items, entries) {
   const list = document.createElement('ul');
 
   for (const item of items) {
@@ -2531,17 +2692,26 @@ function createPdfOutlineItems(items) {
     if (item.italic) {
       button.classList.add('is-italic');
     }
+    const entry = { item, button, pageNumber: null, destination: null, pageOffsetRatio: null };
+    entries.push(entry);
     button.addEventListener('click', async () => {
-      const pageNumber = await getPdfOutlinePageNumber(item);
-      const page = pageNumber
-        ? pdfPages.querySelector(`[data-page-number="${pageNumber}"]`)
-        : null;
-      page?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      const target = entry.pageNumber && entry.destination
+        ? { pageNumber: entry.pageNumber, destination: entry.destination }
+        : await getPdfOutlineDestination(item);
+      if (target?.pageNumber) {
+        entry.pageNumber = target.pageNumber;
+        entry.destination = target.destination;
+        if (!Number.isFinite(entry.pageOffsetRatio)) {
+          entry.pageOffsetRatio = await getPdfDestinationOffsetRatio(target);
+        }
+        setActivePdfOutlineButton(button);
+      }
+      await scrollToPdfOutlineDestination(target, entry.pageOffsetRatio);
     });
     listItem.append(button);
 
     if (Array.isArray(item.items) && item.items.length > 0) {
-      listItem.append(createPdfOutlineItems(item.items));
+      listItem.append(createPdfOutlineItems(item.items, entries));
     }
     list.append(listItem);
   }
@@ -2551,6 +2721,9 @@ function createPdfOutlineItems(items) {
 
 function renderPdfOutline(items) {
   pdfOutlineList.innerHTML = '';
+  pdfOutlineEntries = [];
+  activePdfOutlineButton = null;
+  pdfOutlineIndexVersion++;
   if (!Array.isArray(items) || items.length === 0) {
     const empty = document.createElement('p');
     empty.className = 'pdf-outline-empty';
@@ -2559,43 +2732,67 @@ function renderPdfOutline(items) {
     return;
   }
 
-  pdfOutlineList.append(createPdfOutlineItems(items));
+  const entries = [];
+  pdfOutlineList.append(createPdfOutlineItems(items, entries));
+  pdfOutlineEntries = entries;
+  indexPdfOutlineEntries(entries).catch(console.error);
 }
 
-async function loadPdfPreview(pdf, initialZoom = 1) {
+function loadPdfPreview(pdf, initialZoom = 1) {
+  const previewKey = getPdfPreviewKey(pdf);
+  if (pdfPreviewKey === previewKey) {
+    return pdfPreviewPromise || Promise.resolve();
+  }
+
   destroyPdfPreview();
+  pdfPreviewKey = previewKey;
   pdfZoom = Math.min(2, Math.max(0.5, Number(initialZoom) || 1));
   pdfZoomValue.textContent = `${Math.round(pdfZoom * 100)}%`;
   pdfZoomOut.disabled = pdfZoom <= 0.5;
   pdfZoomIn.disabled = pdfZoom >= 2;
   pdfOutline.hidden = false;
   pdfOutlineToggle.classList.add('is-active');
+  pdfOutlineList.textContent = '正在读取目录…';
   showPdfStatus('正在加载 PDF…');
   const version = ++pdfLoadVersion;
 
-  try {
-    const bytes = await window.noticeNote.readPdf(pdf.id);
-    if (version !== pdfLoadVersion) {
-      return;
-    }
+  const previewPromise = (async () => {
+    try {
+      const bytes = await window.noticeNote.readPdf(pdf.id);
+      if (version !== pdfLoadVersion) {
+        return;
+      }
 
-    pdfLoadingTask = window.noticeNotePdf.getDocument({ data: new Uint8Array(bytes) });
-    pdfDocument = await pdfLoadingTask.promise;
-    if (version !== pdfLoadVersion) {
-      return;
-    }
+      pdfLoadingTask = window.noticeNotePdf.getDocument({ data: new Uint8Array(bytes) });
+      pdfDocument = await pdfLoadingTask.promise;
+      if (version !== pdfLoadVersion) {
+        return;
+      }
 
-    pdfPageCount.textContent = `${pdfDocument.numPages} 页`;
-    const outline = await pdfDocument.getOutline();
-    await renderPdfPages();
-    if (version === pdfLoadVersion) {
-      renderPdfOutline(outline);
+      pdfPageCount.textContent = `${pdfDocument.numPages} 页`;
+      const outlinePromise = pdfDocument.getOutline().then((outline) => {
+        if (version === pdfLoadVersion) {
+          renderPdfOutline(outline);
+        }
+      });
+      const [, pagesRendered] = await Promise.all([outlinePromise, renderPdfPages()]);
+      if (version === pdfLoadVersion && pagesRendered) {
+        pdfPreviewReadyKey = previewKey;
+      }
+    } catch (error) {
+      if (version === pdfLoadVersion) {
+        pdfPreviewKey = null;
+        pdfPreviewReadyKey = null;
+        showPdfStatus(`PDF 加载失败：${error.message}`, true);
+      }
     }
-  } catch (error) {
-    if (version === pdfLoadVersion) {
-      showPdfStatus(`PDF 加载失败：${error.message}`, true);
+  })();
+  pdfPreviewPromise = previewPromise;
+  return previewPromise.finally(() => {
+    if (pdfPreviewPromise === previewPromise) {
+      pdfPreviewPromise = null;
     }
-  }
+  });
 }
 
 async function changePdfZoom(step, anchor = null) {
@@ -2613,7 +2810,12 @@ async function changePdfZoom(step, anchor = null) {
   pdfZoomValue.textContent = `${Math.round(pdfZoom * 100)}%`;
   pdfZoomOut.disabled = pdfZoom <= 0.5;
   pdfZoomIn.disabled = pdfZoom >= 2;
-  await renderPdfPages();
+  const previewKey = pdfPreviewKey;
+  pdfPreviewReadyKey = null;
+  const pagesRendered = await renderPdfPages();
+  if (pagesRendered && previewKey && pdfPreviewKey === previewKey) {
+    pdfPreviewReadyKey = previewKey;
+  }
 
   if (!pageNumber || pdfZoom !== nextZoom) {
     return;
@@ -2680,8 +2882,18 @@ function renderPdf() {
   const viewState = workspaceTabViewStates.get(tabKey);
   renderNoteList();
   renderWorkspaceTabs();
-  loadPdfPreview(pdf, viewState?.pdfZoom)
-    .then(() => restoreWorkspaceTabViewState(tabKey, pdfPages))
+  const previewKey = getPdfPreviewKey(pdf);
+  const canRestoreImmediately = pdfPreviewReadyKey === previewKey;
+  const previewPromise = loadPdfPreview(pdf, viewState?.pdfZoom);
+  if (canRestoreImmediately) {
+    restoreWorkspaceTabViewState(tabKey, pdfPages);
+  }
+  previewPromise
+    .then(() => {
+      if (!canRestoreImmediately) {
+        restoreWorkspaceTabViewState(tabKey, pdfPages);
+      }
+    })
     .catch((error) => showPdfStatus(`PDF 加载失败：${error.message}`, true));
 }
 
@@ -3001,7 +3213,6 @@ function renderResourceFile() {
     return;
   }
 
-  destroyPdfPreview();
   editorPanel.hidden = true;
   pdfViewer.hidden = true;
   fileViewer.hidden = false;
@@ -3389,21 +3600,6 @@ async function boot() {
 function renderSettings() {
   dailyReviewEnabledInput.checked = appSettings?.dailyReviewEnabled !== false;
   dailyReviewCurrentTitle.textContent = appSettings?.dailyReviewTitle || '今天暂无可回顾文件';
-  dingtalkWebhookInput.value = appSettings?.dingtalkRobotWebhook || '';
-  dingtalkSecretInput.value = '';
-  if (!appSettings?.dingtalkRobotConfigured) {
-    dingtalkNotificationStatus.textContent = '未配置，不会发送通知';
-    dingtalkNotificationStatus.dataset.state = 'inactive';
-  } else if (appSettings.lastNatappCheckError) {
-    dingtalkNotificationStatus.textContent = `上次检查失败：${appSettings.lastNatappCheckError}`;
-    dingtalkNotificationStatus.dataset.state = 'error';
-  } else {
-    const lastPush = appSettings.lastNatappPushAt
-      ? new Date(appSettings.lastNatappPushAt).toLocaleString('zh-CN', { hour12: false })
-      : '尚未推送';
-    dingtalkNotificationStatus.textContent = `已启用，每小时推送一次；上次推送：${lastPush}`;
-    dingtalkNotificationStatus.dataset.state = 'active';
-  }
   renderStorageInfo();
 }
 
@@ -3460,56 +3656,6 @@ dailyReviewEnabledInput.addEventListener('change', () => {
     .catch(console.error)
     .finally(() => {
       dailyReviewEnabledInput.disabled = false;
-    });
-});
-saveDingtalkConfigButton.addEventListener('click', () => {
-  saveDingtalkConfigButton.disabled = true;
-  window.noticeNote.updateSettings({
-    dingtalkRobotWebhook: dingtalkWebhookInput.value,
-    dingtalkRobotSecret: dingtalkSecretInput.value
-  })
-    .then((settings) => {
-      appSettings = settings;
-      renderSettings();
-    })
-    .catch((error) => {
-      dingtalkNotificationStatus.textContent = `保存失败：${error.message}`;
-      dingtalkNotificationStatus.dataset.state = 'error';
-    })
-    .finally(() => {
-      saveDingtalkConfigButton.disabled = false;
-    });
-});
-clearDingtalkConfigButton.addEventListener('click', () => {
-  clearDingtalkConfigButton.disabled = true;
-  window.noticeNote.updateSettings({ clearDingtalkRobot: true })
-    .then((settings) => {
-      appSettings = settings;
-      renderSettings();
-    })
-    .catch((error) => {
-      dingtalkNotificationStatus.textContent = `清除失败：${error.message}`;
-      dingtalkNotificationStatus.dataset.state = 'error';
-    })
-    .finally(() => {
-      clearDingtalkConfigButton.disabled = false;
-    });
-});
-testDingtalkNotificationButton.addEventListener('click', () => {
-  testDingtalkNotificationButton.disabled = true;
-  dingtalkNotificationStatus.textContent = '正在发送测试消息...';
-  dingtalkNotificationStatus.dataset.state = 'pending';
-  window.noticeNote.testDingtalkNotification()
-    .then((result) => {
-      dingtalkNotificationStatus.textContent = `测试消息已发送；NATAPP 地址：${result.publicUrl}`;
-      dingtalkNotificationStatus.dataset.state = 'active';
-    })
-    .catch((error) => {
-      dingtalkNotificationStatus.textContent = `发送失败：${error.message}`;
-      dingtalkNotificationStatus.dataset.state = 'error';
-    })
-    .finally(() => {
-      testDingtalkNotificationButton.disabled = false;
     });
 });
 chooseStorageButton.addEventListener('click', () => {
@@ -3610,6 +3756,7 @@ pdfPages.addEventListener('wheel', (event) => {
     clientY: event.clientY
   }).catch((error) => showPdfStatus(`PDF 渲染失败：${error.message}`, true));
 }, { passive: false });
+pdfPages.addEventListener('scroll', schedulePdfOutlineHighlight, { passive: true });
 fileViewerContent.addEventListener('wheel', (event) => {
   if (!event.ctrlKey || event.deltaY === 0 || !event.target.closest('.file-preview-image')) {
     return;
@@ -3641,6 +3788,9 @@ document.addEventListener('keydown', (event) => {
 pdfOutlineToggle.addEventListener('click', () => {
   pdfOutline.hidden = !pdfOutline.hidden;
   pdfOutlineToggle.classList.toggle('is-active', !pdfOutline.hidden);
+  if (!pdfOutline.hidden) {
+    schedulePdfOutlineHighlight();
+  }
 });
 notificationBell.addEventListener('click', (event) => {
   event.stopPropagation();

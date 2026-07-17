@@ -1,6 +1,8 @@
 const { createServer } = require('node:http');
 const path = require('node:path');
 const fs = require('node:fs/promises');
+const { networkInterfaces } = require('node:os');
+const { isIP } = require('node:net');
 const {
   createCipheriv,
   createDecipheriv,
@@ -28,8 +30,10 @@ const MOBILE_IMAGE_MIN_OPTIMIZE_BYTES = 256 * 1024;
 const MOBILE_IMAGE_CACHE_MAX_AGE = 30 * 24 * 60 * 60;
 const MOBILE_IMAGE_OPTIMIZABLE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.webp', '.bmp']);
 const MOBILE_UNLOCK_SESSION_MAX_AGE = 30 * 60 * 1000;
-const MOBILE_LIBRARY_CACHE_MAX_AGE = 2 * 1000;
-const MOBILE_SERVER_HOST = process.env.NOTICE_NOTE_MOBILE_HOST || '127.0.0.1';
+const configuredMobileLibraryCacheMaxAge = Number(process.env.NOTICE_NOTE_LIBRARY_CACHE_MAX_AGE);
+const MOBILE_LIBRARY_CACHE_MAX_AGE = Number.isFinite(configuredMobileLibraryCacheMaxAge)
+  ? Math.max(2 * 1000, configuredMobileLibraryCacheMaxAge)
+  : 2 * 1000;
 const MOBILE_SERVER_PORT = Number(process.env.NOTICE_NOTE_MOBILE_PORT || 39271);
 
 let notesPath = null;
@@ -140,9 +144,10 @@ async function loadConfig() {
   try {
     const raw = await fs.readFile(getConfigPath(), 'utf8');
     const config = JSON.parse(raw);
-    notesPath = typeof config.notesPath === 'string' && config.notesPath
+    notesPath = String(process.env.NOTICE_NOTE_PATH || '').trim()
+      || (typeof config.notesPath === 'string' && config.notesPath
       ? config.notesPath
-      : getDefaultNotesPath();
+      : getDefaultNotesPath());
     mobileAccessToken = typeof config.mobileAccessToken === 'string' && config.mobileAccessToken
       ? config.mobileAccessToken
       : process.env.NOTICE_NOTE_MOBILE_TOKEN || createMobileAccessToken();
@@ -421,20 +426,35 @@ async function loadLibrary(mobileUnlockedFolderIds) {
 }
 
 async function loadCachedLibrary(mobileUnlockedFolderIds) {
-  for (const [key, entry] of mobileLibraryCache) {
-    if (entry.expiresAt <= Date.now()) {
-      mobileLibraryCache.delete(key);
-    }
-  }
   const cacheKey = [...mobileUnlockedFolderIds].sort().join('\n');
   const cached = mobileLibraryCache.get(cacheKey);
-  if (cached && cached.expiresAt > Date.now()) {
+  if (cached) {
+    if (cached.expiresAt <= Date.now() && !cached.refreshPromise) {
+      const unlockedFolderIds = new Set(mobileUnlockedFolderIds);
+      cached.refreshPromise = loadLibrary(unlockedFolderIds)
+        .then((library) => {
+          if (mobileLibraryCache.get(cacheKey) === cached) {
+            mobileLibraryCache.set(cacheKey, {
+              library,
+              expiresAt: Date.now() + MOBILE_LIBRARY_CACHE_MAX_AGE,
+              refreshPromise: null
+            });
+          }
+        })
+        .catch((error) => {
+          console.error('后台刷新移动端笔记缓存失败:', error);
+        })
+        .finally(() => {
+          cached.refreshPromise = null;
+        });
+    }
     return cached.library;
   }
   const library = await loadLibrary(mobileUnlockedFolderIds);
   mobileLibraryCache.set(cacheKey, {
     library,
-    expiresAt: Date.now() + MOBILE_LIBRARY_CACHE_MAX_AGE
+    expiresAt: Date.now() + MOBILE_LIBRARY_CACHE_MAX_AGE,
+    refreshPromise: null
   });
   return library;
 }
@@ -444,7 +464,32 @@ function getMobileStaticDir() {
 }
 
 function getMobileAccessUrl() {
-  return `http://${MOBILE_SERVER_HOST}:${MOBILE_SERVER_PORT}/?token=${encodeURIComponent(mobileAccessToken)}`;
+  const host = getEasyTierIpv4Address() || '127.0.0.1';
+  return `http://${host}:${MOBILE_SERVER_PORT}/?token=${encodeURIComponent(mobileAccessToken)}`;
+}
+
+function getMobileListenHost() {
+  return String(process.env.NOTICE_NOTE_MOBILE_HOST || '').trim()
+    || getEasyTierIpv4Address()
+    || '127.0.0.1';
+}
+
+function getEasyTierIpv4Address() {
+  const configuredAddress = String(process.env.NOTICE_NOTE_EASYTIER_IP || '').trim();
+  if (configuredAddress) {
+    return isIP(configuredAddress) === 4 ? configuredAddress : null;
+  }
+  const interfaces = networkInterfaces();
+  for (const [name, addresses] of Object.entries(interfaces)) {
+    if (!/easytier|^et(?:[_-]|$)/i.test(name)) {
+      continue;
+    }
+    const address = addresses.find((item) => item.family === 'IPv4' && !item.internal);
+    if (address) {
+      return address.address;
+    }
+  }
+  return null;
 }
 
 function isPathInside(parentPath, targetPath) {
@@ -998,6 +1043,9 @@ async function handleMobileApiRequest(request, response, requestUrl) {
     const apiRequest = decryptMobilePayload(envelope);
     const sessionId = normalizeMobileSessionId(apiRequest.sessionId);
     const session = getMobileUnlockSession(sessionId);
+    if (apiRequest.refresh === true) {
+      mobileLibraryCache.clear();
+    }
     const library = await loadCachedLibrary(session.unlockedFolderIds);
     const { statusCode, payload } = await handleMobileApiPayload(
       apiRequest,
@@ -1103,6 +1151,9 @@ async function serveMobileStaticFile(response, requestPath) {
 
 async function startServer() {
   await loadConfig();
+  const warmupStartedAt = Date.now();
+  await loadCachedLibrary(new Set());
+  console.log(`移动端笔记缓存已预热: ${Date.now() - warmupStartedAt}ms`);
 
   const server = createServer((request, response) => {
     Promise.resolve()
@@ -1120,9 +1171,12 @@ async function startServer() {
       });
   });
 
-  server.listen(MOBILE_SERVER_PORT, MOBILE_SERVER_HOST, () => {
-    console.log(`移动端独立服务已启动: ${getMobileAccessUrl()}`);
-    console.log(`NATAPP 请反代到: ${MOBILE_SERVER_HOST}:${MOBILE_SERVER_PORT}`);
+  server.listen(MOBILE_SERVER_PORT, getMobileListenHost(), () => {
+    const publicHost = getEasyTierIpv4Address() || getMobileListenHost();
+    console.log(`移动端独立服务已启动: http://${publicHost}:${MOBILE_SERVER_PORT}`);
+    if (!getEasyTierIpv4Address()) {
+      console.warn('未检测到 EasyTier IPv4 地址，可通过 NOTICE_NOTE_EASYTIER_IP 手动指定');
+    }
     console.log(`当前笔记目录: ${getNotesPath()}`);
   });
 }

@@ -7,7 +7,7 @@
 ```text
 notice_note_client_pc/   Windows 桌面客户端
 notice_note_client_app/  Android 客户端及原生工程
-notice_note_server/      独立移动接口服务
+notice_note_server/      移动接口服务的独立实现（当前无需单独运行）
 release/                 统一构建产物目录
 ```
 
@@ -16,15 +16,34 @@ release/                 统一构建产物目录
 ```powershell
 npm install
 npm run start:pc
-npm run start:server
 npm run start:app
 ```
 
-- `start:pc`：启动 Electron 桌面客户端。
-- `start:server`：启动独立移动接口服务。
+- `start:pc`：启动 Electron 桌面客户端，同时启动移动接口服务；退出 PC 客户端时服务会自动停止。
 - `start:app`：构建并运行 Android 客户端，需要已连接设备或模拟器。
 
-独立服务直接由 Node.js 运行，不需要额外打包。
+## EasyTier 手机连接
+
+1. 在电脑和手机上安装 EasyTier。
+2. 两台设备加入同一个 EasyTier 网络，并确认能够通过虚拟 IPv4 互相访问。
+3. 运行 `npm run start:pc` 启动 PC 客户端，移动接口服务会随应用一起启动。
+4. 在 PC 客户端点击手机扫码按钮，二维码会使用电脑的 EasyTier IPv4 地址。
+5. 手机扫码后即可通过 EasyTier 网络访问笔记。
+
+服务默认只监听自动检测到的 EasyTier IPv4 和 `39271` 端口；检测不到时仅监听 `127.0.0.1`。自动识别名称包含 `EasyTier` 或以 `et_`、`et-` 开头的网卡。如果网卡名称无法识别，可以手动指定：
+
+```powershell
+$env:NOTICE_NOTE_EASYTIER_IP='10.144.144.1'
+npm run start:pc
+```
+
+还可以通过 `NOTICE_NOTE_MOBILE_HOST` 覆盖移动服务的监听地址。服务固定使用 `39271` 端口，并直接复用 PC 客户端已经加载的笔记数据。
+
+如果手机已加入同一 EasyTier 网络但仍无法连接，请使用管理员 PowerShell 为当前 EasyTier 地址放行服务端口：
+
+```powershell
+New-NetFirewallRule -DisplayName 'Notice Note EasyTier' -Direction Inbound -Action Allow -Protocol TCP -LocalPort 39271 -LocalAddress 10.144.144.1
+```
 
 ## 打包命令
 

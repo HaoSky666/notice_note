@@ -6,7 +6,6 @@
   "scripts": {
     "start:pc": "chcp 65001 > nul && electron .",
     "start:app": "chcp 65001 > nul && cd notice_note_client_app && npx cap run android",
-    "start:server": "chcp 65001 > nul && node notice_note_server/server.js",
     "sync:app": "chcp 65001 > nul && cd notice_note_client_app && npx cap sync android",
     "open:app": "chcp 65001 > nul && cd notice_note_client_app && npx cap open android",
     "bundle:pc": "vite build --config vite.editor.config.js",

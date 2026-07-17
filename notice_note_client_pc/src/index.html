@@ -246,7 +246,7 @@
         <header class="mobile-pairing-heading">
           <div>
             <h2>手机扫码连接</h2>
-            <p id="mobilePairingStatus">正在读取 NATAPP 当前域名...</p>
+            <p id="mobilePairingStatus">正在读取 EasyTier 网络地址...</p>
           </div>
           <button id="closeMobilePairingDialogButton" class="reminder-manager-close" type="button" title="关闭" aria-label="关闭">×</button>
         </header>
@@ -283,28 +283,6 @@
           <div class="daily-review-current">
             <span>今日回顾</span>
             <strong id="dailyReviewCurrentTitle">尚未选择</strong>
-          </div>
-          <div class="settings-dingtalk-card">
-            <div class="settings-storage-heading">
-              <div>
-                <strong>NATAPP 钉钉通知</strong>
-                <p>每小时推送一次当前 NATAPP 地址和手机访问地址。</p>
-              </div>
-            </div>
-            <label class="settings-field">
-              <span>机器人 Webhook</span>
-              <input id="dingtalkWebhookInput" type="url" placeholder="https://oapi.dingtalk.com/robot/send?...">
-            </label>
-            <label class="settings-field">
-              <span>签名密钥</span>
-              <input id="dingtalkSecretInput" type="password" placeholder="SEC...">
-            </label>
-            <p id="dingtalkNotificationStatus" class="settings-dingtalk-status"></p>
-            <div class="settings-storage-actions">
-              <button id="clearDingtalkConfigButton" class="secondary-button" type="button">清除配置</button>
-              <button id="saveDingtalkConfigButton" class="secondary-button" type="button">保存</button>
-              <button id="testDingtalkNotificationButton" class="primary-button" type="button">发送测试消息</button>
-            </div>
           </div>
           <div class="settings-storage-card">
             <div class="settings-storage-heading">
