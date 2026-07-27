@@ -378,6 +378,29 @@ function buildLivePreviewDecorations(view, options = {}, codeBlocks = []) {
         );
       }
 
+
+      const image = /!\[([^\]]*)\]\(([^)]+)\)/g;
+      for (const match of text.matchAll(image)) {
+        const start = line.from + match.index;
+        const src = options.resolveImageSrc?.(match[2].trim()) || match[2].trim();
+        addLineClass(items, line, 'cm-image-line');
+        if (!isLineActive(view, line)) {
+          addDecoration(
+            items,
+            start,
+            start + match[0].length,
+            Decoration.replace({ widget: new ImageWidget(match[1], src) })
+          );
+        } else {
+          addDecoration(
+            items,
+            line.to,
+            line.to,
+            Decoration.widget({ widget: new ImageBelowWidget(match[1], src), side: 1 })
+          );
+        }
+      }
+
       if (!isLineActive(view, line)) {
         const heading = /^(#{1,6})\s+/.exec(text);
         if (heading) {
@@ -391,19 +414,6 @@ function buildLivePreviewDecorations(view, options = {}, codeBlocks = []) {
           replaceWithEmpty(items, line.from, line.from + quote[1].length);
         }
 
-        const image = /!\[([^\]]*)\]\(([^)]+)\)/g;
-        for (const match of text.matchAll(image)) {
-          const start = line.from + match.index;
-          const src = options.resolveImageSrc?.(match[2].trim()) || match[2].trim();
-          addLineClass(items, line, 'cm-image-line');
-          addDecoration(
-            items,
-            start,
-            start + match[0].length,
-            Decoration.replace({ widget: new ImageWidget(match[1], src) })
-          );
-        }
-
         const inlineCode = /`([^`]+)`/g;
         for (const match of text.matchAll(inlineCode)) {
           const start = line.from + match.index;
@@ -414,6 +424,13 @@ function buildLivePreviewDecorations(view, options = {}, codeBlocks = []) {
 
         const bold = /(\*\*|__)(.+?)\1/g;
         for (const match of text.matchAll(bold)) {
+          if (match[1] === '__') {
+            const beforeChar = match.index > 0 ? text[match.index - 1] : '';
+            const afterEnd = match.index + match[0].length < text.length ? text[match.index + match[0].length] : '';
+            if (/[a-zA-Z0-9]/.test(beforeChar) && /[a-zA-Z0-9]/.test(afterEnd)) {
+              continue;
+            }
+          }
           const start = line.from + match.index;
           replaceWithEmpty(items, start, start + 2);
           replaceWithEmpty(items, start + match[0].length - 2, start + match[0].length);
@@ -421,6 +438,13 @@ function buildLivePreviewDecorations(view, options = {}, codeBlocks = []) {
 
         const italic = /(^|[^*_])([*_])([^*_]+?)\2/g;
         for (const match of text.matchAll(italic)) {
+          if (match[2] === '_') {
+            const beforeChar = match[1] || '';
+            const afterEnd = match.index + match[0].length < text.length ? text[match.index + match[0].length] : '';
+            if (/[a-zA-Z0-9]/.test(beforeChar) && /[a-zA-Z0-9]/.test(afterEnd)) {
+              continue;
+            }
+          }
           const markerStart = line.from + match.index + match[1].length;
           replaceWithEmpty(items, markerStart, markerStart + 1);
           replaceWithEmpty(items, markerStart + match[0].length - match[1].length - 1, markerStart + match[0].length - match[1].length);
@@ -434,8 +458,12 @@ function buildLivePreviewDecorations(view, options = {}, codeBlocks = []) {
     }
   }
 
-  addSortedDecorations(builder, items);
-  return builder.finish();
+  try {
+    addSortedDecorations(builder, items);
+    return builder.finish();
+  } catch {
+    return Decoration.none;
+  }
 }
 
 class EmptyWidget extends WidgetType {
@@ -483,6 +511,10 @@ class ImageWidget extends WidgetType {
     this.src = src;
   }
 
+  eq(other) {
+    return other.src === this.src && other.alt === this.alt;
+  }
+
   toDOM() {
     const wrapper = document.createElement('span');
     wrapper.className = 'cm-rendered-image';
@@ -498,6 +530,44 @@ class ImageWidget extends WidgetType {
 
     wrapper.append(image);
     return wrapper;
+  }
+
+  ignoreEvent(event) {
+    // 让 mousedown 交给编辑器的 domEventHandlers 处理（控制光标位置），其余事件交给浏览器
+    return event.type !== 'mousedown';
+  }
+}
+
+class ImageBelowWidget extends WidgetType {
+  constructor(alt, src) {
+    super();
+    this.alt = alt || '图片';
+    this.src = src;
+  }
+
+  eq(other) {
+    return other.src === this.src && other.alt === this.alt;
+  }
+
+  toDOM() {
+    const container = document.createElement('div');
+    container.className = 'cm-image-preview-below';
+
+    const image = document.createElement('img');
+    image.src = this.src;
+    image.alt = this.alt;
+    image.title = this.alt;
+    image.loading = 'lazy';
+    image.addEventListener('error', () => {
+      container.textContent = `${this.alt}（图片加载失败）`;
+    });
+
+    container.append(image);
+    return container;
+  }
+
+  ignoreEvent() {
+    return true;
   }
 }
 
@@ -1024,6 +1094,29 @@ function createNoticeNoteEditor(options) {
         markdown({ base: markdownLanguage }),
         syntaxHighlighting(markdownHighlight),
         EditorView.domEventHandlers({
+          mousedown: (event, view) => {
+            if (event.button !== 0) {
+              return false;
+            }
+            // 命中图片本身，或图片所在行的空白区域（图片上下的边距等）
+            const wrapper = event.target?.closest?.('.cm-rendered-image')
+              || event.target?.closest?.('.cm-line')?.querySelector?.('.cm-rendered-image');
+            if (!wrapper) {
+              return false;
+            }
+            const rect = wrapper.getBoundingClientRect();
+            const clickedBottomHalf = event.clientY >= rect.top + rect.height / 2;
+            if (clickedBottomHalf) {
+              const pos = view.posAtDOM(wrapper);
+              if (pos != null && pos >= 0) {
+                const lineEnd = view.state.doc.lineAt(pos).to;
+                view.focus();
+                view.dispatch({ selection: { anchor: lineEnd } });
+              }
+            }
+            // 返回 true 以 preventDefault，阻止浏览器/编辑器默认的光标定位
+            return true;
+          },
           paste: (event, view) => {
             const imageFile = [...(event.clipboardData?.files || [])]
               .find((file) => file.type.startsWith('image/'));
@@ -1127,6 +1220,38 @@ function createNoticeNoteEditor(options) {
     },
     insertMarkdown(value) {
       insertMarkdownAtSelection(view, value || '');
+    },
+    removeImageByUrl(imageUrl) {
+      const doc = view.state.doc;
+      const text = doc.toString();
+      const imagePattern = /!\[[^\]]*\]\(([^)]+)\)/g;
+      let match;
+      while ((match = imagePattern.exec(text)) !== null) {
+        if (match[1].trim() === imageUrl) {
+          const from = match.index;
+          const to = from + match[0].length;
+          const line = doc.lineAt(from);
+          const beforeImage = line.text.slice(0, from - line.from).trim();
+          const afterImage = line.text.slice(to - line.from).trim();
+          let removeFrom = from;
+          let removeTo = to;
+          if (beforeImage === '' && afterImage === '') {
+            removeFrom = line.from;
+            if (line.number < doc.lines) {
+              removeTo = line.to + 1;
+            } else if (line.from > 0) {
+              removeFrom = line.from - 1;
+            }
+          }
+          internalUpdate = true;
+          view.dispatch({
+            changes: { from: removeFrom, to: removeTo, insert: '' }
+          });
+          internalUpdate = false;
+          return true;
+        }
+      }
+      return false;
     },
     refresh() {
       view.dispatch({ selection: view.state.selection });

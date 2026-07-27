@@ -185,10 +185,29 @@ button {
 }
 
 .sidebar.is-collapsed .collapsed-sidebar-button {
-  display: inline-grid;
-  position: absolute;
-  top: 14px;
-  left: 7px;
+display: inline-grid;
+position: absolute;
+top: 14px;
+left: 7px;
+}
+
+.sidebar-resizer {
+position: absolute;
+top: 0;
+right: -3px;
+width: 6px;
+height: 100%;
+cursor: col-resize;
+z-index: 10;
+}
+
+.sidebar-resizer:hover,
+.sidebar-resizer.is-resizing {
+background: rgba(47, 107, 85, 0.3);
+}
+
+.sidebar.is-collapsed .sidebar-resizer {
+display: none;
 }
 
 .sidebar-body {
@@ -703,7 +722,7 @@ button {
 }
 
 .note-item.drag-over-note {
-  border-top: 2px solid #2f6b55;
+border-top: 2px solid #2f6b55;
 }
 
 .context-menu {
@@ -3478,4 +3497,17 @@ body.image-lightbox-open {
   background: #fffdf8;
   color: #3f3931;
   font: 12px/1.5 "SFMono-Regular", Consolas, monospace;
+}
+
+.cm-image-preview-below {
+  margin: 2px 0 4px;
+}
+
+.cm-image-preview-below img {
+  display: block;
+  max-width: 100%;
+  max-height: 300px;
+  object-fit: contain;
+  border-radius: 4px;
+  cursor: pointer;
 }

@@ -1013,9 +1013,9 @@ function renderInlineMarkdown(text) {
 
   value = value
     .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
-    .replace(/__([^_]+)__/g, '<strong>$1</strong>')
+    .replace(/(?<![a-zA-Z0-9])__([^_]+?)__(?![a-zA-Z0-9])/g, '<strong>$1</strong>')
     .replace(/\*([^*]+)\*/g, '<em>$1</em>')
-    .replace(/_([^_]+)_/g, '<em>$1</em>')
+    .replace(/(?<![a-zA-Z0-9])_([^_]+?)_(?![a-zA-Z0-9])/g, '<em>$1</em>')
     .replace(/~~([^~]+)~~/g, '<del>$1</del>');
 
   return value.replace(/\u0000(\d+)\u0000/g, (_match, index) => placeholders[Number(index)] || '');

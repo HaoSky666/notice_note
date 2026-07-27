@@ -87,7 +87,7 @@ function getNoteMetadataKey(filePath) {
 }
 
 function isInternalDirectory(name) {
-  return name === IMAGE_ASSET_DIR_NAME || name === APP_DATA_DIR_NAME;
+  return name === APP_DATA_DIR_NAME;
 }
 
 function getStableFolderId(folderPath) {

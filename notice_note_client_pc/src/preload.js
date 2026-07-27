@@ -25,6 +25,8 @@ contextBridge.exposeInMainWorld('noticeNote', {
   insertImage: (payload) => ipcRenderer.invoke('images:insert', payload),
   savePastedImage: (payload) => ipcRenderer.invoke('images:save-pasted', payload),
   saveImageFromUrl: (payload) => ipcRenderer.invoke('images:save-from-url', payload),
+  copyImage: (payload) => ipcRenderer.invoke('images:copy', payload),
+  deleteImage: (payload) => ipcRenderer.invoke('images:delete', payload),
   listPdfs: () => ipcRenderer.invoke('pdfs:list'),
   listFiles: () => ipcRenderer.invoke('files:list'),
   previewFile: (fileId) => ipcRenderer.invoke('files:preview', fileId),

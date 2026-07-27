@@ -172,7 +172,13 @@ function getConfigPath() {
 }
 
 function getNoteAssetDir(noteId) {
-  return path.join(getNotesPath(), IMAGE_ASSET_DIR_NAME, noteId);
+  return path.join(getAppDataPath(), IMAGE_ASSET_DIR_NAME, noteId);
+}
+
+function getImageAssetDir() {
+  const now = new Date();
+  const dateFolder = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}`;
+  return path.join(getAppDataPath(), IMAGE_ASSET_DIR_NAME, dateFolder);
 }
 
 function getAppDataPath() {
@@ -207,7 +213,7 @@ function markInternalNoteWrite(filePath) {
 }
 
 function isInternalDirectory(name) {
-  return name === IMAGE_ASSET_DIR_NAME || name === APP_DATA_DIR_NAME;
+  return name === APP_DATA_DIR_NAME;
 }
 
 async function loadNoteMetadata() {
@@ -433,10 +439,10 @@ function getImageExtension(fileName, mimeType) {
 
 async function copyImageForNote(noteId, sourcePath) {
   const sourceExt = path.extname(sourcePath) || '.png';
-  const assetDir = getNoteAssetDir(noteId);
+  const assetDir = getImageAssetDir();
   await fs.mkdir(assetDir, { recursive: true });
 
-  const fileName = sanitizeFileName(`${Date.now()}-${randomUUID()}${sourceExt}`);
+  const fileName = `${Date.now()}${sourceExt}`;
   const targetPath = path.join(assetDir, fileName);
   await fs.copyFile(sourcePath, targetPath);
   const altText = sanitizeFileName(path.basename(sourcePath, sourceExt));
@@ -453,11 +459,11 @@ async function saveClipboardImageForNote(noteId, payload) {
     return null;
   }
 
-  const assetDir = getNoteAssetDir(noteId);
+  const assetDir = getImageAssetDir();
   await fs.mkdir(assetDir, { recursive: true });
 
   const ext = getImageExtension(payload.fileName, payload.mimeType);
-  const fileName = sanitizeFileName(`${Date.now()}-${randomUUID()}${ext}`);
+  const fileName = `${Date.now()}${ext}`;
   const targetPath = path.join(assetDir, fileName);
   await fs.writeFile(targetPath, Buffer.from(payload.bytes));
 
@@ -1423,7 +1429,11 @@ async function clearFolderPassword(_event, folderId) {
   folder.passwordHash = '';
   unlockedFolderIds.delete(folder.id);
   const metaPath = path.join(getFolderPath(folder.id), '.folder.json');
-  await fs.writeFile(metaPath, JSON.stringify(folder, null, 2), 'utf8');
+  try {
+    await fs.unlink(metaPath);
+  } catch {
+    // .folder.json may not exist, ignore
+  }
   sendFoldersChanged();
   sendNotesChanged();
   sendPdfFilesChanged();
@@ -1619,16 +1629,13 @@ async function createFolder(_event, name, parentId) {
   await fs.mkdir(folderPath, { recursive: true });
 
   const folder = {
-    id: randomUUID(),
+    id: getStableFolderId(folderPath),
     name: folderName,
     parentId: normalizedParentId,
     createdAt: new Date().toISOString(),
     passwordSalt: '',
     passwordHash: ''
   };
-
-  const metaPath = path.join(folderPath, '.folder.json');
-  await fs.writeFile(metaPath, JSON.stringify(folder, null, 2), 'utf8');
 
   folders.push(folder);
   sendFoldersChanged();
@@ -1651,7 +1658,12 @@ async function renameFolder(_event, folderId, newName) {
 
   folder.name = newFolderName;
   const metaPath = path.join(newPath, '.folder.json');
-  await fs.writeFile(metaPath, JSON.stringify(folder, null, 2), 'utf8');
+  try {
+    await fs.access(metaPath);
+    await fs.writeFile(metaPath, JSON.stringify(folder, null, 2), 'utf8');
+  } catch {
+    // .folder.json doesn't exist (no password set), no need to create it
+  }
 
   sendFoldersChanged();
   return folder;
@@ -2832,10 +2844,164 @@ function scheduleReminderCheck() {
   }, getNextReminderDelay());
 }
 
+async function migrateImageAssetDir() {
+  const oldAssetDir = path.join(getNotesPath(), IMAGE_ASSET_DIR_NAME);
+  const newAssetDir = path.join(getAppDataPath(), IMAGE_ASSET_DIR_NAME);
+  try {
+    await fs.access(oldAssetDir);
+  } catch {
+    return;
+  }
+
+  await fs.mkdir(path.dirname(newAssetDir), { recursive: true });
+
+  try {
+    await fs.access(newAssetDir);
+  } catch {
+    await fs.rename(oldAssetDir, newAssetDir);
+  }
+
+  const oldUrlPrefix = pathToFileURL(oldAssetDir).href;
+  const newUrlPrefix = pathToFileURL(newAssetDir).href;
+
+  async function updateNoteFiles(dirPath) {
+    const entries = await fs.readdir(dirPath, { withFileTypes: true });
+    for (const entry of entries) {
+      const fullPath = path.join(dirPath, entry.name);
+      if (entry.isDirectory() && !isInternalDirectory(entry.name)) {
+        await updateNoteFiles(fullPath);
+      } else if (entry.isFile() && ['.md', '.txt'].includes(path.extname(entry.name).toLowerCase())) {
+        try {
+          const raw = await fs.readFile(fullPath, 'utf8');
+          if (raw.includes(oldUrlPrefix)) {
+            const updated = raw.split(oldUrlPrefix).join(newUrlPrefix);
+            markInternalNoteWrite(fullPath);
+            await fs.writeFile(fullPath, updated, 'utf8');
+          }
+        } catch (error) {
+          console.error('迁移笔记图片路径失败:', fullPath, error);
+        }
+      }
+    }
+  }
+
+  await updateNoteFiles(getNotesPath());
+
+  try {
+    await fs.rm(oldAssetDir, { recursive: true, force: true });
+  } catch {
+    // ignore cleanup errors
+  }
+}
+
+async function collectReferencedImagePaths() {
+  const assetDirRoot = path.join(getAppDataPath(), IMAGE_ASSET_DIR_NAME);
+  const assetDirUrl = pathToFileURL(assetDirRoot).href.toLowerCase();
+  const referencedPaths = new Set();
+
+  async function scanNoteFiles(dirPath) {
+    const entries = await fs.readdir(dirPath, { withFileTypes: true });
+    for (const entry of entries) {
+      const fullPath = path.join(dirPath, entry.name);
+      if (entry.isDirectory() && !isInternalDirectory(entry.name)) {
+        await scanNoteFiles(fullPath);
+      } else if (entry.isFile() && ['.md', '.txt'].includes(path.extname(entry.name).toLowerCase())) {
+        try {
+          const raw = await fs.readFile(fullPath, 'utf8');
+          const imageRegex = /!\[[^\]]*\]\(([^)]+)\)/g;
+          for (const match of raw.matchAll(imageRegex)) {
+            const imageUrl = match[1].trim();
+            if (imageUrl.toLowerCase().startsWith(assetDirUrl)) {
+              try {
+                const filePath = fileURLToPath(imageUrl);
+                referencedPaths.add(path.resolve(filePath));
+              } catch {
+                // ignore invalid URLs
+              }
+            }
+          }
+        } catch {
+          // ignore read errors
+        }
+      }
+    }
+  }
+
+  await scanNoteFiles(getNotesPath());
+  return referencedPaths;
+}
+
+let imageCleanupTimer = null;
+
+async function cleanupUnusedImages() {
+  const assetDirRoot = path.join(getAppDataPath(), IMAGE_ASSET_DIR_NAME);
+  try {
+    await fs.access(assetDirRoot);
+  } catch {
+    return;
+  }
+
+  const referencedPaths = await collectReferencedImagePaths();
+  let deletedCount = 0;
+
+  async function scanAndDelete(dirPath) {
+    const entries = await fs.readdir(dirPath, { withFileTypes: true });
+    let hasFiles = false;
+    for (const entry of entries) {
+      const fullPath = path.join(dirPath, entry.name);
+      if (entry.isDirectory()) {
+        const subHasFiles = await scanAndDelete(fullPath);
+        if (subHasFiles) {
+          hasFiles = true;
+        } else {
+          try {
+            await fs.rmdir(fullPath);
+          } catch {
+            // ignore
+          }
+        }
+      } else if (entry.isFile()) {
+        if (!referencedPaths.has(path.resolve(fullPath))) {
+          try {
+            await fs.unlink(fullPath);
+            deletedCount += 1;
+          } catch {
+            // ignore
+          }
+        } else {
+          hasFiles = true;
+        }
+      }
+    }
+    return hasFiles;
+  }
+
+  await scanAndDelete(assetDirRoot);
+  if (deletedCount > 0) {
+    console.log(`已清理 ${deletedCount} 张未使用的图片`);
+  }
+}
+
+function scheduleImageCleanup() {
+  if (imageCleanupTimer) {
+    clearInterval(imageCleanupTimer);
+  }
+  cleanupUnusedImages().catch((error) => {
+    console.error('图片清理失败:', error);
+  });
+  imageCleanupTimer = setInterval(() => {
+    cleanupUnusedImages().catch((error) => {
+      console.error('图片清理失败:', error);
+    });
+  }, 24 * 60 * 60 * 1000);
+}
+
 app.whenReady().then(async () => {
   await loadConfig();
   await saveConfig();
+  await migrateImageAssetDir();
   await loadNotes();
+  scheduleImageCleanup();
   startMobileServer();
 
   ipcMain.handle('notes:list', () => getVisibleNotes());
@@ -2954,7 +3120,12 @@ app.whenReady().then(async () => {
 
     folder.parentId = normalizedTargetFolderId;
     const metaPath = path.join(newPath, '.folder.json');
-    await fs.writeFile(metaPath, JSON.stringify(folder, null, 2), 'utf8');
+    try {
+      await fs.access(metaPath);
+      await fs.writeFile(metaPath, JSON.stringify(folder, null, 2), 'utf8');
+    } catch {
+      // .folder.json doesn't exist (no password set), no need to create it
+    }
 
     await loadNotes();
     scheduleReminderCheck();
@@ -3014,6 +3185,49 @@ app.whenReady().then(async () => {
       return null;
     }
   });
+  ipcMain.handle('images:copy', async (_event, payload) => {
+    if (!payload || !payload.imageUrl) {
+      return false;
+    }
+    try {
+      let filePath;
+      if (payload.imageUrl.startsWith('file:')) {
+        filePath = fileURLToPath(payload.imageUrl);
+      } else {
+        return false;
+      }
+      const imageBuffer = await fs.readFile(filePath);
+      const nativeImage = require('electron').nativeImage;
+      const img = nativeImage.createFromBuffer(imageBuffer);
+      clipboard.writeImage(img);
+      return true;
+    } catch (error) {
+      console.error('复制图片失败:', error);
+      return false;
+    }
+  });
+  ipcMain.handle('images:delete', async (_event, payload) => {
+    if (!payload || !payload.imageUrl) {
+      return false;
+    }
+    try {
+      let filePath;
+      if (payload.imageUrl.startsWith('file:')) {
+        filePath = fileURLToPath(payload.imageUrl);
+      } else {
+        return false;
+      }
+      const notesDir = path.resolve(getNotesPath());
+      if (!isPathInside(notesDir, filePath)) {
+        return false;
+      }
+      await fs.unlink(filePath);
+      return true;
+    } catch (error) {
+      console.error('删除图片失败:', error);
+      return false;
+    }
+  });
 
   Menu.setApplicationMenu(null);
   createWindow();
@@ -3033,10 +3247,11 @@ app.on('window-all-closed', () => {
 });
 
 app.on('before-quit', () => {
-  isQuitting = true;
-  clearTimeout(reminderTimer);
-  clearTimeout(pdfReloadTimer);
-  clearTimeout(noteReloadTimer);
-  pdfWatcher?.close();
+isQuitting = true;
+clearTimeout(reminderTimer);
+clearTimeout(pdfReloadTimer);
+clearTimeout(noteReloadTimer);
+clearInterval(imageCleanupTimer);
+pdfWatcher?.close();
   stopMobileServer();
 });

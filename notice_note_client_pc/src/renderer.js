@@ -19,6 +19,7 @@ const reminderDialogNoteTitle = document.querySelector('#reminderDialogNoteTitle
 const sidebar = document.querySelector('#sidebar');
 const toggleSidebarButton = document.querySelector('#toggleSidebarButton');
 const showSidebarButton = document.querySelector('#showSidebarButton');
+const sidebarResizer = document.querySelector('#sidebarResizer');
 const editorPanel = document.querySelector('.editor-panel');
 const editorTopbar = document.querySelector('#editorTopbar');
 const refreshButton = document.querySelector('#refreshButton');
@@ -80,7 +81,6 @@ const imageLightboxImage = document.querySelector('#imageLightboxImage');
 const closeImageLightboxButton = document.querySelector('#closeImageLightboxButton');
 const zoomOutImageLightboxButton = document.querySelector('#zoomOutImageLightboxButton');
 const zoomInImageLightboxButton = document.querySelector('#zoomInImageLightboxButton');
-
 let notes = [];
 let folders = [];
 let pdfFiles = [];
@@ -117,6 +117,9 @@ let filePreviewVersion = 0;
 let viewerSearchMatches = [];
 let activeViewerSearchIndex = -1;
 const SIDEBAR_COLLAPSED_KEY = 'notice-note:sidebar-collapsed';
+const SIDEBAR_WIDTH_KEY = 'notice-note:sidebar-width';
+const SIDEBAR_MIN_WIDTH = 200;
+const SIDEBAR_MAX_WIDTH = 600;
 const REMINDER_NOTIFICATIONS_KEY = 'notice-note:reminder-notifications';
 const DAILY_REMINDER_SLOTS = ['09:30', '15:00'];
 let reminderNotifications = readReminderNotifications();
@@ -243,13 +246,63 @@ function writeBooleanSetting(key, value) {
 }
 
 function setSidebarCollapsed(isCollapsed) {
-  sidebar.classList.toggle('is-collapsed', isCollapsed);
-  const toggleText = isCollapsed ? '显示笔记列表' : '隐藏笔记列表';
-  toggleSidebarButton.title = toggleText;
-  toggleSidebarButton.setAttribute('aria-label', toggleText);
-  showSidebarButton.title = '显示笔记列表';
-  showSidebarButton.setAttribute('aria-label', '显示笔记列表');
-  writeBooleanSetting(SIDEBAR_COLLAPSED_KEY, isCollapsed);
+sidebar.classList.toggle('is-collapsed', isCollapsed);
+const toggleText = isCollapsed ? '显示笔记列表' : '隐藏笔记列表';
+toggleSidebarButton.title = toggleText;
+toggleSidebarButton.setAttribute('aria-label', toggleText);
+showSidebarButton.title = '显示笔记列表';
+showSidebarButton.setAttribute('aria-label', '显示笔记列表');
+writeBooleanSetting(SIDEBAR_COLLAPSED_KEY, isCollapsed);
+}
+
+function setSidebarWidth(width) {
+const clamped = Math.max(SIDEBAR_MIN_WIDTH, Math.min(SIDEBAR_MAX_WIDTH, width));
+sidebar.style.width = `${clamped}px`;
+localStorage.setItem(SIDEBAR_WIDTH_KEY, String(clamped));
+}
+
+function initSidebarResizer() {
+const savedWidth = Number(localStorage.getItem(SIDEBAR_WIDTH_KEY));
+if (Number.isFinite(savedWidth) && savedWidth >= SIDEBAR_MIN_WIDTH && savedWidth <= SIDEBAR_MAX_WIDTH) {
+sidebar.style.width = `${savedWidth}px`;
+}
+
+let isResizing = false;
+let startX = 0;
+let startWidth = 0;
+
+sidebarResizer.addEventListener('mousedown', (e) => {
+if (sidebar.classList.contains('is-collapsed')) {
+return;
+}
+e.preventDefault();
+isResizing = true;
+startX = e.clientX;
+startWidth = sidebar.offsetWidth;
+sidebarResizer.classList.add('is-resizing');
+sidebar.style.transition = 'none';
+document.body.style.cursor = 'col-resize';
+document.body.style.userSelect = 'none';
+});
+
+document.addEventListener('mousemove', (e) => {
+if (!isResizing) {
+return;
+}
+const delta = e.clientX - startX;
+setSidebarWidth(startWidth + delta);
+});
+
+document.addEventListener('mouseup', () => {
+if (!isResizing) {
+return;
+}
+isResizing = false;
+sidebarResizer.classList.remove('is-resizing');
+sidebar.style.transition = '';
+document.body.style.cursor = '';
+document.body.style.userSelect = '';
+});
 }
 
 function formatListDateTime(value) {
@@ -2870,11 +2923,11 @@ function renderPdf() {
     return;
   }
 
-  editorPanel.hidden = true;
-  pdfViewer.hidden = false;
-  fileViewer.hidden = true;
-  filePreviewVersion++;
-  pdfTitle.textContent = pdf.name;
+editorPanel.hidden = true;
+pdfViewer.hidden = false;
+fileViewer.hidden = true;
+filePreviewVersion++;
+pdfTitle.textContent = pdf.name;
   pdfMeta.textContent = `PDF 文档 · ${formatFileSize(pdf.size)} · 创建于 ${formatListDateTime(pdf.createdAt)} · 修改于 ${formatListDateTime(pdf.updatedAt)}`;
   pdfPath.textContent = pdf.path;
   pdfPath.title = pdf.path;
@@ -3213,10 +3266,10 @@ function renderResourceFile() {
     return;
   }
 
-  editorPanel.hidden = true;
-  pdfViewer.hidden = true;
-  fileViewer.hidden = false;
-  fileViewerIcon.textContent = file.typeLabel;
+editorPanel.hidden = true;
+pdfViewer.hidden = true;
+fileViewer.hidden = false;
+fileViewerIcon.textContent = file.typeLabel;
   fileViewerTitle.textContent = file.name;
   fileViewerMeta.textContent = `${formatFileSize(file.size)} · 创建于 ${formatListDateTime(file.createdAt)} · 修改于 ${formatListDateTime(file.updatedAt)}`;
   fileViewerType.textContent = file.typeLabel;
@@ -3529,7 +3582,8 @@ async function deleteResourceFile(fileId) {
 }
 
 async function boot() {
-  setSidebarCollapsed(readBooleanSetting(SIDEBAR_COLLAPSED_KEY));
+setSidebarCollapsed(readBooleanSetting(SIDEBAR_COLLAPSED_KEY));
+initSidebarResizer();
   createMarkdownEditor();
   notes = sortNotes(await window.noticeNote.listNotes());
   folders = await window.noticeNote.listFolders();
@@ -3987,6 +4041,76 @@ document.addEventListener('click', (e) => {
   }
   if (!notificationPanel.hidden && !e.target.closest('.notification-center')) {
     notificationPanel.hidden = true;
+  }
+});
+
+document.addEventListener('contextmenu', (event) => {
+  const image = event.target.closest?.('.cm-rendered-image img');
+  if (!image) {
+    return;
+  }
+  event.preventDefault();
+
+  const imageSrc = image.src || '';
+  if (!imageSrc.startsWith('file:')) {
+    return;
+  }
+
+  hideContextMenu();
+  contextMenu = document.createElement('div');
+  contextMenu.className = 'context-menu';
+  contextMenu.style.left = `${event.clientX}px`;
+  contextMenu.style.top = `${event.clientY}px`;
+  contextMenu.append(
+    createContextMenuItem('复制图片', async () => {
+      hideContextMenu();
+      const success = await window.noticeNote.copyImage({ imageUrl: imageSrc });
+      if (!success) {
+        alert('复制图片失败');
+      }
+    }),
+    createContextMenuItem('删除图片', async () => {
+      hideContextMenu();
+      if (!confirm('确定删除这张图片吗？')) {
+        return;
+      }
+      const success = await window.noticeNote.deleteImage({ imageUrl: imageSrc });
+      if (!success) {
+        alert('删除图片失败');
+        return;
+      }
+      if (markdownEditor && activeNoteId) {
+        const removed = markdownEditor.removeImageByUrl?.(imageSrc);
+        if (!removed) {
+          const content = markdownEditor.getMarkdown();
+          const lines = content.split('\n');
+          const filteredLines = lines.filter((line) => {
+            const imgMatch = line.match(/!\[[^\]]*\]\(([^)]+)\)/);
+            if (!imgMatch) {
+              return true;
+            }
+            const url = imgMatch[1].trim();
+            return url !== imageSrc;
+          });
+          const newContent = filteredLines.join('\n');
+          markdownEditor.setMarkdown(newContent);
+        }
+        const note = getActiveNote();
+        if (note) {
+          note.content = normalizeEditorContent(markdownEditor.getMarkdown(), note);
+          queueSave();
+        }
+      }
+    })
+  );
+  document.body.append(contextMenu);
+
+  const rect = contextMenu.getBoundingClientRect();
+  if (rect.right > window.innerWidth) {
+    contextMenu.style.left = `${event.clientX - rect.width}px`;
+  }
+  if (rect.bottom > window.innerHeight) {
+    contextMenu.style.top = `${event.clientY - rect.height}px`;
   }
 });
 
