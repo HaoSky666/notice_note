@@ -57,6 +57,7 @@ const pdfZoomValue = document.querySelector('#pdfZoomValue');
 const pdfOutline = document.querySelector('#pdfOutline');
 const pdfOutlineList = document.querySelector('#pdfOutlineList');
 const pdfOutlineToggle = document.querySelector('#pdfOutlineToggle');
+const pdfOutlineResizer = document.querySelector('#pdfOutlineResizer');
 const workspaceTabsRoot = document.querySelector('#workspaceTabs');
 const notificationBell = document.querySelector('#notificationBell');
 const notificationDot = document.querySelector('#notificationDot');
@@ -120,6 +121,9 @@ const SIDEBAR_COLLAPSED_KEY = 'notice-note:sidebar-collapsed';
 const SIDEBAR_WIDTH_KEY = 'notice-note:sidebar-width';
 const SIDEBAR_MIN_WIDTH = 200;
 const SIDEBAR_MAX_WIDTH = 600;
+const PDF_OUTLINE_WIDTH_KEY = 'notice-note:pdf-outline-width';
+const PDF_OUTLINE_MIN_WIDTH = 160;
+const PDF_OUTLINE_MAX_WIDTH = 600;
 const REMINDER_NOTIFICATIONS_KEY = 'notice-note:reminder-notifications';
 const DAILY_REMINDER_SLOTS = ['09:30', '15:00'];
 let reminderNotifications = readReminderNotifications();
@@ -303,6 +307,57 @@ sidebar.style.transition = '';
 document.body.style.cursor = '';
 document.body.style.userSelect = '';
 });
+}
+
+function setPdfOutlineWidth(width) {
+  const clamped = Math.max(PDF_OUTLINE_MIN_WIDTH, Math.min(PDF_OUTLINE_MAX_WIDTH, width));
+  pdfOutline.style.flexBasis = `${clamped}px`;
+  localStorage.setItem(PDF_OUTLINE_WIDTH_KEY, String(clamped));
+}
+
+function initPdfOutlineResizer() {
+  const savedWidth = Number(localStorage.getItem(PDF_OUTLINE_WIDTH_KEY));
+  if (Number.isFinite(savedWidth)) {
+    setPdfOutlineWidth(savedWidth);
+  }
+
+  let isResizing = false;
+  let startX = 0;
+  let startWidth = 0;
+
+  pdfOutlineResizer.addEventListener('pointerdown', (event) => {
+    if (pdfOutline.hidden || event.button !== 0) {
+      return;
+    }
+    event.preventDefault();
+    isResizing = true;
+    startX = event.clientX;
+    startWidth = pdfOutline.offsetWidth;
+    pdfOutlineResizer.setPointerCapture(event.pointerId);
+    pdfOutlineResizer.classList.add('is-resizing');
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+  });
+
+  pdfOutlineResizer.addEventListener('pointermove', (event) => {
+    if (!isResizing) {
+      return;
+    }
+    setPdfOutlineWidth(startWidth + event.clientX - startX);
+  });
+
+  const stopResizing = () => {
+    if (!isResizing) {
+      return;
+    }
+    isResizing = false;
+    pdfOutlineResizer.classList.remove('is-resizing');
+    document.body.style.cursor = '';
+    document.body.style.userSelect = '';
+  };
+
+  pdfOutlineResizer.addEventListener('pointerup', stopResizing);
+  pdfOutlineResizer.addEventListener('pointercancel', stopResizing);
 }
 
 function formatListDateTime(value) {
@@ -3584,6 +3639,7 @@ async function deleteResourceFile(fileId) {
 async function boot() {
 setSidebarCollapsed(readBooleanSetting(SIDEBAR_COLLAPSED_KEY));
 initSidebarResizer();
+initPdfOutlineResizer();
   createMarkdownEditor();
   notes = sortNotes(await window.noticeNote.listNotes());
   folders = await window.noticeNote.listFolders();

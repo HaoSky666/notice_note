@@ -2057,12 +2057,29 @@ border-top: 2px solid #2f6b55;
 }
 
 .pdf-outline {
+  position: relative;
   flex: 0 0 250px;
   min-width: 0;
   border-right: 1px solid #d8d0c3;
   display: flex;
   flex-direction: column;
   background: #f7f3eb;
+}
+
+.pdf-outline-resizer {
+  position: absolute;
+  top: 0;
+  right: -3px;
+  z-index: 2;
+  width: 6px;
+  height: 100%;
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.pdf-outline-resizer:hover,
+.pdf-outline-resizer.is-resizing {
+  background: rgba(47, 107, 85, 0.3);
 }
 
 .pdf-outline-heading {
