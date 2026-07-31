@@ -1,20 +1,6 @@
-const connectionDialog = document.querySelector('#connectionDialog');
 const contentPanel = document.querySelector('#contentPanel');
-const serverInput = document.querySelector('#serverInput');
-const tokenInput = document.querySelector('#tokenInput');
-const toggleTokenVisibilityButton = document.querySelector('#toggleTokenVisibilityButton');
-const scanPairingButton = document.querySelector('#scanPairingButton');
-const connectionSettingsButton = document.querySelector('#connectionSettingsButton');
-const closeConnectionDialogButton = document.querySelector('#closeConnectionDialogButton');
-const saveConnectionButton = document.querySelector('#saveConnectionButton');
-const connectionDialogTitle = document.querySelector('#connectionDialogTitle');
-const connectionDialogDescription = document.querySelector('#connectionDialogDescription');
-const manualConnectionPanel = document.querySelector('#manualConnectionPanel');
-const scannerPanel = document.querySelector('#scannerPanel');
-const scannerVideo = document.querySelector('#scannerVideo');
-const scannerStatus = document.querySelector('#scannerStatus');
-const stopScanButton = document.querySelector('#stopScanButton');
-const refreshButton = document.querySelector('#refreshButton');
+const importPackageButton = document.querySelector('#importPackageButton');
+const packageFileInput = document.querySelector('#packageFileInput');
 const searchInput = document.querySelector('#searchInput');
 const pathBar = document.querySelector('#pathBar');
 const statusText = document.querySelector('#statusText');
@@ -22,16 +8,9 @@ const noteList = document.querySelector('#noteList');
 const noteDetailPanel = document.querySelector('#noteDetailPanel');
 const noteBackButton = document.querySelector('#noteBackButton');
 const noteFolder = document.querySelector('#noteFolder');
-const editNoteButton = document.querySelector('#editNoteButton');
 const noteView = document.querySelector('#noteView');
 const noteTitle = document.querySelector('#noteTitle');
 const noteContent = document.querySelector('#noteContent');
-const noteEditor = document.querySelector('#noteEditor');
-const noteTitleInput = document.querySelector('#noteTitleInput');
-const noteContentInput = document.querySelector('#noteContentInput');
-const noteEditStatus = document.querySelector('#noteEditStatus');
-const cancelNoteEditButton = document.querySelector('#cancelNoteEditButton');
-const saveNoteEditButton = document.querySelector('#saveNoteEditButton');
 const imageLightbox = document.querySelector('#imageLightbox');
 const imageLightboxStage = document.querySelector('#imageLightboxStage');
 const imageLightboxImage = document.querySelector('#imageLightboxImage');
@@ -40,30 +19,25 @@ const zoomOutImageLightboxButton = document.querySelector('#zoomOutImageLightbox
 const zoomInImageLightboxButton = document.querySelector('#zoomInImageLightboxButton');
 
 const NAVIGATION_STATE_KEY = 'notice-note-mobile-state';
-const TOKEN_KEY = 'notice-note-mobile-token';
-const SERVER_KEY = 'notice-note-mobile-server';
-const LEGACY_TAILSCALE_HOST = '100.95.22.24';
-const EASYTIER_HOST = '10.144.144.1';
-let accessToken = '';
-let serverBaseUrl = '';
+const OFFLINE_DB_NAME = 'notice-note-offline';
+const OFFLINE_DB_VERSION = 1;
+const SNAPSHOT_STORE = 'snapshot';
+const ASSET_STORE = 'assets';
 let library = null;
 let currentFolderId = null;
-let scannerStream = null;
-let scannerTimer = null;
 let isApplyingNavigationState = false;
 let exitPromptExpiresAt = 0;
 let exitPromptTimer = null;
-let activeDialogResolver = null;
 let activeNote = null;
-let isEditingNote = false;
 let isHandlingSystemBack = false;
 let hasQueuedSystemBack = false;
-let mobileSessionId = createMobileSessionId();
 let isMobileSessionSuspended = false;
 let mobileResumePromise = null;
 let isMobileAppActive = true;
 let searchTimer = null;
 let libraryRequestId = 0;
+let offlineDatabasePromise = null;
+const offlineAssetUrls = new Map();
 
 const exitPromptToast = document.createElement('div');
 exitPromptToast.className = 'exit-toast';
@@ -160,188 +134,109 @@ function closeImageLightbox() {
   imageLightboxPreviousFocus = null;
 }
 
-function createMobileSessionId() {
-  if (window.crypto?.randomUUID) {
-    return window.crypto.randomUUID();
+function openOfflineDatabase() {
+  if (offlineDatabasePromise) {
+    return offlineDatabasePromise;
   }
-  const bytes = window.crypto.getRandomValues(new Uint8Array(24));
-  return Array.from(bytes, (value) => value.toString(16).padStart(2, '0')).join('');
-}
-
-function readConnectionFromUrl() {
-  const url = new URL(window.location.href);
-  const token = url.searchParams.get('token');
-  const server = url.searchParams.get('server');
-
-  if (token) {
-    url.searchParams.delete('token');
-  }
-  if (server) {
-    url.searchParams.delete('server');
-  }
-  if (token || server) {
-    window.history.replaceState({}, document.title, url.toString());
-  }
-
-  return { token: token || '', server: server || '' };
-}
-
-function isPackagedApp() {
-  const platform = window.Capacitor?.getPlatform?.();
-  return platform === 'android'
-    || platform === 'ios'
-    || window.location.protocol === 'capacitor:'
-    || window.location.protocol === 'file:';
-}
-
-function normalizeServerUrl(value) {
-  return String(value || '')
-    .trim()
-    .replace(/\\/g, '/')
-    .replace(/\/+$/, '');
-}
-
-function getCurrentPageServerUrl() {
-  if (isPackagedApp() || window.location.protocol === 'file:') {
-    return '';
-  }
-  return normalizeServerUrl(window.location.origin);
-}
-
-function migrateLegacyServerUrl(value) {
-  const normalizedValue = normalizeServerUrl(value);
-  if (!normalizedValue) {
-    return '';
-  }
-  try {
-    const url = new URL(normalizedValue);
-    if (url.hostname === LEGACY_TAILSCALE_HOST) {
-      url.hostname = EASYTIER_HOST;
-      return normalizeServerUrl(url.toString());
-    }
-  } catch (_error) {
-    return normalizedValue;
-  }
-  return normalizedValue;
-}
-
-function getInitialConnection() {
-  const urlConnection = readConnectionFromUrl();
-  return {
-    token: urlConnection.token || window.localStorage.getItem(TOKEN_KEY) || '',
-    server: migrateLegacyServerUrl(
-      urlConnection.server
-      || window.localStorage.getItem(SERVER_KEY)
-      || getCurrentPageServerUrl()
-    )
-  };
-}
-
-function saveConnection(server, token) {
-  accessToken = token.trim();
-  serverBaseUrl = normalizeServerUrl(server);
-  if (accessToken) {
-    window.localStorage.setItem(TOKEN_KEY, accessToken);
-  }
-  if (serverBaseUrl) {
-    window.localStorage.setItem(SERVER_KEY, serverBaseUrl);
-  }
-}
-
-function parsePairingText(text) {
-  const url = new URL(String(text || '').trim());
-  const token = url.searchParams.get('token') || '';
-  const server = url.searchParams.get('server') || `${url.protocol}//${url.host}`;
-  if (!token || !server) {
-    throw new Error('二维码缺少服务地址或 token');
-  }
-  return { server, token };
-}
-
-async function applyPairingText(text) {
-  const pairing = parsePairingText(text);
-  saveConnection(pairing.server, pairing.token);
-  serverInput.value = serverBaseUrl;
-  tokenInput.value = accessToken;
-  closeConnectionDialog();
-  await loadLibrary();
-}
-
-function stopScanner() {
-  clearInterval(scannerTimer);
-  scannerTimer = null;
-  if (scannerStream) {
-    for (const track of scannerStream.getTracks()) {
-      track.stop();
-    }
-  }
-  scannerStream = null;
-  scannerVideo.srcObject = null;
-  scannerPanel.hidden = true;
-}
-
-async function startScanner() {
-  if (!('BarcodeDetector' in window)) {
-    scannerStatus.textContent = '当前 WebView 不支持扫码识别，请用系统相机打开二维码或手动填写。';
-    scannerPanel.hidden = false;
-    return;
-  }
-
-  scannerPanel.hidden = false;
-  scannerStatus.textContent = '正在打开摄像头...';
-  const detector = new window.BarcodeDetector({ formats: ['qr_code'] });
-  scannerStream = await navigator.mediaDevices.getUserMedia({
-    video: { facingMode: 'environment' },
-    audio: false
+  offlineDatabasePromise = new Promise((resolve, reject) => {
+    const request = window.indexedDB.open(OFFLINE_DB_NAME, OFFLINE_DB_VERSION);
+    request.onupgradeneeded = () => {
+      const database = request.result;
+      if (!database.objectStoreNames.contains(SNAPSHOT_STORE)) {
+        database.createObjectStore(SNAPSHOT_STORE);
+      }
+      if (!database.objectStoreNames.contains(ASSET_STORE)) {
+        database.createObjectStore(ASSET_STORE);
+      }
+    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error || new Error('无法打开手机本地数据库'));
   });
-  scannerVideo.srcObject = scannerStream;
-  await scannerVideo.play();
-  scannerStatus.textContent = '将二维码放入取景框';
-
-  scannerTimer = setInterval(() => {
-    detector.detect(scannerVideo)
-      .then((codes) => {
-        const value = codes[0]?.rawValue;
-        if (!value) {
-          return;
-        }
-        return applyPairingText(value);
-      })
-      .catch((error) => {
-        scannerStatus.textContent = `扫码失败：${error.message}`;
-      });
-  }, 600);
+  return offlineDatabasePromise;
 }
 
-function openConnectionDialog(message = '', mode = 'manual') {
-  if (mode !== 'scan') {
-    stopScanner();
+async function readOfflineValue(storeName, key) {
+  const database = await openOfflineDatabase();
+  return new Promise((resolve, reject) => {
+    const transaction = database.transaction(storeName, 'readonly');
+    const request = transaction.objectStore(storeName).get(key);
+    request.onsuccess = () => resolve(request.result || null);
+    request.onerror = () => reject(request.error || new Error('读取手机本地文件失败'));
+  });
+}
+
+async function writeOfflineValue(storeName, key, value) {
+  const database = await openOfflineDatabase();
+  return new Promise((resolve, reject) => {
+    const transaction = database.transaction(storeName, 'readwrite');
+    transaction.objectStore(storeName).put(value, key);
+    transaction.oncomplete = () => resolve();
+    transaction.onerror = () => reject(transaction.error || new Error('写入手机本地文件失败'));
+  });
+}
+
+async function deleteUnusedOfflineAssets(allowedSources) {
+  const database = await openOfflineDatabase();
+  return new Promise((resolve, reject) => {
+    const transaction = database.transaction(ASSET_STORE, 'readwrite');
+    const store = transaction.objectStore(ASSET_STORE);
+    const request = store.openCursor();
+    request.onsuccess = () => {
+      const cursor = request.result;
+      if (!cursor) {
+        return;
+      }
+      if (!allowedSources.has(cursor.key)) {
+        cursor.delete();
+      }
+      cursor.continue();
+    };
+    transaction.oncomplete = () => resolve();
+    transaction.onerror = () => reject(transaction.error || new Error('清理手机旧文件失败'));
+  });
+}
+
+function releaseOfflineAssetUrls() {
+  for (const url of offlineAssetUrls.values()) {
+    URL.revokeObjectURL(url);
   }
-  if (!serverBaseUrl) {
-    serverBaseUrl = getCurrentPageServerUrl();
-  }
-  serverInput.value = serverBaseUrl;
-  tokenInput.value = accessToken;
-  const isScanMode = mode === 'scan';
-  connectionDialogTitle.textContent = isScanMode ? '扫码连接' : '连接配置';
-  connectionDialogDescription.textContent = isScanMode
-    ? '扫描 PC 端生成的连接二维码，自动设置域名和 token。'
-    : '填写电脑的 EasyTier 服务地址和访问令牌。';
-  manualConnectionPanel.hidden = isScanMode;
-  scannerPanel.hidden = !isScanMode;
-  if (message) {
-    tokenInput.placeholder = message;
-  }
-  if (!connectionDialog.open) {
-    connectionDialog.showModal();
+  offlineAssetUrls.clear();
+}
+
+async function loadOfflineAssetUrls(snapshot) {
+  releaseOfflineAssetUrls();
+  for (const asset of snapshot?.assets || []) {
+    const blob = await readOfflineValue(ASSET_STORE, asset.source);
+    if (blob instanceof Blob) {
+      offlineAssetUrls.set(asset.source, URL.createObjectURL(blob));
+    }
   }
 }
 
-function closeConnectionDialog() {
-  stopScanner();
-  if (connectionDialog.open) {
-    connectionDialog.close();
+async function loadOfflineSnapshot() {
+  const snapshot = await readOfflineValue(SNAPSHOT_STORE, 'current');
+  if (!snapshot) {
+    return null;
   }
+  await loadOfflineAssetUrls(snapshot);
+  return snapshot;
+}
+
+const MOBILE_PACKAGE_MAGIC = 'NNMOBILE';
+const MOBILE_PACKAGE_HEADER_SIZE = 16;
+const MOBILE_PACKAGE_VERSION = 2;
+
+function validateMobilePackage(packageData) {
+  if (packageData?.format !== 'notice-note-mobile'
+    || packageData.formatVersion !== MOBILE_PACKAGE_VERSION) {
+    throw new Error('文件不是有效的 Notice Note 手机离线包');
+  }
+  const snapshot = packageData.snapshot;
+  if (!snapshot || !Array.isArray(snapshot.folders) || !Array.isArray(snapshot.notes)
+    || !Array.isArray(snapshot.resources) || !Array.isArray(snapshot.assets)) {
+    throw new Error('离线包内容不完整，请在电脑端重新导出');
+  }
+  return snapshot;
 }
 
 function showContentPanel() {
@@ -354,8 +249,70 @@ function showNoteDetailPanel() {
   noteDetailPanel.hidden = false;
 }
 
-function getApiUrl(path) {
-  return `${serverBaseUrl}${path}`;
+async function readMobilePackageManifest(file) {
+  if (file.size < MOBILE_PACKAGE_HEADER_SIZE) {
+    throw new Error('文件不是有效的 Notice Note 手机离线包');
+  }
+  const headerBytes = await file.slice(0, MOBILE_PACKAGE_HEADER_SIZE).arrayBuffer();
+  const magic = new TextDecoder('ascii').decode(headerBytes.slice(0, 8));
+  const header = new DataView(headerBytes);
+  const version = header.getUint32(8, true);
+  const manifestSize = header.getUint32(12, true);
+  if (magic !== MOBILE_PACKAGE_MAGIC || version !== MOBILE_PACKAGE_VERSION
+    || manifestSize < 1 || MOBILE_PACKAGE_HEADER_SIZE + manifestSize > file.size) {
+    throw new Error('文件不是有效的 Notice Note 手机离线包');
+  }
+  const manifestBytes = await file
+    .slice(MOBILE_PACKAGE_HEADER_SIZE, MOBILE_PACKAGE_HEADER_SIZE + manifestSize)
+    .arrayBuffer();
+  const packageData = JSON.parse(new TextDecoder().decode(manifestBytes));
+  return {
+    snapshot: validateMobilePackage(packageData),
+    assetOffset: MOBILE_PACKAGE_HEADER_SIZE + manifestSize
+  };
+}
+
+async function importMobilePackage(file) {
+  importPackageButton.disabled = true;
+  statusText.textContent = '正在读取离线包...';
+  try {
+    const { snapshot, assetOffset } = await readMobilePackageManifest(file);
+    let offset = assetOffset;
+    for (let index = 0; index < snapshot.assets.length; index += 1) {
+      const asset = snapshot.assets[index];
+      const assetSize = Number(asset.size);
+      if (!asset.source || !Number.isSafeInteger(assetSize) || assetSize < 0
+        || offset + assetSize > file.size) {
+        throw new Error('离线包中的附件数据不完整，请在电脑端重新导出');
+      }
+      statusText.textContent = `正在导入文件 ${index + 1}/${snapshot.assets.length}`;
+      const blob = file.slice(offset, offset + assetSize, asset.mimeType || 'application/octet-stream');
+      await writeOfflineValue(ASSET_STORE, asset.source, blob);
+      offset += assetSize;
+    }
+    if (offset !== file.size) {
+      throw new Error('离线包包含无法识别的数据，请在电脑端重新导出');
+    }
+    await writeOfflineValue(SNAPSHOT_STORE, 'current', snapshot);
+    await deleteUnusedOfflineAssets(new Set(snapshot.assets.map((asset) => asset.source)));
+    library = await loadOfflineSnapshot();
+    currentFolderId = null;
+    searchInput.value = '';
+    renderLibrary();
+  } catch (error) {
+    const cachedSnapshot = await loadOfflineSnapshot().catch(() => null);
+    if (cachedSnapshot) {
+      library = cachedSnapshot;
+      renderLibrary();
+      statusText.textContent = `${error.message} · 已继续使用上次导入内容`;
+    } else {
+      renderDisconnectedState(error.message);
+    }
+    throw error;
+  } finally {
+    importPackageButton.disabled = false;
+    packageFileInput.value = '';
+  }
 }
 
 function createListNavigationState() {
@@ -444,24 +401,8 @@ async function performMobileSystemBack() {
     return;
   }
 
-  if (connectionDialog.open) {
-    closeConnectionDialog();
-    return;
-  }
-
-  if (activeDialogResolver) {
-    closeActiveDialog(null);
-    return;
-  }
-
-  if (isEditingNote) {
-    cancelNoteEditing();
-    return;
-  }
-
   if (!noteDetailPanel.hidden) {
     activeNote = null;
-    editNoteButton.hidden = true;
     showContentPanel();
     renderLibrary();
     replaceNavigationState(createListNavigationState());
@@ -491,7 +432,7 @@ function handleMobileSystemBack() {
   isHandlingSystemBack = true;
   Promise.resolve(performMobileSystemBack())
     .catch((error) => {
-      statusText.textContent = createFriendlyError(error);
+      statusText.textContent = error.message || '返回操作失败';
     })
     .finally(() => {
       isHandlingSystemBack = false;
@@ -504,32 +445,10 @@ function handleMobileSystemBack() {
 
 function clearSensitiveMobileState() {
   closeImageLightbox();
-  stopScanner();
-  if (activeDialogResolver) {
-    closeActiveDialog(null);
-  }
-  if (isEditingNote) {
-    cancelNoteEditing(false);
-  }
-  library = null;
-  currentFolderId = null;
-  activeNote = null;
-  isEditingNote = false;
   isHandlingSystemBack = false;
   hasQueuedSystemBack = false;
-  searchInput.value = '';
-  noteTitle.textContent = '';
-  noteFolder.textContent = '';
-  noteContent.replaceChildren();
-  noteView.hidden = false;
-  noteEditor.hidden = true;
-  editNoteButton.hidden = true;
-  noteList.replaceChildren();
-  showContentPanel();
-  statusText.textContent = '应用已锁定';
   exitPromptExpiresAt = 0;
   exitPromptToast.classList.remove('show');
-  replaceNavigationState(createListNavigationState());
 }
 
 function suspendMobileSession() {
@@ -537,17 +456,8 @@ function suspendMobileSession() {
     return;
   }
 
-  const previousSessionId = mobileSessionId;
-  mobileSessionId = createMobileSessionId();
   isMobileSessionSuspended = true;
   clearSensitiveMobileState();
-
-  if (accessToken && serverBaseUrl) {
-    requestApi('/api/session/lock', 'POST', null, {
-      sessionId: previousSessionId,
-      allowStaleSession: true
-    }).catch(() => {});
-  }
 }
 
 function resumeMobileSession() {
@@ -556,14 +466,9 @@ function resumeMobileSession() {
   }
 
   isMobileSessionSuspended = false;
-  if (!accessToken || (isPackagedApp() && !serverBaseUrl)) {
-    renderDisconnectedState();
-    return;
-  }
-
   mobileResumePromise = loadLibrary()
     .catch((error) => {
-      renderDisconnectedState(createFriendlyError(error));
+      renderDisconnectedState(error.message || '读取本地文件失败');
     })
     .finally(() => {
       mobileResumePromise = null;
@@ -628,7 +533,7 @@ function applyNavigationState(state) {
     currentFolderId = null;
     searchInput.value = '';
     loadLibrary().catch((error) => {
-      statusText.textContent = createFriendlyError(error);
+      statusText.textContent = error.message || '读取本地文件失败';
     });
     showExitPrompt();
     window.history.pushState(createListNavigationState(), document.title);
@@ -640,7 +545,7 @@ function applyNavigationState(state) {
     currentFolderId = state.folderId || null;
     openNote(state.noteId, { pushHistory: false }).catch((error) => {
       showContentPanel();
-      statusText.textContent = createFriendlyError(error);
+      statusText.textContent = error.message || '读取本地文件失败';
     }).finally(() => {
       isApplyingNavigationState = false;
     });
@@ -663,214 +568,9 @@ function applyNavigationState(state) {
   }
   currentFolderId = targetFolderId;
   loadLibrary().catch((error) => {
-    statusText.textContent = createFriendlyError(error);
+    statusText.textContent = error.message || '读取本地文件失败';
   }).finally(() => {
     isApplyingNavigationState = false;
-  });
-}
-
-function createFriendlyError(error) {
-  const message = String(error?.message || '');
-  if (error?.code === 'MOBILE_SESSION_LOCKED') {
-    return '应用已锁定';
-  }
-  if (error?.code === 'FOLDER_LOCKED') {
-    return message || '当前文件夹已加密，请先输入密码。';
-  }
-  if (!serverBaseUrl) {
-    return '还没有配置服务地址。请点击右上角扫码，或填写电脑的 EasyTier 地址。';
-  }
-  if (message.includes('加密') || message.includes('decrypt') || message.includes('crypto')) {
-    return '加密通信失败。请重新扫码连接，或确认手机 WebView 支持安全加密。';
-  }
-  if (message.includes('Invalid URL') || message.includes('parse URL')) {
-    return '服务地址格式不正确。请填写完整地址，例如：http://10.144.144.1:39271';
-  }
-  if (message.includes('Failed to fetch') || message.includes('NetworkError')) {
-    return '暂时连接不上桌面端。请确认电脑和手机已加入同一个 EasyTier 网络，并且电脑服务正在运行。';
-  }
-  if (message.includes('访问令牌无效') || message.includes('401')) {
-    return '访问令牌不正确。请重新扫码，或在连接配置里更新 token。';
-  }
-  if (message.includes('404')) {
-    return '没有找到对应内容，可能文件刚刚被移动或删除了。';
-  }
-  return '连接失败。请检查服务地址和访问令牌后重试。';
-}
-
-function arrayBufferToBase64(buffer) {
-  const bytes = new Uint8Array(buffer);
-  let binary = '';
-  for (const byte of bytes) {
-    binary += String.fromCharCode(byte);
-  }
-  return btoa(binary);
-}
-
-function base64ToArrayBuffer(value) {
-  const binary = atob(value);
-  const bytes = new Uint8Array(binary.length);
-  for (let index = 0; index < binary.length; index += 1) {
-    bytes[index] = binary.charCodeAt(index);
-  }
-  return bytes.buffer;
-}
-
-async function decompressGzip(buffer) {
-  if (typeof DecompressionStream !== 'function') {
-    throw new Error('当前环境不支持 gzip 解压，请升级移动端应用');
-  }
-  const stream = new Blob([buffer]).stream().pipeThrough(new DecompressionStream('gzip'));
-  return new Response(stream).arrayBuffer();
-}
-
-async function getMobileCryptoKey() {
-  if (!window.crypto?.subtle) {
-    throw new Error('当前环境不支持 crypto.subtle 加密');
-  }
-
-  const tokenBytes = new TextEncoder().encode(accessToken);
-  const digest = await window.crypto.subtle.digest('SHA-256', tokenBytes);
-  return window.crypto.subtle.importKey(
-    'raw',
-    digest,
-    { name: 'AES-GCM' },
-    false,
-    ['encrypt', 'decrypt']
-  );
-}
-
-async function encryptMobilePayload(payload) {
-  const iv = window.crypto.getRandomValues(new Uint8Array(12));
-  const key = await getMobileCryptoKey();
-  const encoded = new TextEncoder().encode(JSON.stringify(payload));
-  const encrypted = await window.crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, encoded);
-  return {
-    encrypted: true,
-    iv: arrayBufferToBase64(iv.buffer),
-    data: arrayBufferToBase64(encrypted)
-  };
-}
-
-async function decryptMobilePayload(envelope) {
-  if (!envelope || envelope.encrypted !== true || !envelope.iv || !envelope.data) {
-    throw new Error('加密响应格式不正确');
-  }
-
-  const key = await getMobileCryptoKey();
-  const decrypted = await window.crypto.subtle.decrypt(
-    { name: 'AES-GCM', iv: base64ToArrayBuffer(envelope.iv) },
-    key,
-    base64ToArrayBuffer(envelope.data)
-  );
-  const decoded = envelope.compression === 'gzip'
-    ? await decompressGzip(decrypted)
-    : decrypted;
-  return JSON.parse(new TextDecoder().decode(decoded));
-}
-
-async function requestApi(path, method = 'GET', body = null, options = {}) {
-  try {
-    const requestSessionId = options.sessionId || mobileSessionId;
-    const encryptedRequest = await encryptMobilePayload({
-      method,
-      path,
-      sessionId: requestSessionId,
-      ...(body && typeof body === 'object' ? body : {})
-    });
-    const response = await fetch(getApiUrl('/api/secure'), {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify(encryptedRequest)
-    });
-    const encryptedPayload = await response.json().catch(() => ({}));
-    const payload = await decryptMobilePayload(encryptedPayload);
-    if (!options.allowStaleSession && requestSessionId !== mobileSessionId) {
-      const error = new Error('移动端会话已锁定');
-      error.code = 'MOBILE_SESSION_LOCKED';
-      throw error;
-    }
-    if (!response.ok) {
-      const error = new Error(payload.error || `HTTP ${response.status}`);
-      error.status = response.status;
-      if (payload && typeof payload === 'object') {
-        Object.assign(error, payload);
-      }
-      throw error;
-    }
-    return payload;
-  } catch (error) {
-    if (error?.status || error?.code === 'MOBILE_SESSION_LOCKED') {
-      throw error;
-    }
-    throw new Error(createFriendlyError(error));
-  }
-}
-
-async function requestJson(path) {
-  try {
-    return await requestApi(path, 'GET');
-  } catch (error) {
-    if (error?.status) {
-      throw new Error(createFriendlyError(error));
-    }
-    throw error;
-  }
-}
-
-function closeActiveDialog(value = null) {
-  if (!activeDialogResolver) {
-    return;
-  }
-  const resolve = activeDialogResolver;
-  activeDialogResolver = null;
-  resolve(value);
-}
-
-function showPasswordDialog(title, confirmLabel = '确定') {
-  const overlay = document.createElement('div');
-  overlay.className = 'password-dialog';
-  overlay.innerHTML = `
-    <div class="password-dialog-card" role="dialog" aria-modal="true" aria-label="${escapeAttribute(title)}">
-      <h3>${escapeHtml(title)}</h3>
-      <input type="password" class="password-dialog-input" placeholder="输入密码">
-      <div class="password-dialog-actions">
-        <button type="button" class="password-dialog-cancel">取消</button>
-        <button type="button" class="password-dialog-confirm">${escapeHtml(confirmLabel)}</button>
-      </div>
-    </div>
-  `;
-  document.body.append(overlay);
-
-  const input = overlay.querySelector('.password-dialog-input');
-  const cancelButton = overlay.querySelector('.password-dialog-cancel');
-  const confirmButton = overlay.querySelector('.password-dialog-confirm');
-
-  return new Promise((resolve) => {
-    activeDialogResolver = (value) => {
-      overlay.remove();
-      resolve(value);
-    };
-
-    cancelButton.addEventListener('click', () => closeActiveDialog(null));
-    confirmButton.addEventListener('click', () => closeActiveDialog(input.value));
-    overlay.addEventListener('click', (event) => {
-      if (event.target === overlay) {
-        closeActiveDialog(null);
-      }
-    });
-    overlay.addEventListener('keydown', (event) => {
-      if (event.key === 'Escape') {
-        closeActiveDialog(null);
-      }
-      if (event.key === 'Enter') {
-        closeActiveDialog(input.value);
-      }
-    });
-    input.focus();
   });
 }
 
@@ -879,41 +579,12 @@ async function unlockFolder(folderId) {
   if (!folder?.isProtected || folder.isUnlocked) {
     return true;
   }
-  const password = await showPasswordDialog(`输入「${folder.name}」的访问密码`, '解锁');
-  if (!password) {
-    return false;
-  }
-  try {
-    await requestApi(`/api/folders/${encodeURIComponent(folderId)}/unlock`, 'POST', { password });
-    await loadLibrary();
-    return true;
-  } catch (error) {
-    alert(createFriendlyError(error.status ? error : new Error(error.message || '密码不正确')));
-    return false;
-  }
+  alert('这个加密目录尚未导入，请在电脑端重新导出离线包。');
+  return false;
 }
 
 async function relockFoldersOnNavigate(targetFolderId) {
-  if (targetFolderId === currentFolderId) {
-    return;
-  }
-  const ancestors = new Set();
-  let current = targetFolderId ? getFolderById(targetFolderId) : null;
-  while (current) {
-    ancestors.add(current.id);
-    current = current.parentId ? getFolderById(current.parentId) : null;
-  }
-  const toLock = (library?.folders || []).filter((f) =>
-    f.isProtected && f.isUnlocked && !ancestors.has(f.id)
-  );
-  if (toLock.length === 0) {
-    return;
-  }
-  for (const f of toLock) {
-    await requestApi(`/api/folders/${encodeURIComponent(f.id)}/lock`, 'POST', {});
-    f.isUnlocked = false;
-  }
-  await loadLibrary();
+  return targetFolderId;
 }
 
 async function openFolder(folderId, options = {}) {
@@ -961,7 +632,7 @@ function escapeAttribute(value) {
 }
 
 function isSafeUrl(value) {
-  return /^(https?:|mailto:|tel:|file:|data:|\/|#)/i.test(String(value || '').trim());
+  return /^(https?:|mailto:|tel:|file:|data:|blob:|\/|#)/i.test(String(value || '').trim());
 }
 
 function resolveImageUrl(url) {
@@ -971,12 +642,7 @@ function resolveImageUrl(url) {
   }
   if (trimmed.startsWith('mobile-image://')) {
     const relPath = trimmed.slice('mobile-image://'.length);
-    const apiUrl = getApiUrl('/api/image');
-    return `${apiUrl}?src=${encodeURIComponent(relPath)}&token=${encodeURIComponent(accessToken)}`;
-  }
-  if (trimmed.startsWith('file:')) {
-    const apiUrl = getApiUrl('/api/image');
-    return `${apiUrl}?src=${encodeURIComponent(trimmed)}&token=${encodeURIComponent(accessToken)}`;
+    return offlineAssetUrls.get(decodeURIComponent(relPath)) || '';
   }
   return trimmed;
 }
@@ -1170,7 +836,25 @@ function renderMarkdown(markdown) {
 }
 
 function getFilteredNotes() {
-  return library.notes;
+  const keyword = searchInput.value.trim().toLocaleLowerCase('zh-CN');
+  return (library.notes || []).filter((note) => {
+    if (keyword) {
+      return [note.title, note.preview, note.folderPath, note.content]
+        .some((value) => String(value || '').toLocaleLowerCase('zh-CN').includes(keyword));
+    }
+    return (note.folderId || null) === currentFolderId;
+  });
+}
+
+function getFilteredResources() {
+  const keyword = searchInput.value.trim().toLocaleLowerCase('zh-CN');
+  return (library.resources || []).filter((file) => {
+    if (keyword) {
+      return [file.name, file.folderPath, file.typeLabel]
+        .some((value) => String(value || '').toLocaleLowerCase('zh-CN').includes(keyword));
+    }
+    return (file.folderId || null) === currentFolderId;
+  });
 }
 
 function getChildFolders(folderId) {
@@ -1247,7 +931,7 @@ function renderPathBar() {
           replaceNavigationState(createListNavigationState());
         }
       }).catch((error) => {
-        statusText.textContent = createFriendlyError(error);
+        statusText.textContent = error.message || '读取本地文件失败';
       });
     });
     breadcrumb.append(separator, folderButton);
@@ -1328,6 +1012,29 @@ function renderNoteCard(note, compact = false) {
   return button;
 }
 
+function renderResourceCard(file) {
+  const button = document.createElement('button');
+  button.className = 'note-card resource-card';
+  button.type = 'button';
+  button.dataset.assetSource = file.localAssetPath;
+  button.dataset.resourceName = file.name;
+
+  const title = document.createElement('h3');
+  title.textContent = file.name;
+  const meta = document.createElement('div');
+  meta.className = 'note-meta';
+  const type = document.createElement('span');
+  type.textContent = file.typeLabel || 'FILE';
+  const size = document.createElement('span');
+  size.textContent = `${Math.max(1, Math.round((file.size || 0) / 1024))} KB · 本地`;
+  meta.append(type, size);
+  const preview = document.createElement('p');
+  preview.className = 'note-preview';
+  preview.textContent = file.canOpen ? '点击从手机本地打开' : '文件已保存到手机本地';
+  button.append(title, meta, preview);
+  return button;
+}
+
 function renderEmptyState(message) {
   const emptyState = document.createElement('div');
   emptyState.className = 'empty-state';
@@ -1335,10 +1042,10 @@ function renderEmptyState(message) {
   noteList.append(emptyState);
 }
 
-function renderDisconnectedState(message = '请点击右上角扫码或配置连接信息。') {
+function renderDisconnectedState(message = '请点击右上角“导入文件”。') {
   library = null;
   pathBar.innerHTML = '';
-  statusText.textContent = '未连接桌面端';
+  statusText.textContent = '手机本地还没有导入内容';
   noteList.innerHTML = '';
   renderEmptyState(message);
 }
@@ -1352,18 +1059,20 @@ function renderLibrary() {
 
   const keyword = searchInput.value.trim();
   const notes = getFilteredNotes();
+  const resources = getFilteredResources();
   const childFolders = keyword ? [] : getChildFolders(currentFolderId);
   renderPathBar();
+  const syncTime = formatDateTime(library.app?.generatedAt);
   statusText.textContent = keyword
-    ? `搜索到 ${library.total ?? notes.length} 篇笔记 · 可编辑`
-    : `${getCurrentFolderTitle()} · 夹 ${childFolders.length} · 文 ${notes.length} · 可编辑`;
+    ? `搜索到 ${notes.length + resources.length} 个本地文件 · 上次导入 ${syncTime}`
+    : `${getCurrentFolderTitle()} · 夹 ${childFolders.length} · 文件 ${notes.length + resources.length} · 上次导入 ${syncTime}`;
   noteList.innerHTML = '';
 
   for (const folder of childFolders) {
     noteList.append(renderFolderCard(folder));
   }
 
-  if (notes.length === 0) {
+  if (notes.length === 0 && resources.length === 0) {
     if (childFolders.length > 0) {
       return;
     }
@@ -1376,111 +1085,24 @@ function renderLibrary() {
   for (const note of notes) {
     noteList.append(renderNoteCard(note, !keyword));
   }
+  for (const file of resources) {
+    noteList.append(renderResourceCard(file));
+  }
 }
 
 function renderOpenedNote(note, saved = false) {
   activeNote = note;
-  isEditingNote = false;
   noteFolder.textContent = `${note.folderPath || '全部笔记'} · 更新 ${formatDateTime(note.updatedAt)}${saved ? ' · 已保存' : ''}`;
   noteTitle.textContent = note.title || '未命名笔记';
   noteContent.innerHTML = renderMarkdown(note.content || '');
   noteView.hidden = false;
-  noteEditor.hidden = true;
-  editNoteButton.hidden = typeof note.editableContent !== 'string';
-}
-
-function hasUnsavedNoteChanges() {
-  if (!isEditingNote || !activeNote) {
-    return false;
-  }
-  return noteTitleInput.value !== (activeNote.title || '')
-    || noteContentInput.value !== (activeNote.editableContent || '');
-}
-
-function startNoteEditing() {
-  if (!activeNote || typeof activeNote.editableContent !== 'string') {
-    return;
-  }
-  noteTitleInput.value = activeNote.title || '';
-  noteContentInput.value = activeNote.editableContent;
-  noteEditStatus.textContent = '';
-  noteView.hidden = true;
-  noteEditor.hidden = false;
-  editNoteButton.hidden = true;
-  isEditingNote = true;
-  noteTitleInput.focus();
-}
-
-function cancelNoteEditing(confirmDiscard = true) {
-  if (confirmDiscard && hasUnsavedNoteChanges()
-    && !window.confirm('放弃尚未保存的修改吗？')) {
-    return false;
-  }
-  isEditingNote = false;
-  noteEditor.hidden = true;
-  noteView.hidden = false;
-  editNoteButton.hidden = !activeNote || typeof activeNote.editableContent !== 'string';
-  noteEditStatus.textContent = '';
-  return true;
-}
-
-async function saveNoteEditing() {
-  if (!activeNote) {
-    return;
-  }
-  saveNoteEditButton.disabled = true;
-  cancelNoteEditButton.disabled = true;
-  noteEditStatus.textContent = '正在保存...';
-  try {
-    const input = {
-      title: noteTitleInput.value,
-      content: noteContentInput.value
-    };
-    let savedNote;
-    try {
-      savedNote = await requestApi(`/api/notes/${encodeURIComponent(activeNote.id)}`, 'PUT', input);
-    } catch (error) {
-      if (error?.status !== 423 || !error?.folderId || !await unlockFolder(error.folderId)) {
-        throw error;
-      }
-      savedNote = await requestApi(`/api/notes/${encodeURIComponent(activeNote.id)}`, 'PUT', input);
-    }
-    const summaryIndex = library.notes.findIndex((note) => note.id === savedNote.id);
-    const savedSummary = { ...savedNote };
-    delete savedSummary.content;
-    delete savedSummary.editableContent;
-    if (summaryIndex >= 0) {
-      library.notes.splice(summaryIndex, 1, savedSummary);
-    } else {
-      library.notes.unshift(savedSummary);
-    }
-    renderLibrary();
-    renderOpenedNote(savedNote, true);
-  } catch (error) {
-    noteEditStatus.textContent = `保存失败：${error.message}`;
-  } finally {
-    saveNoteEditButton.disabled = false;
-    cancelNoteEditButton.disabled = false;
-  }
 }
 
 async function openNote(noteId, options = {}) {
   const { pushHistory = true } = options;
-  statusText.textContent = '正在读取笔记...';
-  let note;
-  try {
-    note = await requestApi(`/api/notes/${encodeURIComponent(noteId)}`, 'GET');
-  } catch (error) {
-    if (error?.status === 423 && error?.folderId) {
-      const unlocked = await unlockFolder(error.folderId);
-      if (!unlocked) {
-        statusText.textContent = createFriendlyError(error);
-        return;
-      }
-      note = await requestApi(`/api/notes/${encodeURIComponent(noteId)}`, 'GET');
-    } else {
-      throw new Error(createFriendlyError(error));
-    }
+  const note = (library?.notes || []).find((item) => item.id === noteId);
+  if (!note) {
+    throw new Error('手机本地没有这个文件，请重新导入离线包');
   }
   renderOpenedNote(note);
   showNoteDetailPanel();
@@ -1491,16 +1113,15 @@ async function openNote(noteId, options = {}) {
   }
 }
 
-async function loadLibrary(forceRefresh = false) {
+async function loadLibrary() {
   const requestId = ++libraryRequestId;
   showContentPanel();
-  statusText.textContent = '正在连接桌面端...';
-  const nextLibrary = await requestApi('/api/library', 'GET', {
-    folderId: currentFolderId,
-    query: searchInput.value.trim(),
-    refresh: forceRefresh
-  });
+  const nextLibrary = library || await loadOfflineSnapshot();
   if (requestId !== libraryRequestId) {
+    return;
+  }
+  if (!nextLibrary) {
+    renderDisconnectedState('请点击右上角“导入文件”，选择电脑端导出的离线包。');
     return;
   }
   library = nextLibrary;
@@ -1510,81 +1131,32 @@ async function loadLibrary(forceRefresh = false) {
   renderLibrary();
 }
 
-const initialConnection = getInitialConnection();
-saveConnection(initialConnection.server, initialConnection.token);
 installNavigationHistory();
 installNativeAppHandlers();
 
-saveConnectionButton.addEventListener('click', () => {
-  saveConnection(serverInput.value, tokenInput.value);
-  if (!accessToken) {
-    openConnectionDialog('请先粘贴 token');
-    return;
+importPackageButton.addEventListener('click', () => {
+  packageFileInput.click();
+});
+
+packageFileInput.addEventListener('change', () => {
+  const file = packageFileInput.files?.[0];
+  if (file) {
+    importMobilePackage(file).catch(() => {});
   }
-  if (isPackagedApp() && !serverBaseUrl) {
-    openConnectionDialog('App 内请填写电脑的 EasyTier 服务地址');
-    return;
-  }
-  closeConnectionDialog();
-  loadLibrary().catch((error) => {
-    const message = createFriendlyError(error);
-    openConnectionDialog(message);
-    renderDisconnectedState(message);
-  });
-});
-
-scanPairingButton.addEventListener('click', () => {
-  openConnectionDialog('', 'scan');
-  startScanner().catch((error) => {
-    scannerPanel.hidden = false;
-    scannerStatus.textContent = `无法打开扫码：${error.message}`;
-  });
-});
-
-connectionSettingsButton.addEventListener('click', () => {
-  openConnectionDialog('', 'manual');
-});
-
-closeConnectionDialogButton.addEventListener('click', closeConnectionDialog);
-
-stopScanButton.addEventListener('click', stopScanner);
-
-toggleTokenVisibilityButton.addEventListener('click', () => {
-  const isHidden = tokenInput.type === 'password';
-  tokenInput.type = isHidden ? 'text' : 'password';
-  toggleTokenVisibilityButton.textContent = isHidden ? '🙈' : '👁';
-  toggleTokenVisibilityButton.setAttribute('aria-label', isHidden ? '隐藏访问令牌' : '显示访问令牌');
-});
-
-refreshButton.addEventListener('click', () => {
-  loadLibrary(true).catch((error) => {
-    renderDisconnectedState(createFriendlyError(error));
-  });
 });
 
 noteBackButton.addEventListener('click', () => {
-  if (isEditingNote && !cancelNoteEditing()) {
-    return;
-  }
   activeNote = null;
-  editNoteButton.hidden = true;
   showContentPanel();
   renderLibrary();
   replaceNavigationState(createListNavigationState());
-});
-
-editNoteButton.addEventListener('click', startNoteEditing);
-cancelNoteEditButton.addEventListener('click', () => cancelNoteEditing());
-noteEditor.addEventListener('submit', (event) => {
-  event.preventDefault();
-  saveNoteEditing();
 });
 
 searchInput.addEventListener('input', () => {
   clearTimeout(searchTimer);
   searchTimer = setTimeout(() => {
     loadLibrary().catch((error) => {
-      statusText.textContent = createFriendlyError(error);
+      statusText.textContent = error.message || '读取本地文件失败';
     });
   }, 300);
 });
@@ -1597,7 +1169,7 @@ window.addEventListener('popstate', (event) => {
     : null;
   relockFoldersOnNavigate(targetFolderId)
     .catch((error) => {
-      statusText.textContent = createFriendlyError(error);
+      statusText.textContent = error.message || '读取本地文件失败';
     })
     .finally(() => {
       applyNavigationState(state);
@@ -1608,8 +1180,19 @@ noteList.addEventListener('click', (event) => {
   const folderCard = event.target.closest('.folder-card');
   if (folderCard) {
     openFolder(folderCard.dataset.folderId).catch((error) => {
-      statusText.textContent = createFriendlyError(error);
+      statusText.textContent = error.message || '读取本地文件失败';
     });
+    return;
+  }
+
+  const resourceCard = event.target.closest('.resource-card');
+  if (resourceCard) {
+    const url = offlineAssetUrls.get(resourceCard.dataset.assetSource);
+    if (!url) {
+      alert('手机本地文件不存在，请重新导入离线包。');
+      return;
+    }
+    window.open(url, '_blank', 'noopener');
     return;
   }
 
@@ -1619,7 +1202,7 @@ noteList.addEventListener('click', (event) => {
   }
 
   openNote(card.dataset.noteId).catch((error) => {
-    statusText.textContent = createFriendlyError(error);
+    statusText.textContent = error.message || '读取本地文件失败';
   });
 });
 
@@ -1654,12 +1237,7 @@ document.addEventListener('keydown', (event) => {
   }
 });
 
-if (accessToken && (!isPackagedApp() || serverBaseUrl)) {
-  loadLibrary().catch((error) => {
-    showContentPanel();
-    renderDisconnectedState(createFriendlyError(error));
-  });
-} else {
+loadLibrary().catch((error) => {
   showContentPanel();
-  renderDisconnectedState();
-}
+  renderDisconnectedState(error.message || '读取手机本地文件失败');
+});

@@ -21,7 +21,7 @@ contextBridge.exposeInMainWorld('noticeNote', {
   resetStorage: () => ipcRenderer.invoke('storage:reset'),
   getSettings: () => ipcRenderer.invoke('settings:get'),
   updateSettings: (settings) => ipcRenderer.invoke('settings:update', settings),
-  getMobilePairingInfo: () => ipcRenderer.invoke('mobile:pairing-info'),
+  exportMobilePackage: () => ipcRenderer.invoke('mobile:export-package'),
   insertImage: (payload) => ipcRenderer.invoke('images:insert', payload),
   savePastedImage: (payload) => ipcRenderer.invoke('images:save-pasted', payload),
   saveImageFromUrl: (payload) => ipcRenderer.invoke('images:save-from-url', payload),
@@ -37,7 +37,9 @@ contextBridge.exposeInMainWorld('noticeNote', {
   copyEntryPath: (entry) => ipcRenderer.invoke('entries:copy-path', entry),
   showEntryInFolder: (entry) => ipcRenderer.invoke('entries:show-in-folder', entry),
   openEntryWithDefaultApp: (entry) => ipcRenderer.invoke('entries:open-default', entry),
+  openExternalUrl: (url) => ipcRenderer.invoke('external-url:open', url),
   setReminderFileMark: (entry, marked) => ipcRenderer.invoke('entries:set-reminder-file', entry, marked),
+  handleDailyReview: (entry, action) => ipcRenderer.invoke('daily-review:handle', entry, action),
   onNotesChanged: (callback) => {
     const listener = (_event, notes) => callback(notes);
     ipcRenderer.on('notes:changed', listener);

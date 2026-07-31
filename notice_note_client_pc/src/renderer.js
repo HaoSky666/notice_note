@@ -24,19 +24,15 @@ const editorPanel = document.querySelector('.editor-panel');
 const editorTopbar = document.querySelector('#editorTopbar');
 const refreshButton = document.querySelector('#refreshButton');
 const locateCurrentFileButton = document.querySelector('#locateCurrentFileButton');
-const mobilePairingButton = document.querySelector('#mobilePairingButton');
-const mobilePairingDialog = document.querySelector('#mobilePairingDialog');
-const closeMobilePairingDialogButton = document.querySelector('#closeMobilePairingDialogButton');
-const mobilePairingStatus = document.querySelector('#mobilePairingStatus');
-const mobilePairingQr = document.querySelector('#mobilePairingQr');
-const mobilePairingUrl = document.querySelector('#mobilePairingUrl');
-const copyMobilePairingUrlButton = document.querySelector('#copyMobilePairingUrlButton');
 const settingsButton = document.querySelector('#settingsButton');
 const settingsDialog = document.querySelector('#settingsDialog');
 const closeSettingsDialogButton = document.querySelector('#closeSettingsDialogButton');
 const dailyReviewEnabledInput = document.querySelector('#dailyReviewEnabledInput');
 const dailyReviewCurrentTitle = document.querySelector('#dailyReviewCurrentTitle');
+const interfaceThemeInputs = document.querySelectorAll('input[name="interfaceTheme"]');
 const settingsStoragePath = document.querySelector('#settingsStoragePath');
+const exportMobilePackageButton = document.querySelector('#exportMobilePackageButton');
+const exportMobilePackageStatus = document.querySelector('#exportMobilePackageStatus');
 const chooseStorageButton = document.querySelector('#chooseStorageButton');
 const resetStorageButton = document.querySelector('#resetStorageButton');
 const newMenuDropdown = document.querySelector('#newMenuDropdown');
@@ -45,6 +41,7 @@ const newFolderOption = document.querySelector('#newFolderOption');
 const breadcrumb = document.querySelector('#breadcrumb');
 const showAllFilesButton = document.querySelector('#showAllFilesButton');
 const showReminderCalendarButton = document.querySelector('#showReminderCalendarButton');
+const showDailyReviewButton = document.querySelector('#showDailyReviewButton');
 const pdfViewer = document.querySelector('#pdfViewer');
 const pdfTitle = document.querySelector('#pdfTitle');
 const pdfMeta = document.querySelector('#pdfMeta');
@@ -76,6 +73,10 @@ const viewerSearchCount = document.querySelector('#viewerSearchCount');
 const viewerSearchPrevious = document.querySelector('#viewerSearchPrevious');
 const viewerSearchNext = document.querySelector('#viewerSearchNext');
 const viewerSearchClose = document.querySelector('#viewerSearchClose');
+const dailyReviewBar = document.querySelector('#dailyReviewBar');
+const dailyReviewLastTime = document.querySelector('#dailyReviewLastTime');
+const deferDailyReviewButton = document.querySelector('#deferDailyReviewButton');
+const completeDailyReviewButton = document.querySelector('#completeDailyReviewButton');
 const imageLightbox = document.querySelector('#imageLightbox');
 const imageLightboxStage = document.querySelector('#imageLightboxStage');
 const imageLightboxImage = document.querySelector('#imageLightboxImage');
@@ -113,6 +114,7 @@ let pdfPageRenderVersion = 0;
 let imageZoom = 1;
 let workspaceTabs = [];
 let activeWorkspaceTabKey = null;
+let draggedWorkspaceTabKey = null;
 const workspaceTabViewStates = new Map();
 let filePreviewVersion = 0;
 let viewerSearchMatches = [];
@@ -124,6 +126,8 @@ const SIDEBAR_MAX_WIDTH = 600;
 const PDF_OUTLINE_WIDTH_KEY = 'notice-note:pdf-outline-width';
 const PDF_OUTLINE_MIN_WIDTH = 160;
 const PDF_OUTLINE_MAX_WIDTH = 600;
+const INTERFACE_THEME_KEY = 'notice-note:interface-theme';
+const INTERFACE_THEMES = new Set(['paper', 'blue', 'mint']);
 const REMINDER_NOTIFICATIONS_KEY = 'notice-note:reminder-notifications';
 const DAILY_REMINDER_SLOTS = ['09:30', '15:00'];
 let reminderNotifications = readReminderNotifications();
@@ -243,6 +247,20 @@ function resolveNoteImageSrc(src) {
 
 function readBooleanSetting(key) {
   return localStorage.getItem(key) === 'true';
+}
+
+function getInterfaceTheme() {
+  const savedTheme = localStorage.getItem(INTERFACE_THEME_KEY);
+  return INTERFACE_THEMES.has(savedTheme) ? savedTheme : 'paper';
+}
+
+function applyInterfaceTheme(theme) {
+  const nextTheme = INTERFACE_THEMES.has(theme) ? theme : 'paper';
+  document.body.dataset.theme = nextTheme;
+  localStorage.setItem(INTERFACE_THEME_KEY, nextTheme);
+  interfaceThemeInputs.forEach((input) => {
+    input.checked = input.value === nextTheme;
+  });
 }
 
 function writeBooleanSetting(key, value) {
@@ -503,6 +521,7 @@ function renderWorkspaceTabs() {
     const item = document.createElement('div');
     item.className = `workspace-tab${tabKey === activeWorkspaceTabKey ? ' is-active' : ''}`;
     item.dataset.tabKey = tabKey;
+    item.draggable = true;
 
     const mainButton = document.createElement('button');
     mainButton.className = 'workspace-tab-main';
@@ -536,8 +555,108 @@ function renderWorkspaceTabs() {
     closeButton.addEventListener('click', () => {
       closeWorkspaceTab(tabKey).catch(console.error);
     });
+    item.addEventListener('dragstart', (event) => {
+      if (event.target.closest('.workspace-tab-close')) {
+        event.preventDefault();
+        return;
+      }
+      draggedWorkspaceTabKey = tabKey;
+      event.dataTransfer.effectAllowed = 'move';
+      event.dataTransfer.setData('text/plain', tabKey);
+      requestAnimationFrame(() => item.classList.add('is-dragging'));
+    });
+    item.addEventListener('dragover', (event) => {
+      if (!draggedWorkspaceTabKey || draggedWorkspaceTabKey === tabKey) {
+        return;
+      }
+      event.preventDefault();
+      event.dataTransfer.dropEffect = 'move';
+      clearWorkspaceTabDropIndicators();
+      const placeAfter = event.clientX >= item.getBoundingClientRect().left + (item.offsetWidth / 2);
+      item.classList.add(placeAfter ? 'is-drop-after' : 'is-drop-before');
+    });
+    item.addEventListener('drop', (event) => {
+      if (!draggedWorkspaceTabKey || draggedWorkspaceTabKey === tabKey) {
+        return;
+      }
+      event.preventDefault();
+      const placeAfter = item.classList.contains('is-drop-after');
+      reorderWorkspaceTabs(draggedWorkspaceTabKey, tabKey, placeAfter);
+      draggedWorkspaceTabKey = null;
+    });
+    item.addEventListener('dragend', () => {
+      draggedWorkspaceTabKey = null;
+      clearWorkspaceTabDropIndicators();
+    });
     item.append(mainButton, closeButton);
     workspaceTabsRoot.append(item);
+  }
+  renderDailyReviewBar();
+}
+
+function clearWorkspaceTabDropIndicators() {
+  workspaceTabsRoot.querySelectorAll('.workspace-tab').forEach((item) => {
+    item.classList.remove('is-dragging', 'is-drop-before', 'is-drop-after');
+  });
+}
+
+function reorderWorkspaceTabs(draggedTabKey, targetTabKey, placeAfter) {
+  const draggedIndex = workspaceTabs.findIndex((tab) => {
+    return getWorkspaceTabKey(tab.type, tab.id) === draggedTabKey;
+  });
+  if (draggedIndex < 0) {
+    return;
+  }
+  const [draggedTab] = workspaceTabs.splice(draggedIndex, 1);
+  const targetIndex = workspaceTabs.findIndex((tab) => {
+    return getWorkspaceTabKey(tab.type, tab.id) === targetTabKey;
+  });
+  if (targetIndex < 0) {
+    workspaceTabs.splice(draggedIndex, 0, draggedTab);
+    return;
+  }
+  workspaceTabs.splice(targetIndex + (placeAfter ? 1 : 0), 0, draggedTab);
+  renderWorkspaceTabs();
+}
+
+function getActiveWorkspaceTab() {
+  return workspaceTabs.find((tab) => {
+    return getWorkspaceTabKey(tab.type, tab.id) === activeWorkspaceTabKey;
+  }) || null;
+}
+
+function renderDailyReviewBar() {
+  const tab = getActiveWorkspaceTab();
+  const resource = tab ? getWorkspaceTabResource(tab) : null;
+  dailyReviewBar.hidden = !resource?.isDailyReview;
+  if (!resource?.isDailyReview) {
+    return;
+  }
+  dailyReviewLastTime.textContent = resource.dailyReviewLastReviewedAt
+    ? `上次回顾：${formatListDateTime(resource.dailyReviewLastReviewedAt)}`
+    : '上次回顾：从未完成回顾';
+}
+
+async function handleActiveDailyReview(action) {
+  const tab = getActiveWorkspaceTab();
+  const resource = tab ? getWorkspaceTabResource(tab) : null;
+  if (!tab || !resource?.isDailyReview) {
+    return;
+  }
+
+  deferDailyReviewButton.disabled = true;
+  completeDailyReviewButton.disabled = true;
+  try {
+    const entry = { type: tab.type === 'note' ? 'note' : 'file', id: tab.id };
+    await window.noticeNote.handleDailyReview(entry, action);
+    resource.isDailyReview = false;
+    renderNoteList();
+    renderWorkspaceTabs();
+  } catch (error) {
+    alert(error.message || '更新每日回顾失败');
+  } finally {
+    deferDailyReviewButton.disabled = false;
+    completeDailyReviewButton.disabled = false;
   }
 }
 
@@ -865,8 +984,37 @@ function renderBreadcrumb() {
   if (sidebarViewMode === 'reminder') {
     const reminderBtn = document.createElement('button');
     reminderBtn.className = 'breadcrumb-item breadcrumb-root active';
-    reminderBtn.textContent = '提醒文件';
-    breadcrumb.append(reminderBtn);
+    reminderBtn.textContent = '每日回顾';
+    const helpWrap = document.createElement('div');
+    helpWrap.className = 'daily-review-help-wrap';
+    const helpButton = document.createElement('button');
+    helpButton.className = 'daily-review-help-button';
+    helpButton.type = 'button';
+    helpButton.textContent = '?';
+    helpButton.title = '查看每日回顾规则';
+    helpButton.setAttribute('aria-label', '查看每日回顾规则');
+    helpButton.setAttribute('aria-expanded', 'false');
+    const rules = document.createElement('section');
+    rules.className = 'daily-review-rules';
+    rules.hidden = true;
+    rules.innerHTML = `
+      <strong>每日回顾规则</strong>
+      <ol>
+        <li>自动回顾在周一至周五生效，“明天再看”的内容可延续到周末。</li>
+        <li>仅选择已加入回顾、应用能够打开的内容。</li>
+        <li>存在未完成提醒的笔记不会参与今日回顾。</li>
+        <li>从未完成回顾的内容优先，其次选择上次回顾时间最早的内容。</li>
+        <li>当天选择保持不变；完成回顾后记录时间，明天再看则下次优先。</li>
+      </ol>
+    `;
+    helpButton.addEventListener('click', (event) => {
+      event.stopPropagation();
+      rules.hidden = !rules.hidden;
+      helpButton.setAttribute('aria-expanded', String(!rules.hidden));
+    });
+    rules.addEventListener('click', (event) => event.stopPropagation());
+    helpWrap.append(helpButton, rules);
+    breadcrumb.append(reminderBtn, helpWrap);
     return;
   }
   if (sidebarViewMode === 'calendar') {
@@ -1117,6 +1265,49 @@ function renderReminderCalendar() {
   noteList.append(details);
 }
 
+async function updateDailyReviewMark(entry, target, marked) {
+  if (!target) {
+    return;
+  }
+  const result = await window.noticeNote.setReminderFileMark(entry, marked);
+  target.isReminderFile = Boolean(result?.marked);
+  renderNoteList();
+}
+
+function createDailyReviewToggle(entry, target) {
+  const toggle = document.createElement('span');
+  const isMarked = Boolean(target.isReminderFile);
+  toggle.className = `daily-review-toggle${isMarked ? ' is-active' : ''}`;
+  toggle.role = 'button';
+  toggle.tabIndex = 0;
+  toggle.textContent = isMarked ? '★' : '☆';
+  toggle.title = isMarked ? '移出每日回顾' : '加入每日回顾';
+  toggle.setAttribute('aria-label', toggle.title);
+  toggle.setAttribute('aria-pressed', String(isMarked));
+
+  const changeMark = (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    updateDailyReviewMark(entry, target, !target.isReminderFile).catch(console.error);
+  };
+  toggle.addEventListener('click', changeMark);
+  toggle.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter' || event.key === ' ') {
+      changeMark(event);
+    }
+  });
+  return toggle;
+}
+
+function createDailyReviewLastTime(target) {
+  const lastTime = document.createElement('span');
+  lastTime.className = 'daily-review-last-time';
+  lastTime.textContent = target.dailyReviewLastReviewedAt
+    ? `上次回顾：${formatListDateTime(target.dailyReviewLastReviewedAt)}`
+    : '上次回顾：尚未完成';
+  return lastTime;
+}
+
 function renderNoteList() {
   if (!noteList) {
     return;
@@ -1138,7 +1329,7 @@ function renderNoteList() {
     && filteredResources.length === 0) {
     const empty = document.createElement('p');
     empty.className = 'note-list-empty';
-    empty.textContent = '暂无标记为提醒文件的内容';
+    empty.textContent = '回顾清单还是空的，可点击文件右侧的 ☆ 加入';
     noteList.append(empty);
     return;
   }
@@ -1275,6 +1466,7 @@ function renderNoteList() {
     title.textContent = note.title || '未命名笔记';
     title.title = title.textContent;
     titleRow.append(title);
+    titleRow.append(createDailyReviewToggle({ type: 'note', id: note.id }, note));
     const badgeRow = document.createElement('div');
     badgeRow.className = 'note-badge-row';
 
@@ -1290,15 +1482,15 @@ function renderNoteList() {
       const dailyReviewBadge = document.createElement('span');
       dailyReviewBadge.className = 'daily-review-badge';
       dailyReviewBadge.textContent = '今日回顾';
-      dailyReviewBadge.title = '今天随机选中的回顾文件';
+      dailyReviewBadge.title = '今天选中的每日回顾内容';
       badgeRow.append(dailyReviewBadge);
     }
 
     if (note.isReminderFile) {
       const reminderFileBadge = document.createElement('span');
       reminderFileBadge.className = 'reminder-file-badge';
-      reminderFileBadge.textContent = '提醒';
-      reminderFileBadge.title = '已标记为提醒文件';
+      reminderFileBadge.textContent = '回顾';
+      reminderFileBadge.title = '已加入每日回顾清单';
       badgeRow.append(reminderFileBadge);
     }
 
@@ -1339,8 +1531,8 @@ function renderNoteList() {
       const pendingCount = (note.reminders || []).filter((reminder) => !reminder.done).length;
       const reminderMeta = document.createElement('span');
       reminderMeta.className = `note-reminder-meta${pendingCount > 0 ? ' has-pending' : ''}`;
-      reminderMeta.textContent = pendingCount > 0 ? `${pendingCount} 个待提醒` : '无待提醒';
-      item.append(reminderMeta);
+      reminderMeta.textContent = pendingCount > 0 ? `${pendingCount} 个提醒未完成` : '可参与今日回顾';
+      item.append(reminderMeta, createDailyReviewLastTime(note));
     }
 
     noteList.append(item);
@@ -1381,18 +1573,21 @@ function renderNoteList() {
     meta.textContent = `${formatFileSize(file.size)} · 修改：${formatListDateTime(file.updatedAt)}`;
 
     titleRow.append(title);
+    if (file.canOpen || file.isReminderFile) {
+      titleRow.append(createDailyReviewToggle({ type: 'file', id: file.id }, file));
+    }
     if (file.isDailyReview) {
       const dailyReviewBadge = document.createElement('span');
       dailyReviewBadge.className = 'daily-review-badge';
       dailyReviewBadge.textContent = '今日回顾';
-      dailyReviewBadge.title = '今天随机选中的回顾文件';
+      dailyReviewBadge.title = '今天选中的每日回顾内容';
       badgeRow.append(dailyReviewBadge);
     }
     if (file.isReminderFile) {
       const reminderFileBadge = document.createElement('span');
       reminderFileBadge.className = 'reminder-file-badge';
-      reminderFileBadge.textContent = '提醒';
-      reminderFileBadge.title = '已标记为提醒文件';
+      reminderFileBadge.textContent = '回顾';
+      reminderFileBadge.title = '已加入每日回顾清单';
       badgeRow.append(reminderFileBadge);
     }
     titleRow.append(badge);
@@ -1409,6 +1604,9 @@ function renderNoteList() {
       item.append(folderPath);
     }
     item.append(meta);
+    if (file.isReminderFile) {
+      item.append(createDailyReviewLastTime(file));
+    }
     noteList.append(item);
   }
 }
@@ -1417,6 +1615,7 @@ function selectFolder(folderId) {
   sidebarViewMode = 'all';
   showAllFilesButton.classList.add('is-active');
   showReminderCalendarButton.classList.remove('is-active');
+  showDailyReviewButton.classList.remove('is-active');
   activeFolderId = folderId;
   renderBreadcrumb();
   renderNoteList();
@@ -1461,9 +1660,10 @@ async function openFolderWithAccessCheck(folderId) {
 }
 
 function setSidebarViewMode(mode, shouldRender = true) {
-  sidebarViewMode = mode === 'calendar' ? mode : 'all';
+  sidebarViewMode = ['calendar', 'reminder'].includes(mode) ? mode : 'all';
   showAllFilesButton.classList.toggle('is-active', sidebarViewMode === 'all');
   showReminderCalendarButton.classList.toggle('is-active', sidebarViewMode === 'calendar');
+  showDailyReviewButton.classList.toggle('is-active', sidebarViewMode === 'reminder');
   if (shouldRender) {
     renderBreadcrumb();
     renderNoteList();
@@ -1728,8 +1928,8 @@ function showFolderNameDialog(defaultName) {
 
 function showFolderPasswordDialog(title, confirmLabel = '确定') {
   return new Promise((resolve) => {
-    const dialog = document.createElement('div');
-    dialog.className = 'folder-dialog';
+    const dialog = document.createElement('dialog');
+    dialog.className = 'folder-dialog folder-password-dialog';
     dialog.innerHTML = `
       <div class="folder-dialog-content">
         <label>${title}</label>
@@ -1741,6 +1941,7 @@ function showFolderPasswordDialog(title, confirmLabel = '确定') {
       </div>
     `;
     document.body.append(dialog);
+    dialog.showModal();
 
     const input = dialog.querySelector('#folderPasswordInput');
     const cancelBtn = dialog.querySelector('#folderPasswordCancel');
@@ -1748,10 +1949,15 @@ function showFolderPasswordDialog(title, confirmLabel = '确定') {
     input.focus();
 
     const close = (value) => {
+      dialog.close();
       dialog.remove();
       resolve(value);
     };
 
+    dialog.addEventListener('cancel', (event) => {
+      event.preventDefault();
+      close(null);
+    });
     cancelBtn.addEventListener('click', () => close(null));
     confirmBtn.addEventListener('click', () => close(input.value));
     input.addEventListener('keydown', (event) => {
@@ -2378,22 +2584,6 @@ function renderStorageInfo() {
   resetStorageButton.disabled = storageInfo.isDefault;
 }
 
-async function openMobilePairingDialog() {
-  mobilePairingStatus.textContent = '正在读取 EasyTier 网络地址...';
-  mobilePairingQr.removeAttribute('src');
-  mobilePairingUrl.value = '';
-  mobilePairingDialog.showModal();
-
-  try {
-    const pairingInfo = await window.noticeNote.getMobilePairingInfo();
-    mobilePairingStatus.textContent = pairingInfo.message;
-    mobilePairingQr.src = pairingInfo.qrDataUrl;
-    mobilePairingUrl.value = pairingInfo.pairingUrl;
-  } catch (error) {
-    mobilePairingStatus.textContent = `生成二维码失败：${error.message}`;
-  }
-}
-
 function renderReminders() {
   const note = getActiveNote();
   reminderList.innerHTML = '';
@@ -2557,7 +2747,27 @@ function showPdfStatus(message, isError = false) {
   pdfPages.append(status);
 }
 
-async function renderPdfPages() {
+async function renderPdfPageCanvas(job) {
+  await job.page.render({
+    canvasContext: job.canvas.getContext('2d'),
+    transform: job.outputScale === 1
+      ? null
+      : [job.outputScale, 0, 0, job.outputScale, 0, 0],
+    viewport: job.viewport
+  }).promise;
+}
+
+async function renderPdfPageText(job) {
+  const textContent = await job.page.getTextContent();
+  const layer = new window.noticeNotePdf.TextLayer({
+    textContentSource: textContent,
+    container: job.textLayer,
+    viewport: job.viewport
+  });
+  await layer.render();
+}
+
+async function renderPdfPages(options = {}) {
   if (!pdfDocument) {
     return false;
   }
@@ -2565,14 +2775,15 @@ async function renderPdfPages() {
   const version = ++pdfPageRenderVersion;
   const documentToRender = pdfDocument;
   const availableWidth = Math.max(320, pdfPages.clientWidth - 48);
-  pdfPages.innerHTML = '';
+  const pageNumbers = Array.from({ length: documentToRender.numPages }, (_, index) => index + 1);
+  const pages = await Promise.all(pageNumbers.map((pageNumber) => documentToRender.getPage(pageNumber)));
+  if (version !== pdfPageRenderVersion) {
+    return false;
+  }
 
-  for (let pageNumber = 1; pageNumber <= documentToRender.numPages; pageNumber++) {
-    if (version !== pdfPageRenderVersion) {
-      return false;
-    }
-
-    const page = await documentToRender.getPage(pageNumber);
+  const fragment = document.createDocumentFragment();
+  const jobs = pages.map((page, index) => {
+    const pageNumber = index + 1;
     const baseViewport = page.getViewport({ scale: 1 });
     const viewport = page.getViewport({ scale: (availableWidth / baseViewport.width) * pdfZoom });
     const outputScale = Math.min(window.devicePixelRatio || 1, 2);
@@ -2593,26 +2804,48 @@ async function renderPdfPages() {
     const textLayer = document.createElement('div');
     textLayer.className = 'textLayer';
     pageElement.append(canvas, textLayer);
-    pdfPages.append(pageElement);
-    schedulePdfOutlineHighlight();
+    fragment.append(pageElement);
+    return { pageNumber, page, viewport, outputScale, pageElement, canvas, textLayer };
+  });
 
-    const textContent = await page.getTextContent();
-    await page.render({
-      canvasContext: canvas.getContext('2d'),
-      transform: outputScale === 1 ? null : [outputScale, 0, 0, outputScale, 0, 0],
-      viewport
-    }).promise;
+  const priorityPageNumber = Number(options.priorityPageNumber) || 1;
+  const priorityJob = jobs.find((job) => job.pageNumber === priorityPageNumber) || jobs[0];
+  if (priorityJob) {
+    await renderPdfPageCanvas(priorityJob);
+  }
+  if (version !== pdfPageRenderVersion) {
+    return false;
+  }
 
+  pdfPages.replaceChildren(fragment);
+  options.onLayoutReady?.();
+  schedulePdfOutlineHighlight();
+
+  if (priorityJob) {
+    await renderPdfPageText(priorityJob);
+  }
+  if (version !== pdfPageRenderVersion) {
+    return false;
+  }
+
+  const remainingJobs = jobs
+    .filter((job) => job !== priorityJob)
+    .sort((a, b) => {
+      return Math.abs(a.pageNumber - priorityPageNumber)
+        - Math.abs(b.pageNumber - priorityPageNumber);
+    });
+  for (const job of remainingJobs) {
     if (version !== pdfPageRenderVersion) {
       return false;
     }
-
-    const layer = new window.noticeNotePdf.TextLayer({
-      textContentSource: textContent,
-      container: textLayer,
-      viewport
-    });
-    await layer.render();
+    await renderPdfPageCanvas(job);
+    if (version !== pdfPageRenderVersion) {
+      return false;
+    }
+    await renderPdfPageText(job);
+    if (version !== pdfPageRenderVersion) {
+      return false;
+    }
   }
 
   if (!viewerSearchBar.hidden) {
@@ -2620,6 +2853,28 @@ async function renderPdfPages() {
   }
   schedulePdfOutlineHighlight();
   return true;
+}
+
+function getPdfViewportAnchor(anchor) {
+  if (anchor?.page?.isConnected) {
+    return anchor;
+  }
+  const pageElements = [...pdfPages.querySelectorAll('.pdf-page')];
+  if (pageElements.length === 0) {
+    return null;
+  }
+  const pagesRect = pdfPages.getBoundingClientRect();
+  const clientX = pagesRect.left + (pdfPages.clientWidth / 2);
+  const clientY = pagesRect.top + (pdfPages.clientHeight / 2);
+  const page = pageElements.find((element) => {
+    const rect = element.getBoundingClientRect();
+    return rect.top <= clientY && rect.bottom >= clientY;
+  }) || pageElements.reduce((nearest, element) => {
+    const rect = element.getBoundingClientRect();
+    const distance = Math.min(Math.abs(clientY - rect.top), Math.abs(clientY - rect.bottom));
+    return !nearest || distance < nearest.distance ? { element, distance } : nearest;
+  }, null)?.element;
+  return page ? { page, clientX, clientY } : null;
 }
 
 async function getPdfOutlineDestination(item, documentToRead = pdfDocument) {
@@ -2909,10 +3164,32 @@ async function changePdfZoom(step, anchor = null) {
     return;
   }
 
-  const pageNumber = anchor?.page?.dataset.pageNumber;
-  const pageRect = anchor?.page?.getBoundingClientRect();
-  const anchorRatioX = pageRect ? (anchor.clientX - pageRect.left) / pageRect.width : 0;
-  const anchorRatioY = pageRect ? (anchor.clientY - pageRect.top) / pageRect.height : 0;
+  const viewportAnchor = getPdfViewportAnchor(anchor);
+  const pageNumber = viewportAnchor?.page?.dataset.pageNumber;
+  const pageRect = viewportAnchor?.page?.getBoundingClientRect();
+  const anchorRatioX = pageRect
+    ? Math.min(1, Math.max(0, (viewportAnchor.clientX - pageRect.left) / pageRect.width))
+    : 0;
+  const anchorRatioY = pageRect
+    ? Math.min(1, Math.max(0, (viewportAnchor.clientY - pageRect.top) / pageRect.height))
+    : 0;
+
+  const restoreAnchor = () => {
+    if (!pageNumber || pdfZoom !== nextZoom) {
+      return;
+    }
+    const nextPage = pdfPages.querySelector(`[data-page-number="${pageNumber}"]`);
+    const nextRect = nextPage?.getBoundingClientRect();
+    if (!nextRect) {
+      return;
+    }
+    pdfPages.scrollLeft += nextRect.left
+      + (nextRect.width * anchorRatioX)
+      - viewportAnchor.clientX;
+    pdfPages.scrollTop += nextRect.top
+      + (nextRect.height * anchorRatioY)
+      - viewportAnchor.clientY;
+  };
 
   pdfZoom = nextZoom;
   pdfZoomValue.textContent = `${Math.round(pdfZoom * 100)}%`;
@@ -2920,20 +3197,12 @@ async function changePdfZoom(step, anchor = null) {
   pdfZoomIn.disabled = pdfZoom >= 2;
   const previewKey = pdfPreviewKey;
   pdfPreviewReadyKey = null;
-  const pagesRendered = await renderPdfPages();
+  const pagesRendered = await renderPdfPages({
+    priorityPageNumber: pageNumber,
+    onLayoutReady: restoreAnchor
+  });
   if (pagesRendered && previewKey && pdfPreviewKey === previewKey) {
     pdfPreviewReadyKey = previewKey;
-  }
-
-  if (!pageNumber || pdfZoom !== nextZoom) {
-    return;
-  }
-
-  const nextPage = pdfPages.querySelector(`[data-page-number="${pageNumber}"]`);
-  const nextRect = nextPage?.getBoundingClientRect();
-  if (nextRect) {
-    pdfPages.scrollLeft += nextRect.left + (nextRect.width * anchorRatioX) - anchor.clientX;
-    pdfPages.scrollTop += nextRect.top + (nextRect.height * anchorRatioY) - anchor.clientY;
   }
 }
 
@@ -3399,6 +3668,10 @@ function createMarkdownEditor() {
     placeholder: '点击这里记录 Markdown 笔记。',
     isPlainText: () => ['txt', 'json'].includes(getActiveNote()?.fileType),
     resolveImageSrc: resolveNoteImageSrc,
+    onOpenLink: (href) => {
+      window.noticeNote.openExternalUrl(href)
+        .catch((error) => alert(error.message || '打开链接失败'));
+    },
     onPasteImage: handlePastedImage,
     onPasteHtml: handlePastedHtml,
     onError: (error) => {
@@ -3708,6 +3981,7 @@ initPdfOutlineResizer();
 }
 
 function renderSettings() {
+  applyInterfaceTheme(getInterfaceTheme());
   dailyReviewEnabledInput.checked = appSettings?.dailyReviewEnabled !== false;
   dailyReviewCurrentTitle.textContent = appSettings?.dailyReviewTitle || '今天暂无可回顾文件';
   renderStorageInfo();
@@ -3738,23 +4012,49 @@ newNoteButton.addEventListener('click', () => {
 refreshButton.addEventListener('click', () => {
   refreshNotes().catch(console.error);
 });
-mobilePairingButton.addEventListener('click', () => {
-  openMobilePairingDialog().catch(console.error);
-});
-closeMobilePairingDialogButton.addEventListener('click', () => {
-  mobilePairingDialog.close();
-});
-copyMobilePairingUrlButton.addEventListener('click', () => {
-  if (!mobilePairingUrl.value) {
-    return;
-  }
-  navigator.clipboard.writeText(mobilePairingUrl.value).catch(console.error);
-});
 settingsButton.addEventListener('click', () => {
   openSettings().catch(console.error);
 });
 closeSettingsDialogButton.addEventListener('click', () => {
   settingsDialog.close();
+});
+exportMobilePackageButton.addEventListener('click', async () => {
+  exportMobilePackageButton.disabled = true;
+  try {
+    while (true) {
+      const lockedFolder = folders.find((folder) => folder.isProtected && !folder.isUnlocked);
+      if (!lockedFolder) {
+        break;
+      }
+      exportMobilePackageStatus.textContent = `请解锁加密目录「${lockedFolder.name}」`;
+      const unlocked = await promptUnlockFolder(lockedFolder.id);
+      if (!unlocked) {
+        exportMobilePackageStatus.textContent = '已取消导出';
+        return;
+      }
+    }
+
+    exportMobilePackageStatus.textContent = '正在生成离线包...';
+    const result = await window.noticeNote.exportMobilePackage();
+    if (result.canceled) {
+      exportMobilePackageStatus.textContent = '已取消导出';
+      return;
+    }
+    exportMobilePackageStatus.textContent = `已导出 ${result.noteCount} 篇笔记、${result.resourceCount} 个资料文件`;
+  } catch (error) {
+    const message = String(error.message || '导出失败')
+      .replace(/^Error invoking remote method '[^']+': (?:[A-Za-z]*Error: )?/, '');
+    exportMobilePackageStatus.textContent = `导出失败：${message}`;
+  } finally {
+    exportMobilePackageButton.disabled = false;
+  }
+});
+interfaceThemeInputs.forEach((input) => {
+  input.addEventListener('change', () => {
+    if (input.checked) {
+      applyInterfaceTheme(input.value);
+    }
+  });
 });
 dailyReviewEnabledInput.addEventListener('change', () => {
   dailyReviewEnabledInput.disabled = true;
@@ -3802,6 +4102,9 @@ showAllFilesButton.addEventListener('click', () => {
 showReminderCalendarButton.addEventListener('click', () => {
   setSidebarViewMode('calendar');
 });
+showDailyReviewButton.addEventListener('click', () => {
+  setSidebarViewMode('reminder');
+});
 locateCurrentFileButton.addEventListener('click', () => {
   const tab = workspaceTabs.find((item) => {
     return getWorkspaceTabKey(item.type, item.id) === activeWorkspaceTabKey;
@@ -3821,6 +4124,11 @@ newFolderOption.addEventListener('click', () => {
 document.addEventListener('click', (e) => {
   if (!e.target.closest('.new-menu')) {
     newMenuDropdown.classList.remove('is-open');
+  }
+  const dailyReviewRules = breadcrumb.querySelector('.daily-review-rules');
+  if (dailyReviewRules && !e.target.closest('.daily-review-help-wrap')) {
+    dailyReviewRules.hidden = true;
+    breadcrumb.querySelector('.daily-review-help-button')?.setAttribute('aria-expanded', 'false');
   }
 });
 addReminderButton.addEventListener('click', () => {
@@ -3888,6 +4196,12 @@ viewerSearchInput.addEventListener('keydown', (event) => {
 viewerSearchPrevious.addEventListener('click', () => moveViewerSearch(-1));
 viewerSearchNext.addEventListener('click', () => moveViewerSearch(1));
 viewerSearchClose.addEventListener('click', closeViewerSearch);
+deferDailyReviewButton.addEventListener('click', () => {
+  handleActiveDailyReview('defer').catch(console.error);
+});
+completeDailyReviewButton.addEventListener('click', () => {
+  handleActiveDailyReview('complete').catch(console.error);
+});
 document.addEventListener('keydown', (event) => {
   if ((event.ctrlKey || event.metaKey) && event.key.toLocaleLowerCase('en-US') === 'f'
     && getViewerSearchRoot()) {
@@ -3994,13 +4308,13 @@ function showContextMenu(x, y, entry = null) {
       const target = entry.type === 'note'
         ? notes.find((item) => item.id === entry.id)
         : resourceFiles.find((item) => item.id === entry.id);
-      const isReminderFile = Boolean(target?.isReminderFile);
-      contextMenu.append(createContextMenuItem(
-        isReminderFile ? '取消提醒文件标记' : '标记为提醒文件',
-        () => {
-          window.noticeNote.setReminderFileMark(entry, !isReminderFile).catch(console.error);
-        }
-      ));
+      if (entry.type === 'note' || target?.canOpen || target?.isReminderFile) {
+        const isReminderFile = Boolean(target?.isReminderFile);
+        contextMenu.append(createContextMenuItem(
+          isReminderFile ? '移出每日回顾' : '加入每日回顾',
+          () => updateDailyReviewMark(entry, target, !isReminderFile).catch(console.error)
+        ));
+      }
     }
     contextMenu.append(
       createContextMenuItem('打开资源管理器', () => {
@@ -4207,4 +4521,5 @@ document.addEventListener('keydown', (e) => {
   }
 });
 
+  applyInterfaceTheme(getInterfaceTheme());
   boot().catch(console.error);

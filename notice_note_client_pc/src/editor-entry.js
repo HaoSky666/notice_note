@@ -19,16 +19,18 @@ const markdownHighlight = HighlightStyle.define([
   { tag: tags.link, color: '#2f6b55' }
 ]);
 
-function isLineActive(view, line) {
+function isRangeActive(view, from, to) {
   if (!view.hasFocus) {
     return false;
   }
 
   return view.state.selection.ranges.some((range) => {
-    const headLine = view.state.doc.lineAt(range.head);
-    const anchorLine = view.state.doc.lineAt(range.anchor);
-    return line.number >= Math.min(headLine.number, anchorLine.number)
-      && line.number <= Math.max(headLine.number, anchorLine.number);
+    const selectionFrom = Math.min(range.anchor, range.head);
+    const selectionTo = Math.max(range.anchor, range.head);
+    if (selectionFrom === selectionTo) {
+      return selectionFrom >= from && selectionFrom <= to;
+    }
+    return selectionFrom < to && selectionTo > from;
   });
 }
 
@@ -382,13 +384,14 @@ function buildLivePreviewDecorations(view, options = {}, codeBlocks = []) {
       const image = /!\[([^\]]*)\]\(([^)]+)\)/g;
       for (const match of text.matchAll(image)) {
         const start = line.from + match.index;
+        const end = start + match[0].length;
         const src = options.resolveImageSrc?.(match[2].trim()) || match[2].trim();
         addLineClass(items, line, 'cm-image-line');
-        if (!isLineActive(view, line)) {
+        if (!isRangeActive(view, start, end)) {
           addDecoration(
             items,
             start,
-            start + match[0].length,
+            end,
             Decoration.replace({ widget: new ImageWidget(match[1], src) })
           );
         } else {
@@ -401,51 +404,93 @@ function buildLivePreviewDecorations(view, options = {}, codeBlocks = []) {
         }
       }
 
-      if (!isLineActive(view, line)) {
-        const heading = /^(#{1,6})\s+/.exec(text);
-        if (heading) {
-          addLineClass(items, line, `cm-heading-line cm-heading-${heading[1].length}`);
+      const link = /\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g;
+      for (const match of text.matchAll(link)) {
+        if (match.index > 0 && text[match.index - 1] === '!') {
+          continue;
+        }
+        const start = line.from + match.index;
+        const end = start + match[0].length;
+        if (!isRangeActive(view, start, end)) {
+          addDecoration(
+            items,
+            start,
+            end,
+            Decoration.replace({
+              widget: new LinkWidget(match[1], match[2], options.onOpenLink)
+            })
+          );
+        }
+      }
+
+      const heading = /^(#{1,6})\s+/.exec(text);
+      if (heading) {
+        addLineClass(items, line, `cm-heading-line cm-heading-${heading[1].length}`);
+        if (!isRangeActive(view, line.from, line.from + heading[0].length)) {
           replaceWithEmpty(items, line.from, line.from + heading[0].length);
         }
+      }
 
-        const quote = /^(\s*>+\s*)/.exec(text);
-        if (quote) {
-          addLineClass(items, line, 'cm-quote-line');
+      const quote = /^(\s*>+\s*)/.exec(text);
+      if (quote) {
+        addLineClass(items, line, 'cm-quote-line');
+        if (!isRangeActive(view, line.from, line.from + quote[1].length)) {
           replaceWithEmpty(items, line.from, line.from + quote[1].length);
         }
+      }
 
-        const inlineCode = /`([^`]+)`/g;
-        for (const match of text.matchAll(inlineCode)) {
-          const start = line.from + match.index;
+      const inlineCode = /`([^`]+)`/g;
+      for (const match of text.matchAll(inlineCode)) {
+        const start = line.from + match.index;
+        const end = start + match[0].length;
+        if (!isRangeActive(view, start, end)) {
           replaceWithEmpty(items, start, start + 1);
           addDecoration(items, start + 1, start + match[0].length - 1, Decoration.mark({ class: 'cm-inline-code-rendered' }));
           replaceWithEmpty(items, start + match[0].length - 1, start + match[0].length);
         }
+      }
 
-        const bold = /(\*\*|__)(.+?)\1/g;
-        for (const match of text.matchAll(bold)) {
-          if (match[1] === '__') {
-            const beforeChar = match.index > 0 ? text[match.index - 1] : '';
-            const afterEnd = match.index + match[0].length < text.length ? text[match.index + match[0].length] : '';
-            if (/[a-zA-Z0-9]/.test(beforeChar) && /[a-zA-Z0-9]/.test(afterEnd)) {
-              continue;
-            }
+      const bold = /(\*\*|__)(.+?)\1/g;
+      for (const match of text.matchAll(bold)) {
+        if (match[1] === '__') {
+          const beforeChar = match.index > 0 ? text[match.index - 1] : '';
+          const afterEnd = match.index + match[0].length < text.length ? text[match.index + match[0].length] : '';
+          if (/[a-zA-Z0-9]/.test(beforeChar) && /[a-zA-Z0-9]/.test(afterEnd)) {
+            continue;
           }
-          const start = line.from + match.index;
+        }
+        const start = line.from + match.index;
+        const end = start + match[0].length;
+        addDecoration(
+          items,
+          start + match[1].length,
+          end - match[1].length,
+          Decoration.mark({ class: 'cm-live-preview-bold' })
+        );
+        if (!isRangeActive(view, start, end)) {
           replaceWithEmpty(items, start, start + 2);
           replaceWithEmpty(items, start + match[0].length - 2, start + match[0].length);
         }
+      }
 
-        const italic = /(^|[^*_])([*_])([^*_]+?)\2/g;
-        for (const match of text.matchAll(italic)) {
-          if (match[2] === '_') {
-            const beforeChar = match[1] || '';
-            const afterEnd = match.index + match[0].length < text.length ? text[match.index + match[0].length] : '';
-            if (/[a-zA-Z0-9]/.test(beforeChar) && /[a-zA-Z0-9]/.test(afterEnd)) {
-              continue;
-            }
+      const italic = /(^|[^*_])([*_])([^*_]+?)\2/g;
+      for (const match of text.matchAll(italic)) {
+        if (match[2] === '_') {
+          const beforeChar = match[1] || '';
+          const afterEnd = match.index + match[0].length < text.length ? text[match.index + match[0].length] : '';
+          if (/[a-zA-Z0-9]/.test(beforeChar) && /[a-zA-Z0-9]/.test(afterEnd)) {
+            continue;
           }
-          const markerStart = line.from + match.index + match[1].length;
+        }
+        const markerStart = line.from + match.index + match[1].length;
+        const markerEnd = markerStart + match[0].length - match[1].length;
+        addDecoration(
+          items,
+          markerStart + 1,
+          markerEnd - 1,
+          Decoration.mark({ class: 'cm-live-preview-italic' })
+        );
+        if (!isRangeActive(view, markerStart, markerEnd)) {
           replaceWithEmpty(items, markerStart, markerStart + 1);
           replaceWithEmpty(items, markerStart + match[0].length - match[1].length - 1, markerStart + match[0].length - match[1].length);
         }
@@ -471,6 +516,41 @@ class EmptyWidget extends WidgetType {
     const span = document.createElement('span');
     span.className = 'cm-empty-markdown-widget';
     return span;
+  }
+}
+
+class LinkWidget extends WidgetType {
+  constructor(label, href, onOpen) {
+    super();
+    this.label = label;
+    this.href = href;
+    this.onOpen = onOpen;
+  }
+
+  eq(other) {
+    return other.label === this.label && other.href === this.href;
+  }
+
+  toDOM() {
+    const anchor = document.createElement('a');
+    anchor.className = 'cm-rendered-link';
+    anchor.href = this.href;
+    anchor.textContent = this.label;
+    anchor.title = `${this.href}\nCtrl/⌘ + 单击打开`;
+    anchor.addEventListener('mousedown', (event) => {
+      if (!event.ctrlKey && !event.metaKey) {
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      this.onOpen?.(this.href);
+    });
+    anchor.addEventListener('click', (event) => event.preventDefault());
+    return anchor;
+  }
+
+  ignoreEvent(event) {
+    return event.type !== 'mousedown' || event.ctrlKey || event.metaKey;
   }
 }
 

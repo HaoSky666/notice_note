@@ -12,7 +12,7 @@
     "build:pc": "chcp 65001 > nul && npm run bundle:pc && electron-builder --win nsis --x64",
     "build:app": "chcp 65001 > nul && cd notice_note_client_app && npx cap sync android && cd android && .\\gradlew.bat copyDebugApkToRelease",
     "build:all": "npm run build:pc && npm run build:app",
-    "lint": "chcp 65001 > nul && node --check notice_note_client_pc/src/main.js && node --check notice_note_client_pc/src/preload.js && node --check notice_note_client_pc/src/renderer.js && node --check notice_note_client_app/src/app.js && node --check notice_note_server/server.js"
+    "lint": "chcp 65001 > nul && node --check notice_note_client_pc/src/main.js && node --check notice_note_client_pc/src/preload.js && node --check notice_note_client_pc/src/renderer.js && node --check notice_note_client_app/src/app.js"
   },
   "keywords": [
     "markdown",
@@ -73,9 +73,7 @@
     "exceljs": "^4.4.0",
     "gray-matter": "^4.0.3",
     "mammoth": "^1.12.0",
-    "pdfjs-dist": "^6.1.200",
-    "qrcode": "^1.5.4",
-    "sharp": "^0.35.3"
+    "pdfjs-dist": "^6.1.200"
   },
   "overrides": {
     "dompurify": "^3.3.4"

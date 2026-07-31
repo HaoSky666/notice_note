@@ -37,9 +37,9 @@
           </div>
         </div>
         <button id="toggleSidebarButton" class="toolbar-btn" type="button" title="隐藏笔记列表" aria-label="隐藏笔记列表">
-          <svg width="17" height="17" viewBox="0 0 20 20" fill="none" aria-hidden="true">
-            <rect x="2.5" y="3" width="15" height="14" rx="3" stroke="currentColor" stroke-width="1.4"/>
-            <path d="M7.2 3.5v13M12.4 7.2 9.6 10l2.8 2.8" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+          <svg width="18" height="18" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+            <path d="M14 4.5v11" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+            <path d="m10 6.5-3.5 3.5 3.5 3.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
           </svg>
         </button>
       </div>
@@ -60,14 +60,12 @@
             </svg>
             <span>日历</span>
           </button>
-          <button id="mobilePairingButton" class="library-view-button" type="button" title="手机扫码连接" aria-label="手机扫码连接">
-            <svg width="17" height="17" viewBox="0 0 20 20" fill="none" aria-hidden="true">
-              <rect x="3" y="3" width="5" height="5" rx="1" stroke="currentColor" stroke-width="1.4"/>
-              <rect x="12" y="3" width="5" height="5" rx="1" stroke="currentColor" stroke-width="1.4"/>
-              <rect x="3" y="12" width="5" height="5" rx="1" stroke="currentColor" stroke-width="1.4"/>
-              <path d="M12 12h2.2v2.2H17M17 12v1.4M12 17h1.4M15.5 15.5H17V17" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+          <button id="showDailyReviewButton" class="library-view-button" type="button" title="查看每日回顾清单" aria-label="查看每日回顾清单">
+            <svg width="17" height="17" viewBox="0 0 18 18" fill="none" aria-hidden="true">
+              <path d="M4 2.5h10v13l-5-3-5 3z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/>
+              <path d="m9 5 .8 1.6 1.8.3-1.3 1.2.3 1.8L9 9l-1.6.9.3-1.8-1.3-1.2 1.8-.3z" stroke="currentColor" stroke-width="1.1" stroke-linejoin="round"/>
             </svg>
-            <span>手机</span>
+            <span>回顾</span>
           </button>
           <button id="settingsButton" class="library-view-button library-settings-button" type="button" title="设置" aria-label="设置">
             <svg width="17" height="17" viewBox="0 0 20 20" fill="none" aria-hidden="true">
@@ -87,10 +85,9 @@
         </div>
       </div>
       <button id="showSidebarButton" class="sidebar-open-button collapsed-sidebar-button" type="button" title="显示笔记列表" aria-label="显示笔记列表">
-        <svg width="17" height="17" viewBox="0 0 20 20" fill="none" aria-hidden="true">
-          <rect x="2.5" y="2.5" width="15" height="15" rx="3" stroke="currentColor" stroke-width="1.35"/>
-          <path d="M7 3v14" stroke="currentColor" stroke-width="1.35"/>
-          <path d="m11 7 3 3-3 3" stroke="currentColor" stroke-width="1.35" stroke-linecap="round" stroke-linejoin="round"/>
+        <svg width="18" height="18" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+          <path d="M6 4.5v11" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+          <path d="m10 6.5 3.5 3.5-3.5 3.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
         </svg>
       </button>
       <div id="sidebarResizer" class="sidebar-resizer"></div>
@@ -120,6 +117,16 @@
         <button id="viewerSearchNext" type="button" title="下一个匹配项" aria-label="下一个匹配项">↓</button>
         <button id="viewerSearchClose" type="button" title="关闭搜索" aria-label="关闭搜索">×</button>
       </div>
+      <section id="dailyReviewBar" class="daily-review-bar" hidden>
+        <div class="daily-review-bar-copy">
+          <strong>今日回顾</strong>
+          <span id="dailyReviewLastTime">上次回顾：从未完成回顾</span>
+        </div>
+        <div class="daily-review-bar-actions">
+          <button id="deferDailyReviewButton" class="secondary-button" type="button">明天再看</button>
+          <button id="completeDailyReviewButton" class="primary-button" type="button">完成回顾</button>
+        </div>
+      </section>
       <div class="workspace-content">
       <section class="editor-panel">
         <div id="editorTopbar" class="topbar">
@@ -243,25 +250,6 @@
         </section>
       </form>
     </dialog>
-    <dialog id="mobilePairingDialog" class="mobile-pairing-dialog">
-      <form method="dialog" class="mobile-pairing-card">
-        <header class="mobile-pairing-heading">
-          <div>
-            <h2>手机扫码连接</h2>
-            <p id="mobilePairingStatus">正在读取 EasyTier 网络地址...</p>
-          </div>
-          <button id="closeMobilePairingDialogButton" class="reminder-manager-close" type="button" title="关闭" aria-label="关闭">×</button>
-        </header>
-        <div class="mobile-pairing-qr-wrap">
-          <img id="mobilePairingQr" alt="手机连接二维码">
-        </div>
-        <label class="mobile-pairing-url">
-          <span>手机访问地址</span>
-          <textarea id="mobilePairingUrl" readonly rows="3"></textarea>
-        </label>
-        <button id="copyMobilePairingUrlButton" class="secondary-button" type="button">复制地址</button>
-      </form>
-    </dialog>
     <dialog id="settingsDialog" class="settings-dialog">
       <form method="dialog" class="settings-card">
         <header class="settings-heading">
@@ -272,10 +260,33 @@
           <button id="closeSettingsDialogButton" class="reminder-manager-close" type="button" title="关闭" aria-label="关闭">×</button>
         </header>
         <section class="settings-section">
+          <fieldset class="settings-theme-fieldset">
+            <legend>界面风格</legend>
+            <div class="settings-theme-options">
+              <label class="settings-theme-option">
+                <input type="radio" name="interfaceTheme" value="paper">
+                <span class="settings-theme-preview theme-preview-paper" aria-hidden="true"><i></i><i></i><i></i></span>
+                <strong>暖色纸张</strong>
+                <small>柔和米色，保持当前风格</small>
+              </label>
+              <label class="settings-theme-option">
+                <input type="radio" name="interfaceTheme" value="blue">
+                <span class="settings-theme-preview theme-preview-blue" aria-hidden="true"><i></i><i></i><i></i></span>
+                <strong>清爽蓝</strong>
+                <small>明亮简洁，层次更清晰</small>
+              </label>
+              <label class="settings-theme-option">
+                <input type="radio" name="interfaceTheme" value="mint">
+                <span class="settings-theme-preview theme-preview-mint" aria-hidden="true"><i></i><i></i><i></i></span>
+                <strong>薄荷绿</strong>
+                <small>自然淡雅，阅读更舒缓</small>
+              </label>
+            </div>
+          </fieldset>
           <div class="settings-item">
             <div class="settings-item-copy">
               <strong>工作日随机回顾</strong>
-              <p>周一至周五，每天从没有待提醒的提醒文件中随机选择一篇，标记为“今日回顾”。</p>
+              <p>周一至周五，每天从没有待提醒的回顾清单中选择一篇，标记为“今日回顾”。</p>
             </div>
             <label class="settings-switch" title="启用工作日随机回顾">
               <input id="dailyReviewEnabledInput" type="checkbox">
@@ -297,6 +308,18 @@
             <div class="settings-storage-actions">
               <button id="chooseStorageButton" class="secondary-button" type="button">更改位置</button>
               <button id="resetStorageButton" class="secondary-button" type="button">恢复默认</button>
+            </div>
+          </div>
+          <div class="settings-storage-card">
+            <div class="settings-storage-heading">
+              <div>
+                <strong>手机离线包</strong>
+                <p>导出一个文件，再到手机 App 中导入；导出时会提示解锁加密目录，请妥善保管导出文件</p>
+              </div>
+            </div>
+            <div class="settings-storage-actions">
+              <button id="exportMobilePackageButton" class="secondary-button" type="button">导出手机离线包</button>
+              <span id="exportMobilePackageStatus" class="settings-export-status" role="status"></span>
             </div>
           </div>
         </section>
