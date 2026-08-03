@@ -3212,7 +3212,10 @@ function renderEditor() {
 
   if (!activeNote) {
     activeNoteId = null;
-    activeDraftId = null;
+    // 只有在 activeDraftId 对应的草稿也不存在时才清除（防止竞态误清）
+    if (activeDraftId && !draftsMap.has(activeDraftId)) {
+      activeDraftId = null;
+    }
     titleInput.value = "";
     editorTopbar.hidden = true;
     titleInput.disabled = true;
@@ -4872,6 +4875,12 @@ function mergeIncomingNotes(nextNotes) {
     if (reconcileWorkspaceTabs()) {
       return;
     }
+    // 如果当前活跃的是草稿 Tab，不要调 renderEditor() 重置它，只刷新笔记列表
+    if (activeDraftId) {
+      renderNoteList();
+      renderWorkspaceTabs();
+      return;
+    }
     renderEditor();
     return;
   }
@@ -5945,7 +5954,8 @@ function createDraft() {
     workspaceTabs.push(tab);
   }
   showWorkspaceTab(tab);
-  renderWorkspaceTabs();
+  // 用 requestAnimationFrame 确保 Tab 栏在所有同步操作完成后一定重新渲染
+  requestAnimationFrame(() => renderWorkspaceTabs());
   titleInput.focus();
 }
 
