@@ -5424,7 +5424,7 @@ locateCurrentFileButton.addEventListener("click", () => {
 });
 newDraftOption.addEventListener("click", () => {
   newMenuDropdown.classList.remove("is-open");
-  createDraft();
+  createDraft().catch(console.error);
 });
 newNoteOption.addEventListener("click", () => {
   newMenuDropdown.classList.remove("is-open");
@@ -5926,7 +5926,7 @@ document.addEventListener("keydown", (e) => {
   }
 });
 
-function createDraft() {
+async function createDraft() {
   const draftId = `draft-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
   const draft = {
     id: draftId,
@@ -5939,9 +5939,7 @@ function createDraft() {
     updatedAt: new Date().toISOString(),
   };
   draftsMap.set(draftId, draft);
-  const tab = { type: "draft", id: draftId };
-  workspaceTabs.push(tab);
-  showWorkspaceTab(tab);
+  await activateWorkspaceTab("draft", draftId);
   titleInput.focus();
 }
 
