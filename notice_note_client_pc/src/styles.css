@@ -5364,3 +5364,63 @@ body[data-theme="nte_eloi"] .note-list::-webkit-scrollbar-thumb {
     background-size: 300px auto, 360px 360px, 320px 320px, cover;
   }
 }
+
+/* Draft tab & Draft Save Dialog Styles */
+.workspace-tab-icon.draft {
+  background: #ffecb3;
+  color: #8f6b00;
+  border-radius: 4px;
+  font-weight: bold;
+}
+
+.draft-icon-box {
+  background: #fff3cd !important;
+  color: #856404 !important;
+  font-size: 20px;
+}
+
+.draft-save-body {
+  padding: 20px 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.draft-save-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.draft-save-field label {
+  font-size: 13px;
+  font-weight: 600;
+  color: #4a4237;
+}
+
+.draft-save-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 22px;
+  background: #f4eadb;
+  border-top: 1px solid #eadfce;
+}
+
+.draft-save-footer-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.draft-badge-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 9px;
+  border-radius: 12px;
+  background: rgba(255, 193, 7, 0.2);
+  color: #856404;
+  font-size: 12px;
+  font-weight: 600;
+}

@@ -112,6 +112,15 @@ const fileViewerOpenExternalButton = document.querySelector("#fileViewerOpenExte
 let isFileEditingMode = false;
 let fileViewerToastTimer = null;
 let skipNextFileReload = false;
+const newDraftOption = document.querySelector("#newDraftOption");
+const draftSaveDialog = document.querySelector("#draftSaveDialog");
+const cancelDraftSaveDialogButton = document.querySelector("#cancelDraftSaveDialogButton");
+const draftTitleInput = document.querySelector("#draftTitleInput");
+const draftFolderSelect = document.querySelector("#draftFolderSelect");
+const draftFileTypeSelect = document.querySelector("#draftFileTypeSelect");
+const discardDraftButton = document.querySelector("#discardDraftButton");
+const cancelDraftButton = document.querySelector("#cancelDraftButton");
+const confirmSaveDraftButton = document.querySelector("#confirmSaveDraftButton");
 const wordOutline = document.querySelector("#wordOutline");
 const wordOutlineList = document.querySelector("#wordOutlineList");
 const wordOutlineToggle = document.querySelector("#wordOutlineToggle");
@@ -179,6 +188,10 @@ let activeWorkspaceTabKey = null;
 let draggedWorkspaceTabKey = null;
 const workspaceTabViewStates = new Map();
 let filePreviewVersion = 0;
+let draftsMap = new Map();
+let activeDraftId = null;
+let pendingCloseDraftId = null;
+let pendingCloseTabKey = null;
 let wordOutlineHeadings = [];
 let wordOutlineHighlightFrame = null;
 let viewerSearchMatches = [];
@@ -732,6 +745,9 @@ function getWorkspaceTabKey(type, id) {
 }
 
 function getWorkspaceTabResource(tab) {
+  if (tab.type === "draft") {
+    return draftsMap.get(tab.id) || null;
+  }
   if (tab.type === "pdf") {
     return pdfFiles.find((pdf) => pdf.id === tab.id);
   }
@@ -763,6 +779,10 @@ function syncSidebarToWorkspaceTab(tab) {
   renderBreadcrumb();
   renderNoteList();
 
+  if (tab.type === "draft") {
+    return;
+  }
+
   const target =
     tab.type === "note"
       ? findSidebarEntry("[data-note-id]", "noteId", tab.id)
@@ -789,20 +809,36 @@ function renderWorkspaceTabs() {
     const mainButton = document.createElement("button");
     mainButton.className = "workspace-tab-main";
     mainButton.type = "button";
-    mainButton.title = tab.type === "note" ? resource.title : resource.path;
+    mainButton.title =
+      tab.type === "note"
+        ? resource.title
+        : tab.type === "draft"
+          ? resource.title || "未命名草稿 (临时)"
+          : resource.path;
 
     const icon = document.createElement("span");
-    const iconType = tab.type === "note" ? resource.fileType : resource.kind;
+    const iconType =
+      tab.type === "note"
+        ? resource.fileType
+        : tab.type === "draft"
+          ? "draft"
+          : resource.kind;
     icon.className = `workspace-tab-icon ${iconType}`;
     icon.textContent =
       tab.type === "note"
         ? resource.fileType.toUpperCase()
-        : resource.typeLabel;
+        : tab.type === "draft"
+          ? "草稿"
+          : resource.typeLabel;
 
     const label = document.createElement("span");
     label.className = "workspace-tab-label";
     label.textContent =
-      tab.type === "note" ? resource.title || "未命名笔记" : resource.name;
+      tab.type === "note"
+        ? resource.title || "未命名笔记"
+        : tab.type === "draft"
+          ? resource.title || "未命名草稿"
+          : resource.name;
 
     const closeButton = document.createElement("button");
     closeButton.className = "workspace-tab-close";
@@ -1117,15 +1153,24 @@ function showWorkspaceTab(tab) {
     saveActiveWorkspaceTabViewState();
   }
   activeWorkspaceTabKey = tabKey;
-  if (tab.type === "pdf") {
+  if (tab.type === "draft") {
+    activeDraftId = tab.id;
+    activeNoteId = null;
+    activePdfId = null;
+    activeResourceId = null;
+    renderEditor();
+  } else if (tab.type === "pdf") {
+    activeDraftId = null;
     activePdfId = tab.id;
     activeResourceId = null;
     renderPdf();
   } else if (tab.type === "file") {
+    activeDraftId = null;
     activeResourceId = tab.id;
     activePdfId = null;
     renderResourceFile();
   } else {
+    activeDraftId = null;
     activeNoteId = tab.id;
     activePdfId = null;
     activeResourceId = null;
@@ -1164,6 +1209,27 @@ async function closeWorkspaceTab(tabKey) {
     return;
   }
 
+  const tab = workspaceTabs[index];
+  if (tab.type === "draft") {
+    const draft = draftsMap.get(tab.id);
+    if (draft) {
+      if (activeDraftId === draft.id) {
+        draft.title = titleInput.value;
+        draft.content = getEditorValue();
+      }
+      const hasContent = Boolean(
+        (draft.title && draft.title.trim()) ||
+          (draft.content && draft.content.trim()),
+      );
+      if (hasContent) {
+        openDraftSaveDialog(tab.id, tabKey);
+        return;
+      } else {
+        draftsMap.delete(tab.id);
+      }
+    }
+  }
+
   const isActive = tabKey === activeWorkspaceTabKey;
   if (isActive) {
     await flushPendingSave();
@@ -1185,6 +1251,7 @@ async function closeWorkspaceTab(tabKey) {
 
   workspaceTabViewStates.delete(tabKey);
   activeWorkspaceTabKey = null;
+  activeDraftId = null;
   activeNoteId = null;
   activePdfId = null;
   activeResourceId = null;
@@ -1200,6 +1267,26 @@ async function closeOtherWorkspaceTabs(tabKey) {
   }
 
   await flushPendingSave();
+
+  for (const item of [...workspaceTabs]) {
+    if (getWorkspaceTabKey(item.type, item.id) !== tabKey && item.type === "draft") {
+      const draft = draftsMap.get(item.id);
+      if (draft) {
+        const hasContent = Boolean(
+          (draft.title && draft.title.trim()) ||
+            (draft.content && draft.content.trim()),
+        );
+        if (hasContent) {
+          showWorkspaceTab(item);
+          openDraftSaveDialog(item.id, getWorkspaceTabKey("draft", item.id));
+          return;
+        } else {
+          draftsMap.delete(item.id);
+        }
+      }
+    }
+  }
+
   workspaceTabs = [tab];
   if (tabKey === activeWorkspaceTabKey) {
     renderWorkspaceTabs();
@@ -1215,9 +1302,29 @@ async function closeOtherWorkspaceTabs(tabKey) {
 
 async function closeAllWorkspaceTabs() {
   await flushPendingSave();
+  for (const tab of [...workspaceTabs]) {
+    if (tab.type === "draft") {
+      const draft = draftsMap.get(tab.id);
+      if (draft) {
+        const hasContent = Boolean(
+          (draft.title && draft.title.trim()) ||
+            (draft.content && draft.content.trim()),
+        );
+        if (hasContent) {
+          showWorkspaceTab(tab);
+          openDraftSaveDialog(tab.id, getWorkspaceTabKey("draft", tab.id));
+          return;
+        } else {
+          draftsMap.delete(tab.id);
+        }
+      }
+    }
+  }
+
   workspaceTabs = [];
   workspaceTabViewStates.clear();
   activeWorkspaceTabKey = null;
+  activeDraftId = null;
   activeNoteId = null;
   activePdfId = null;
   activeResourceId = null;
@@ -2484,6 +2591,9 @@ function createReminder(date) {
 }
 
 function getActiveNote() {
+  if (activeDraftId) {
+    return draftsMap.get(activeDraftId) || null;
+  }
   return notes.find((note) => note.id === activeNoteId) || null;
 }
 
@@ -3102,6 +3212,7 @@ function renderEditor() {
 
   if (!activeNote) {
     activeNoteId = null;
+    activeDraftId = null;
     titleInput.value = "";
     editorTopbar.hidden = true;
     titleInput.disabled = true;
@@ -3112,22 +3223,40 @@ function renderEditor() {
     editorRoot.hidden = true;
     editorEmptyState.hidden = false;
   } else {
-    activeNoteId = activeNote.id;
-    editorTopbar.hidden = false;
-    titleInput.disabled = false;
-    openReminderConfigButton.disabled = false;
-    insertImageButton.disabled = false;
-    deleteNoteButton.disabled = false;
-    saveButton.disabled = false;
-    editorRoot.hidden = false;
-    editorEmptyState.hidden = true;
-    titleInput.value = activeNote.title || "";
-    setEditorValue(activeNote.content || "");
-    markdownEditor?.refresh?.();
-    restoreWorkspaceTabViewState(
-      getWorkspaceTabKey("note", activeNote.id),
-      "editor",
-    );
+    if (activeDraftId) {
+      editorTopbar.hidden = false;
+      titleInput.disabled = false;
+      openReminderConfigButton.disabled = true;
+      insertImageButton.disabled = false;
+      deleteNoteButton.disabled = false;
+      deleteNoteButton.textContent = "丢弃草稿";
+      saveButton.disabled = false;
+      saveButton.textContent = "💾 保存为笔记";
+      editorRoot.hidden = false;
+      editorEmptyState.hidden = true;
+      titleInput.value = activeNote.title || "";
+      setEditorValue(activeNote.content || "");
+      markdownEditor?.refresh?.();
+    } else {
+      activeNoteId = activeNote.id;
+      editorTopbar.hidden = false;
+      titleInput.disabled = false;
+      openReminderConfigButton.disabled = false;
+      insertImageButton.disabled = false;
+      deleteNoteButton.disabled = false;
+      deleteNoteButton.textContent = "删除";
+      saveButton.disabled = false;
+      saveButton.textContent = "保存";
+      editorRoot.hidden = false;
+      editorEmptyState.hidden = true;
+      titleInput.value = activeNote.title || "";
+      setEditorValue(activeNote.content || "");
+      markdownEditor?.refresh?.();
+      restoreWorkspaceTabViewState(
+        getWorkspaceTabKey("note", activeNote.id),
+        "editor",
+      );
+    }
   }
 
   isRenderingEditor = false;
@@ -4829,6 +4958,10 @@ function replaceNote(updatedNote) {
 }
 
 async function saveActiveNote() {
+  if (activeDraftId) {
+    openDraftSaveDialog(activeDraftId);
+    return;
+  }
   clearTimeout(saveTimer);
   saveTimer = null;
   const draft = getDraftNote();
@@ -4856,6 +4989,17 @@ async function flushPendingSave() {
 }
 
 function queueSave() {
+  if (activeDraftId) {
+    const draft = draftsMap.get(activeDraftId);
+    if (draft) {
+      draft.title = titleInput.value;
+      draft.content = getEditorValue();
+      draft.updatedAt = new Date().toISOString();
+      renderWorkspaceTabs();
+    }
+    return;
+  }
+
   if (!getActiveNote()) {
     return;
   }
@@ -5277,6 +5421,10 @@ locateCurrentFileButton.addEventListener("click", () => {
   if (tab) {
     syncSidebarToWorkspaceTab(tab);
   }
+});
+newDraftOption.addEventListener("click", () => {
+  newMenuDropdown.classList.remove("is-open");
+  createDraft();
 });
 newNoteOption.addEventListener("click", () => {
   newMenuDropdown.classList.remove("is-open");
@@ -5776,6 +5924,149 @@ document.addEventListener("keydown", (e) => {
     hideContextMenu();
     notificationPanel.hidden = true;
   }
+});
+
+function createDraft() {
+  const draftId = `draft-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+  const draft = {
+    id: draftId,
+    type: "draft",
+    title: "",
+    content: "",
+    fileType: "md",
+    folderId: activeFolderId || null,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+  draftsMap.set(draftId, draft);
+  const tab = { type: "draft", id: draftId };
+  workspaceTabs.push(tab);
+  showWorkspaceTab(tab);
+  titleInput.focus();
+}
+
+function openDraftSaveDialog(draftId, tabKey = null) {
+  const draft = draftsMap.get(draftId);
+  if (!draft) return;
+
+  pendingCloseDraftId = draftId;
+  pendingCloseTabKey = tabKey || getWorkspaceTabKey("draft", draftId);
+
+  if (activeDraftId === draftId) {
+    draft.title = titleInput.value;
+    draft.content = getEditorValue();
+  }
+
+  draftTitleInput.value = draft.title || "";
+  draftFolderSelect.innerHTML = "";
+  const rootOpt = document.createElement("option");
+  rootOpt.value = "";
+  rootOpt.textContent = "📁 根目录";
+  draftFolderSelect.append(rootOpt);
+
+  for (const folder of folders) {
+    const opt = document.createElement("option");
+    opt.value = folder.id;
+    opt.textContent = `📁 ${getFolderNamePath(folder.id)}`;
+    if (folder.id === (draft.folderId || activeFolderId)) {
+      opt.selected = true;
+    }
+    draftFolderSelect.append(opt);
+  }
+
+  draftFileTypeSelect.value = draft.fileType || "md";
+  draftSaveDialog.showModal();
+}
+
+confirmSaveDraftButton?.addEventListener("click", async () => {
+  if (!pendingCloseDraftId) return;
+  const draft = draftsMap.get(pendingCloseDraftId);
+  if (!draft) return;
+
+  confirmSaveDraftButton.disabled = true;
+  try {
+    const selectedFolderId = draftFolderSelect.value || null;
+    const title = draftTitleInput.value.trim() || "未命名笔记";
+    const fileType = draftFileTypeSelect.value || "md";
+    const content = draft.content || "";
+
+    const newNote = await window.noticeNote.createNote(selectedFolderId);
+    newNote.title = title;
+    newNote.content = content;
+    newNote.fileType = fileType;
+    const savedNote = await window.noticeNote.saveNote(newNote);
+    replaceNote(savedNote);
+
+    const draftId = pendingCloseDraftId;
+    const tabKey = pendingCloseTabKey;
+    draftsMap.delete(draftId);
+
+    const tabIndex = workspaceTabs.findIndex(
+      (t) => getWorkspaceTabKey(t.type, t.id) === tabKey,
+    );
+    const noteTab = { type: "note", id: savedNote.id };
+    if (tabIndex >= 0) {
+      workspaceTabs[tabIndex] = noteTab;
+    } else {
+      workspaceTabs.push(noteTab);
+    }
+
+    draftSaveDialog.close();
+    pendingCloseDraftId = null;
+    pendingCloseTabKey = null;
+
+    await activateWorkspaceTab("note", savedNote.id);
+    renderNoteList();
+    renderWorkspaceTabs();
+  } catch (err) {
+    console.error("保存草稿失败:", err);
+  } finally {
+    confirmSaveDraftButton.disabled = false;
+  }
+});
+
+discardDraftButton?.addEventListener("click", () => {
+  if (!pendingCloseDraftId) return;
+  const draftId = pendingCloseDraftId;
+  const tabKey = pendingCloseTabKey;
+
+  draftsMap.delete(draftId);
+  const index = workspaceTabs.findIndex(
+    (t) => getWorkspaceTabKey(t.type, t.id) === tabKey,
+  );
+  if (index >= 0) {
+    workspaceTabs.splice(index, 1);
+  }
+
+  draftSaveDialog.close();
+  pendingCloseDraftId = null;
+  pendingCloseTabKey = null;
+
+  if (activeWorkspaceTabKey === tabKey) {
+    const nextTab = workspaceTabs[Math.min(index, workspaceTabs.length - 1)];
+    if (nextTab) {
+      showWorkspaceTab(nextTab);
+    } else {
+      activeWorkspaceTabKey = null;
+      activeDraftId = null;
+      activeNoteId = null;
+      renderEditor();
+    }
+  } else {
+    renderWorkspaceTabs();
+  }
+});
+
+cancelDraftButton?.addEventListener("click", () => {
+  draftSaveDialog.close();
+  pendingCloseDraftId = null;
+  pendingCloseTabKey = null;
+});
+
+cancelDraftSaveDialogButton?.addEventListener("click", () => {
+  draftSaveDialog.close();
+  pendingCloseDraftId = null;
+  pendingCloseTabKey = null;
 });
 
 applyInterfaceTheme(getInterfaceTheme());

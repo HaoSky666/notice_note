@@ -31,8 +31,9 @@
               </svg>
             </button>
             <div id="newMenuDropdown" class="new-menu-dropdown">
-              <button id="newNoteOption" class="new-menu-item">新建笔记</button>
-              <button id="newFolderOption" class="new-menu-item">新建文件夹</button>
+              <button id="newDraftOption" class="new-menu-item">📝 新建草稿</button>
+              <button id="newNoteOption" class="new-menu-item">📄 新建笔记</button>
+              <button id="newFolderOption" class="new-menu-item">📁 新建文件夹</button>
             </div>
           </div>
         </div>
@@ -353,6 +354,46 @@
             <div id="themePickerGrid" class="theme-picker-grid"></div>
           </section>
         </div>
+      </form>
+    </dialog>
+    <dialog id="draftSaveDialog" class="reminder-dialog draft-save-dialog">
+      <form method="dialog" class="reminder-manager-card draft-save-card">
+        <header class="reminder-manager-heading">
+          <div class="reminder-manager-icon draft-icon-box" aria-hidden="true">
+            📝
+          </div>
+          <div class="reminder-manager-heading-copy">
+            <h2>保存草稿</h2>
+            <p>当前草稿包含未保存的内容，请选择是否保存为正式笔记</p>
+          </div>
+          <button id="cancelDraftSaveDialogButton" class="reminder-manager-close" type="button" title="关闭" aria-label="关闭">×</button>
+        </header>
+
+        <section class="draft-save-body">
+          <div class="draft-save-field">
+            <label for="draftTitleInput">笔记标题</label>
+            <input id="draftTitleInput" type="text" class="reminder-input-text" placeholder="请输入笔记标题..." style="width: 100%; box-sizing: border-box;">
+          </div>
+          <div class="draft-save-field">
+            <label for="draftFolderSelect">选择保存文件夹</label>
+            <select id="draftFolderSelect" class="reminder-input-select" style="width: 100%; box-sizing: border-box;"></select>
+          </div>
+          <div class="draft-save-field">
+            <label for="draftFileTypeSelect">笔记格式</label>
+            <select id="draftFileTypeSelect" class="reminder-input-select" style="width: 100%; box-sizing: border-box;">
+              <option value="md">Markdown (.md)</option>
+              <option value="richtext">富文本 (.richtext)</option>
+            </select>
+          </div>
+        </section>
+
+        <footer class="draft-save-footer">
+          <button id="discardDraftButton" class="secondary-button danger-button" type="button">不保存 (丢弃)</button>
+          <div class="draft-save-footer-right">
+            <button id="cancelDraftButton" class="secondary-button" type="button">取消</button>
+            <button id="confirmSaveDraftButton" class="primary-button" type="button">保存为笔记</button>
+          </div>
+        </footer>
       </form>
     </dialog>
     <div id="imageLightbox" class="image-lightbox" role="dialog" aria-modal="true" aria-label="图片预览" hidden>
