@@ -1,3 +1,4 @@
+process.noDeprecation = true;
 const { app, BrowserWindow, ipcMain, Notification, dialog, Menu, Tray, clipboard, shell } = require('electron');
 const path = require('node:path');
 const { createReadStream, createWriteStream, watch } = require('node:fs');

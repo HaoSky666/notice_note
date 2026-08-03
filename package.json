@@ -4,7 +4,7 @@
   "description": "支持 Markdown 笔记和多时间提醒的桌面应用",
   "main": "notice_note_client_pc/src/main.js",
   "scripts": {
-    "start:pc": "chcp 65001 > nul && electron .",
+    "start:pc": "chcp 65001 > nul && electron --no-deprecation .",
     "start:app": "chcp 65001 > nul && cd notice_note_client_app && npx cap run android",
     "sync:app": "chcp 65001 > nul && cd notice_note_client_app && npx cap sync android",
     "open:app": "chcp 65001 > nul && cd notice_note_client_app && npx cap open android",
