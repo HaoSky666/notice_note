@@ -5369,11 +5369,28 @@ body[data-theme="nte_eloi"] .note-list::-webkit-scrollbar-thumb {
 }
 
 /* Draft tab & Draft Save Dialog Styles */
-.workspace-tab-icon.draft {
-  background: #ffecb3;
-  color: #8f6b00;
-  border-radius: 4px;
-  font-weight: bold;
+.workspace-tab-icon.draft,
+body[data-theme] .workspace-tab-icon.draft {
+  background: rgba(255, 193, 7, 0.3) !important;
+  color: #856404 !important;
+  padding: 1px 5px !important;
+  border-radius: 4px !important;
+  font-size: 10px !important;
+  font-weight: 700 !important;
+  display: inline-block !important;
+}
+
+body[data-theme="nte_eloi"] .workspace-tab {
+  border-color: rgba(113, 157, 137, 0.25);
+  background: rgba(230, 240, 234, 0.6);
+  color: #4b6659;
+}
+
+body[data-theme="nte_eloi"] .workspace-tab.is-active {
+  border-color: rgba(113, 157, 137, 0.5);
+  background: #ffffff;
+  color: #24352e;
+  box-shadow: 0 2px 8px rgba(36, 53, 46, 0.08);
 }
 
 .draft-icon-box {
