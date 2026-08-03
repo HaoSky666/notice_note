@@ -113,6 +113,7 @@ let isFileEditingMode = false;
 let fileViewerToastTimer = null;
 let skipNextFileReload = false;
 const newDraftOption = document.querySelector("#newDraftOption");
+const newDraftQuickButton = document.querySelector("#newDraftQuickButton");
 const draftSaveDialog = document.querySelector("#draftSaveDialog");
 const cancelDraftSaveDialogButton = document.querySelector("#cancelDraftSaveDialogButton");
 const draftTitleInput = document.querySelector("#draftTitleInput");
@@ -5470,6 +5471,9 @@ locateCurrentFileButton.addEventListener("click", () => {
   if (tab) {
     syncSidebarToWorkspaceTab(tab);
   }
+});
+newDraftQuickButton?.addEventListener("click", () => {
+  createDraft();
 });
 newDraftOption.addEventListener("click", () => {
   newMenuDropdown.classList.remove("is-open");
