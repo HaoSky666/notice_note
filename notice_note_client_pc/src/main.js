@@ -12,6 +12,9 @@ const {
 const { pathToFileURL, fileURLToPath } = require('node:url');
 const matter = require('gray-matter');
 const mammoth = require('mammoth');
+const WordExtractor = require('word-extractor');
+const { Document, Packer, Paragraph, TextRun, HeadingLevel } = require('docx');
+const HTMLtoDOCX = require('html-to-docx');
 const ExcelJS = require('exceljs');
 
 const NOTES_DIR_NAME = 'notes';
@@ -664,6 +667,7 @@ function getMimeType(filePath) {
     '.ico': 'image/x-icon',
     '.gif': 'image/gif',
     '.pdf': 'application/pdf',
+    '.doc': 'application/msword',
     '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
     '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
     '.zip': 'application/zip'
@@ -1525,8 +1529,8 @@ function classifyResourceFile(extension) {
   if (['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp', '.svg'].includes(extension)) {
     return { kind: 'image', typeLabel: extension.slice(1).toUpperCase(), canOpen: true };
   }
-  if (extension === '.docx') {
-    return { kind: 'word', typeLabel: 'WORD', canOpen: true };
+  if (['.docx', '.doc'].includes(extension)) {
+    return { kind: 'word', typeLabel: extension === '.doc' ? 'DOC' : 'WORD', canOpen: true };
   }
   if (extension === '.xlsx') {
     return { kind: 'spreadsheet', typeLabel: 'EXCEL', canOpen: true };
@@ -1723,6 +1727,15 @@ function getSpreadsheetMergeMap(worksheet, rowCount, columnCount) {
   return mergeMap;
 }
 
+function escapeHtml(str) {
+  return String(str || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 async function previewResourceFile(fileId) {
   const file = resourceFiles.find((item) => item.id === fileId);
   if (!file || !file.canOpen) {
@@ -1734,16 +1747,62 @@ async function previewResourceFile(fileId) {
     return { kind: 'image', fileUrl: file.fileUrl };
   }
   if (file.kind === 'word') {
-    const result = await mammoth.convertToHtml({ path: file.path }, {
-      styleMap: [
-        "p[style-name='Title'] => h1.word-document-title:fresh",
-        "p[style-name='Subtitle'] => p.word-document-subtitle:fresh",
-        "p[style-name='toc 1'] => p.word-toc.word-toc-1:fresh",
-        "p[style-name='toc 2'] => p.word-toc.word-toc-2:fresh",
-        "p[style-name='toc 3'] => p.word-toc.word-toc-3:fresh"
-      ]
-    });
-    return { kind: 'word', html: result.value || '' };
+    if (file.extension === '.doc') {
+      try {
+        const extractor = new WordExtractor();
+        const extracted = await extractor.extract(file.path);
+        const text = extracted.getBody() || '';
+        const paragraphs = text
+          .split(/\r?\n/)
+          .map((line) => line.trim())
+          .filter(Boolean)
+          .map((line) => `<p class="word-document-paragraph">${escapeHtml(line)}</p>`)
+          .join('');
+        return { kind: 'word', html: paragraphs || '<p class="word-document-paragraph">文档内容为空</p>' };
+      } catch (docErr) {
+        console.error('word-extractor 解析 .doc 失败，尝试 fallback', docErr);
+      }
+    }
+
+    try {
+      const result = await mammoth.convertToHtml({ path: file.path }, {
+        styleMap: [
+          "p[style-name='Title'] => h1.word-document-title:fresh",
+          "p[style-name='Subtitle'] => p.word-document-subtitle:fresh",
+          "p[style-name='Heading 1'] => h1:fresh",
+          "p[style-name='Heading 2'] => h2:fresh",
+          "p[style-name='Heading 3'] => h3:fresh",
+          "p[style-name='Heading 4'] => h4:fresh",
+          "p[style-name='Heading 5'] => h5:fresh",
+          "p[style-name='Heading 6'] => h6:fresh",
+          "p[style-name='heading 1'] => h1:fresh",
+          "p[style-name='heading 2'] => h2:fresh",
+          "p[style-name='heading 3'] => h3:fresh",
+          "p[style-name='heading 4'] => h4:fresh",
+          "p[style-name='heading 5'] => h5:fresh",
+          "p[style-name='heading 6'] => h6:fresh",
+          "p[style-name='toc 1'] => p.word-toc.word-toc-1:fresh",
+          "p[style-name='toc 2'] => p.word-toc.word-toc-2:fresh",
+          "p[style-name='toc 3'] => p.word-toc.word-toc-3:fresh"
+        ]
+      });
+      return { kind: 'word', html: result.value || '' };
+    } catch (docxErr) {
+      try {
+        const extractor = new WordExtractor();
+        const extracted = await extractor.extract(file.path);
+        const text = extracted.getBody() || '';
+        const paragraphs = text
+          .split(/\r?\n/)
+          .map((line) => line.trim())
+          .filter(Boolean)
+          .map((line) => `<p class="word-document-paragraph">${escapeHtml(line)}</p>`)
+          .join('');
+        return { kind: 'word', html: paragraphs || '<p class="word-document-paragraph">文档内容为空</p>' };
+      } catch (fallbackErr) {
+        throw new Error('无法读取 Word 文档内容: ' + docxErr.message);
+      }
+    }
   }
   if (file.kind === 'spreadsheet') {
     const workbook = new ExcelJS.Workbook();
@@ -1787,8 +1846,187 @@ async function previewResourceFile(fileId) {
     });
     return { kind: 'spreadsheet', sheets };
   }
-
   throw new Error('该文件类型不支持预览');
+}
+
+function cleanHtmlForDocx(html) {
+  let clean = String(html || '')
+    .replace(/<script[\s\S]*?<\/script>/gi, '')
+    .replace(/<style[\s\S]*?<\/style>/gi, '')
+    .replace(/<svg[\s\S]*?<\/svg>/gi, '')
+    .replace(/<button[\s\S]*?<\/button>/gi, '')
+    .replace(/<aside[\s\S]*?<\/aside>/gi, '')
+    .replace(/<nav[\s\S]*?<\/nav>/gi, '');
+
+  clean = clean.replace(/<img[^>]*>/gi, (imgTag) => {
+    if (/src=["']data:image\/(?:png|jpe?g|gif|webp);base64,/i.test(imgTag)) {
+      return imgTag;
+    }
+    return '';
+  });
+
+  clean = clean.replace(/style="[^"]*"/gi, (styleAttr) => {
+    return styleAttr.replace(/var\([^)]+\)/g, '#333333');
+  });
+
+  return clean;
+}
+
+async function saveWordFile(fileId, contentData) {
+  const file = resourceFiles.find((item) => item.id === fileId);
+  if (!file) {
+    throw new Error('文件不存在');
+  }
+  assertFolderAccessible(file.folderId);
+
+  let buffer;
+  if (contentData && typeof contentData === 'object' && contentData.html) {
+    try {
+      const cleanedHtml = cleanHtmlForDocx(contentData.html);
+      const fullHtml = `<!DOCTYPE html><html><head><meta charset="UTF-8"></head><body>${cleanedHtml}</body></html>`;
+      buffer = await HTMLtoDOCX(fullHtml, null, {
+        title: file.name,
+        orientation: 'portrait',
+        margins: { top: 1440, right: 1440, bottom: 1440, left: 1440 }
+      });
+    } catch (docxHtmlErr) {
+      console.error('HTMLtoDOCX 转换失败，执行保底算法', docxHtmlErr);
+      const paragraphsData = Array.isArray(contentData.paragraphs) ? contentData.paragraphs : [];
+      const docParagraphs = paragraphsData.map((item) => {
+        let headingLevel = undefined;
+        if (item.heading === 1) headingLevel = HeadingLevel.HEADING_1;
+        else if (item.heading === 2) headingLevel = HeadingLevel.HEADING_2;
+        else if (item.heading === 3) headingLevel = HeadingLevel.HEADING_3;
+
+        return new Paragraph({
+          heading: headingLevel,
+          children: [
+            new TextRun({
+              text: item.text || '',
+              bold: Boolean(item.bold),
+              italic: Boolean(item.italic)
+            })
+          ]
+        });
+      });
+
+      const doc = new Document({
+        sections: [
+          {
+            properties: {},
+            children: docParagraphs.length > 0 ? docParagraphs : [new Paragraph({ children: [new TextRun('Word 文档编辑内容')] })]
+          }
+        ]
+      });
+
+      buffer = await Packer.toBuffer(doc);
+    }
+  } else {
+    const paragraphsData = Array.isArray(contentData) ? contentData : [];
+    const docParagraphs = paragraphsData.map((item) => {
+      let headingLevel = undefined;
+      if (item.heading === 1) headingLevel = HeadingLevel.HEADING_1;
+      else if (item.heading === 2) headingLevel = HeadingLevel.HEADING_2;
+      else if (item.heading === 3) headingLevel = HeadingLevel.HEADING_3;
+
+      return new Paragraph({
+        heading: headingLevel,
+        children: [
+          new TextRun({
+            text: item.text || '',
+            bold: Boolean(item.bold),
+            italic: Boolean(item.italic)
+          })
+        ]
+      });
+    });
+
+    const doc = new Document({
+      sections: [
+        {
+          properties: {},
+          children: docParagraphs.length > 0 ? docParagraphs : [new Paragraph({ children: [new TextRun('')] })]
+        }
+      ]
+    });
+
+    buffer = await Packer.toBuffer(doc);
+  }
+
+  let targetPath = file.path;
+  if (file.extension === '.doc') {
+    const docxPath = file.path.replace(/\.doc$/i, '.docx');
+    await fs.writeFile(docxPath, buffer);
+    try {
+      if (file.path !== docxPath) {
+        await fs.unlink(file.path);
+      }
+    } catch (e) {}
+    file.path = docxPath;
+    file.id = docxPath;
+    file.extension = '.docx';
+    file.name = file.name.replace(/\.doc$/i, '.docx');
+    file.typeLabel = 'WORD';
+  } else {
+    await fs.writeFile(targetPath, buffer);
+  }
+
+  const stats = await fs.stat(file.path);
+  file.size = stats.size;
+  file.updatedAt = stats.mtime.toISOString();
+
+  sendNotesChanged();
+  return { success: true, filePath: file.path };
+}
+
+async function saveSpreadsheetFile(fileId, sheetsData) {
+  const file = resourceFiles.find((item) => item.id === fileId);
+  if (!file) {
+    throw new Error('文件不存在');
+  }
+  assertFolderAccessible(file.folderId);
+
+  const workbook = new ExcelJS.Workbook();
+  try {
+    await workbook.xlsx.readFile(file.path);
+  } catch (err) {
+    workbook.addWorksheet('Sheet1');
+  }
+
+  const inputSheets = Array.isArray(sheetsData) ? sheetsData : [];
+  inputSheets.forEach((sheetData, sIdx) => {
+    let worksheet = workbook.worksheets[sIdx];
+    if (!worksheet) {
+      worksheet = workbook.addWorksheet(sheetData.name || `Sheet${sIdx + 1}`);
+    }
+
+    if (Array.isArray(sheetData.rows)) {
+      sheetData.rows.forEach((row, rIdx) => {
+        if (Array.isArray(row.cells)) {
+          row.cells.forEach((cellData, cIdx) => {
+            if (cellData && cellData.skip) return;
+            const cell = worksheet.getCell(rIdx + 1, cIdx + 1);
+            if (cellData && cellData.value !== undefined) {
+              const val = String(cellData.value || '').trim();
+              if (val !== '' && !isNaN(Number(val))) {
+                cell.value = Number(val);
+              } else {
+                cell.value = val;
+              }
+            }
+          });
+        }
+      });
+    }
+  });
+
+  await workbook.xlsx.writeFile(file.path);
+  const stats = await fs.stat(file.path);
+  file.size = stats.size;
+  file.updatedAt = stats.mtime.toISOString();
+
+  sendNotesChanged();
+  return { success: true, filePath: file.path };
 }
 
 function resolveLibraryEntryPath(entry) {
@@ -2595,6 +2833,8 @@ app.whenReady().then(async () => {
   ipcMain.handle('pdfs:list', () => getVisiblePdfFiles());
   ipcMain.handle('files:list', () => getVisibleResourceFiles());
   ipcMain.handle('files:preview', (_event, fileId) => previewResourceFile(fileId));
+  ipcMain.handle('files:save-word', (_event, fileId, payload) => saveWordFile(fileId, payload));
+  ipcMain.handle('files:save-spreadsheet', (_event, fileId, payload) => saveSpreadsheetFile(fileId, payload));
   ipcMain.handle('files:delete', deleteResourceFile);
   ipcMain.handle('files:move', moveResourceFile);
   ipcMain.handle('pdfs:refresh', async () => {

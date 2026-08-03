@@ -1731,7 +1731,46 @@ border-top: 2px solid #2f6b55;
   font-size: 11px;
 }
 
+.file-viewer-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.is-editable-cell {
+  outline: 2px dashed var(--theme-accent, #39c5bb) !important;
+  background-color: rgba(57, 197, 187, 0.08) !important;
+  cursor: text !important;
+}
+
+.is-editing-word {
+  outline: 2px dashed var(--theme-accent, #39c5bb) !important;
+  padding: 24px;
+  box-shadow: 0 0 16px rgba(57, 197, 187, 0.2) !important;
+  cursor: text !important;
+}
+
+.file-viewer-toast {
+  padding: 2px 10px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  color: #0f5132;
+  background-color: #d1e7dd;
+  border: 1px solid #badbcc;
+  transition: opacity 0.2s ease;
+}
+
+.file-viewer-toast.is-error {
+  color: #842029;
+  background-color: #f8d7da;
+  border-color: #f5c2c7;
+}
+
 .file-viewer-path-row code {
+  flex: 1;
+  min-width: 0;
   overflow: hidden;
   color: #8c8478;
   text-overflow: ellipsis;
@@ -1739,8 +1778,97 @@ border-top: 2px solid #2f6b55;
   user-select: text;
 }
 
+.word-outline-toggle {
+  flex: 0 0 auto;
+  height: 24px;
+  border: 1px solid #d8d0c3;
+  border-radius: 6px;
+  padding: 0 9px;
+  background: #fffdf8;
+  color: #5f594e;
+  font-size: 11px;
+}
+
+.word-outline-toggle:hover,
+.word-outline-toggle.is-active {
+  border-color: #b8cbbf;
+  background: #edf5f0;
+  color: #2f6b55;
+}
+
+.file-viewer-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
+.word-outline[hidden] {
+  display: none;
+}
+
+.word-outline {
+  flex: 0 0 250px;
+  min-width: 0;
+  border-right: 1px solid #d8d0c3;
+  display: flex;
+  flex-direction: column;
+  background: #f7f3eb;
+}
+
+.word-outline-heading {
+  flex: 0 0 auto;
+  padding: 12px 14px;
+  border-bottom: 1px solid #dfd8cc;
+  color: #5f594e;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.word-outline-list {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 8px;
+}
+
+.word-outline-list button {
+  width: 100%;
+  overflow: hidden;
+  border: 0;
+  border-radius: 6px;
+  padding: 7px 8px;
+  background: transparent;
+  color: #5f594e;
+  font-size: 12px;
+  line-height: 1.4;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.word-outline-list button:hover {
+  background: #eee7db;
+  color: #25231f;
+}
+
+.word-outline-list button.is-current {
+  background: #dce9e1;
+  color: #205c45;
+  font-weight: 700;
+  box-shadow: inset 3px 0 #2f6b55;
+}
+
+.word-outline-empty {
+  margin: 20px 8px;
+  color: #8c8478;
+  font-size: 12px;
+  line-height: 1.6;
+  text-align: center;
+}
+
 .file-viewer-content {
   flex: 1;
+  min-width: 0;
   min-height: 0;
   overflow: auto;
   padding: 24px;
@@ -1784,6 +1912,39 @@ border-top: 2px solid #2f6b55;
 .word-preview p {
   margin: 0 0 14px;
   white-space: pre-wrap;
+}
+
+.word-preview .word-toc {
+  cursor: pointer;
+  transition: color 0.15s ease;
+}
+
+.word-preview .word-toc a,
+.word-preview a[href^="#"] {
+  color: var(--theme-accent, #39c5bb);
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.word-preview .word-toc:hover,
+.word-preview .word-toc a:hover,
+.word-preview a[href^="#"]:hover {
+  text-decoration: underline;
+  opacity: 0.85;
+}
+
+.word-heading-highlight {
+  border-radius: 4px;
+  animation: pulseHeading 1.8s ease-out;
+}
+
+@keyframes pulseHeading {
+  0% {
+    background-color: rgba(57, 197, 187, 0.35);
+  }
+  100% {
+    background-color: transparent;
+  }
 }
 
 .word-preview h1,
@@ -3439,6 +3600,11 @@ body[data-theme] .cm-rendered-link {
   padding: 0;
   background: transparent;
   overflow: visible;
+  transition: width 0.2s ease;
+}
+
+.settings-dialog.is-picker-view {
+  width: min(680px, calc(100vw - 36px));
 }
 
 .settings-dialog::backdrop {
@@ -3462,6 +3628,17 @@ body[data-theme] .cm-rendered-link {
   border-bottom: 1px solid #eadfce;
   padding: 20px 22px;
   background: linear-gradient(135deg, #fffdf9 0%, #f4eadb 100%);
+}
+
+.settings-heading-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.settings-heading-left .back-button {
+  padding: 6px 12px;
+  font-size: 12px;
 }
 
 .settings-heading h2 {
@@ -3554,6 +3731,22 @@ body[data-theme] .cm-rendered-link {
   background: var(--preview-background);
 }
 
+.settings-theme-preview.has-avatar {
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+}
+
+.theme-avatar-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 6px;
+}
+
 .settings-theme-preview i {
   border-radius: 3px;
   background: var(--preview-surface);
@@ -3587,6 +3780,279 @@ body[data-theme] .cm-rendered-link {
   --preview-sidebar: #dbece3;
   --preview-surface: #fbfffd;
   --preview-accent: #2f8063;
+}
+
+.theme-preview-dark {
+  --preview-background: #1b1e24;
+  --preview-sidebar: #131519;
+  --preview-surface: #20232a;
+  --preview-accent: #6366f1;
+}
+
+.theme-preview-miku {
+  --preview-background: #eefaf8;
+  --preview-sidebar: #d2f3ee;
+  --preview-surface: #ffffff;
+  --preview-accent: #39c5bb;
+}
+
+.theme-preview-sakura {
+  --preview-background: #211929;
+  --preview-sidebar: #16101c;
+  --preview-surface: #291e30;
+  --preview-accent: #ff75a0;
+}
+
+.theme-preview-violet {
+  --preview-background: #f4f0fd;
+  --preview-sidebar: #e6dbf8;
+  --preview-surface: #ffffff;
+  --preview-accent: #8b5cf6;
+}
+
+.theme-preview-cyberpunk {
+  --preview-background: #191433;
+  --preview-sidebar: #0d0a1c;
+  --preview-surface: #1e183d;
+  --preview-accent: #fee440;
+}
+
+.theme-preview-pixel {
+  --preview-background: #c4e0b0;
+  --preview-sidebar: #8bac0f;
+  --preview-surface: #e0f4d4;
+  --preview-accent: #0f380f;
+}
+
+.theme-preview-nte_city {
+  --preview-background: #161328;
+  --preview-sidebar: #0a0814;
+  --preview-surface: #1a1631;
+  --preview-accent: #00f2fe;
+}
+
+.theme-preview-nte_mint {
+  --preview-background: #e3f6ef;
+  --preview-sidebar: #d5f0e6;
+  --preview-surface: #ffffff;
+  --preview-accent: #00d294;
+}
+
+.theme-preview-nte_anomaly {
+  --preview-background: #1e1d23;
+  --preview-sidebar: #111014;
+  --preview-surface: #24222b;
+  --preview-accent: #ffb703;
+}
+
+.theme-preview-nte_eloi {
+  --preview-background: #f4f5f3;
+  --preview-sidebar: #e4ece7;
+  --preview-surface: #fffefe;
+  --preview-accent: #c73568;
+}
+
+.theme-preview-crimson {
+  --preview-background: #1f1214;
+  --preview-sidebar: #120a0b;
+  --preview-surface: #261618;
+  --preview-accent: #e63946;
+}
+
+/* Settings Theme Summary Card */
+.settings-theme-summary-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  border: 1px solid #e4d9c8;
+  border-radius: 13px;
+  padding: 14px 16px;
+  background: #fffdf9;
+}
+
+.settings-theme-summary-left {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.settings-theme-summary-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.settings-theme-summary-label {
+  font-size: 11px;
+  color: #8c8173;
+  font-weight: 500;
+}
+
+.settings-theme-summary-info strong {
+  font-size: 14px;
+  color: #3f3931;
+}
+
+.settings-theme-summary-info small {
+  font-size: 11px;
+  color: #8c8173;
+}
+
+/* Theme Picker Dialog & Grid */
+.theme-picker-dialog {
+  max-width: 680px;
+  width: 90vw;
+}
+
+.theme-picker-card {
+  max-height: 85vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.theme-picker-tabs {
+  display: flex;
+  gap: 8px;
+  padding: 12px 22px;
+  border-bottom: 1px solid #eadfce;
+  background: #faf6ee;
+  overflow-x: auto;
+}
+
+.theme-picker-tab {
+  border: 1px solid #dfd8cc;
+  border-radius: 20px;
+  padding: 6px 14px;
+  background: #ffffff;
+  color: #657786;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.15s ease;
+}
+
+.theme-picker-tab:hover {
+  background: #f3efe7;
+  color: #22313d;
+}
+
+.theme-picker-tab.is-active {
+  border-color: #3979a8;
+  background: #3979a8;
+  color: #ffffff;
+}
+
+.theme-picker-body {
+  padding: 20px 22px;
+  overflow-y: auto;
+  max-height: 60vh;
+}
+
+.theme-picker-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 14px;
+}
+
+.theme-picker-card-item {
+  border: 1.5px solid #e4d9c8;
+  border-radius: 12px;
+  padding: 12px;
+  display: grid;
+  grid-template-columns: 56px 1fr auto;
+  align-items: center;
+  gap: 12px;
+  background: #fffdf9;
+  cursor: pointer;
+  transition: transform 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.theme-picker-card-item:hover {
+  transform: translateY(-2px);
+  border-color: #79a18d;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.08);
+}
+
+.theme-picker-card-item.is-selected {
+  border-color: #2f6b55;
+  box-shadow: 0 0 0 2px rgba(47, 107, 85, 0.2);
+}
+
+.theme-picker-card-info {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.theme-picker-card-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.theme-picker-card-header strong {
+  font-size: 13px;
+  color: #25231f;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.theme-category-badge {
+  font-size: 10px;
+  padding: 2px 6px;
+  border-radius: 10px;
+  font-weight: 500;
+  white-space: nowrap;
+  background: #edf5f0;
+  color: #2f6b55;
+}
+
+.theme-category-badge.category-anime {
+  background: #fdf2f8;
+  color: #db2777;
+}
+
+.theme-category-badge.category-gaming {
+  background: #fef3c7;
+  color: #d97706;
+}
+
+.theme-picker-card-info small {
+  font-size: 11px;
+  color: #756e62;
+  line-height: 1.35;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.theme-applied-badge {
+  font-size: 11px;
+  font-weight: 700;
+  color: #2f6b55;
+  white-space: nowrap;
+}
+
+.theme-apply-btn {
+  border: 1px solid #dfd8cc;
+  border-radius: 6px;
+  padding: 4px 10px;
+  background: #faf6ee;
+  color: #25231f;
+  font-size: 11px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.theme-apply-btn:hover {
+  border-color: #2f6b55;
+  background: #edf5f0;
+  color: #2f6b55;
 }
 
 .settings-item {
@@ -3826,6 +4292,263 @@ body[data-theme="mint"] {
   --theme-accent-soft: #e1f1e9;
 }
 
+body[data-theme="dark"] {
+  --theme-background: #16181d;
+  --theme-canvas: #1b1e24;
+  --theme-sidebar: #131519;
+  --theme-sidebar-rail: #191c22;
+  --theme-surface: #20232a;
+  --theme-surface-soft: #262a33;
+  --theme-card: rgba(32, 35, 42, 0.75);
+  --theme-card-hover: #262932;
+  --theme-border: #323742;
+  --theme-text: #e2e8f0;
+  --theme-muted: #94a3b8;
+  --theme-accent: #6366f1;
+  --theme-accent-hover: #818cf8;
+  --theme-accent-soft: rgba(99, 102, 241, 0.18);
+}
+
+body[data-theme="miku"] {
+  --theme-background: #f0faf9;
+  --theme-canvas: #e1f5f2;
+  --theme-sidebar: #d1eeea;
+  --theme-sidebar-rail: #c2e7e2;
+  --theme-surface: #ffffff;
+  --theme-surface-soft: #eaf8f6;
+  --theme-card: rgba(255, 255, 255, 0.75);
+  --theme-card-hover: #ffffff;
+  --theme-border: #b3e3dd;
+  --theme-text: #173b37;
+  --theme-muted: #4e857f;
+  --theme-accent: #39c5bb;
+  --theme-accent-hover: #2bb0a6;
+  --theme-accent-soft: #e0f7f5;
+}
+
+body[data-theme="sakura"] {
+  --theme-background: #1a1420;
+  --theme-canvas: #211929;
+  --theme-sidebar: #16101c;
+  --theme-sidebar-rail: #1d1524;
+  --theme-surface: #261c30;
+  --theme-surface-soft: #2e223a;
+  --theme-card: rgba(38, 28, 48, 0.75);
+  --theme-card-hover: #2e223a;
+  --theme-border: #422d52;
+  --theme-text: #f5e6fb;
+  --theme-muted: #ad94bc;
+  --theme-accent: #ff75a0;
+  --theme-accent-hover: #ff94b5;
+  --theme-accent-soft: rgba(255, 117, 160, 0.18);
+}
+
+body[data-theme="violet"] {
+  --theme-background: #faf7fe;
+  --theme-canvas: #f2ebfc;
+  --theme-sidebar: #e7dbfa;
+  --theme-sidebar-rail: #dccbf6;
+  --theme-surface: #ffffff;
+  --theme-surface-soft: #f5effe;
+  --theme-card: rgba(255, 255, 255, 0.75);
+  --theme-card-hover: #ffffff;
+  --theme-border: #d5c0f5;
+  --theme-text: #2a1b40;
+  --theme-muted: #725a96;
+  --theme-accent: #8b5cf6;
+  --theme-accent-hover: #7c3aed;
+  --theme-accent-soft: #ede9fe;
+}
+
+body[data-theme="cyberpunk"] {
+  --theme-background: #120e24;
+  --theme-canvas: #191433;
+  --theme-sidebar: #0d0a1c;
+  --theme-sidebar-rail: #15102c;
+  --theme-surface: #1e183d;
+  --theme-surface-soft: #261f4c;
+  --theme-card: rgba(30, 24, 61, 0.8);
+  --theme-card-hover: #261f4c;
+  --theme-border: #3b2f70;
+  --theme-text: #00f5d4;
+  --theme-muted: #9d8ec4;
+  --theme-accent: #fee440;
+  --theme-accent-hover: #ffea70;
+  --theme-accent-soft: rgba(254, 228, 64, 0.2);
+}
+
+body[data-theme="pixel"] {
+  --theme-background: #d0e8c0;
+  --theme-canvas: #c4e0b0;
+  --theme-sidebar: #b6d8a0;
+  --theme-sidebar-rail: #a6ca90;
+  --theme-surface: #e0f4d4;
+  --theme-surface-soft: #d8f0cc;
+  --theme-card: rgba(224, 244, 212, 0.8);
+  --theme-card-hover: #e0f4d4;
+  --theme-border: #8bac0f;
+  --theme-text: #0f380f;
+  --theme-muted: #306230;
+  --theme-accent: #0f380f;
+  --theme-accent-hover: #000000;
+  --theme-accent-soft: rgba(139, 172, 15, 0.3);
+}
+
+body[data-theme="nte_city"] {
+  --theme-background: #0f0d1b;
+  --theme-canvas: #161328;
+  --theme-sidebar: #0a0814;
+  --theme-sidebar-rail: #120f21;
+  --theme-surface: #1a1631;
+  --theme-surface-soft: #221d40;
+  --theme-card: rgba(26, 22, 49, 0.85);
+  --theme-card-hover: #231e42;
+  --theme-border: #352c60;
+  --theme-text: #e4fbfb;
+  --theme-muted: #928cb8;
+  --theme-accent: #00f2fe;
+  --theme-accent-hover: #4facfe;
+  --theme-accent-soft: rgba(0, 242, 254, 0.18);
+}
+
+body[data-theme="nte_mint"] {
+  --theme-background: #f0fbf7;
+  --theme-canvas: #e3f6ef;
+  --theme-sidebar: #d5f0e6;
+  --theme-sidebar-rail: #c5ebd9;
+  --theme-surface: #ffffff;
+  --theme-surface-soft: #eaf8f3;
+  --theme-card: rgba(255, 255, 255, 0.8);
+  --theme-card-hover: #ffffff;
+  --theme-border: #a8e0cb;
+  --theme-text: #12382c;
+  --theme-muted: #4a8270;
+  --theme-accent: #00d294;
+  --theme-accent-hover: #00b882;
+  --theme-accent-soft: #dff6ee;
+}
+
+body[data-theme="nte_anomaly"] {
+  --theme-background: #161519;
+  --theme-canvas: #1e1d23;
+  --theme-sidebar: #111014;
+  --theme-sidebar-rail: #1a1920;
+  --theme-surface: #24222b;
+  --theme-surface-soft: #2c2935;
+  --theme-card: rgba(36, 34, 43, 0.85);
+  --theme-card-hover: #2e2b3b;
+  --theme-border: #423e50;
+  --theme-text: #fff3d1;
+  --theme-muted: #a8a08c;
+  --theme-accent: #ffb703;
+  --theme-accent-hover: #ffd166;
+  --theme-accent-soft: rgba(255, 183, 3, 0.2);
+}
+
+body[data-theme="nte_eloi"] {
+  --theme-background: #eef2ef;
+  --theme-canvas: #f4f5f3;
+  --theme-sidebar: #edf2ef;
+  --theme-sidebar-rail: #e2ebe6;
+  --theme-surface: #fffefe;
+  --theme-surface-soft: #f3f7f4;
+  --theme-card: rgba(255, 255, 255, 0.78);
+  --theme-card-hover: #ffffff;
+  --theme-border: #d3ded8;
+  --theme-text: #25312d;
+  --theme-muted: #6d7c76;
+  --theme-accent: #c73568;
+  --theme-accent-hover: #aa2856;
+  --theme-accent-soft: #fae9ef;
+}
+
+body[data-theme="nte_eloi"] .workspace {
+  position: relative;
+  background:
+    radial-gradient(circle at 84% 76%, rgba(239, 74, 137, 0.16), transparent 24%),
+    radial-gradient(circle at 18% 20%, rgba(94, 211, 174, 0.18), transparent 28%),
+    radial-gradient(circle at 66% 12%, rgba(118, 181, 240, 0.13), transparent 22%),
+    linear-gradient(135deg, #f9fcfa 0%, #eef8f3 38%, #fff3f7 72%, #f2f6ff 100%);
+  background-size: 145% 145%;
+  animation: eloiAuraShift 12s ease-in-out infinite alternate;
+}
+
+body[data-theme="nte_eloi"] .workspace::before {
+  content: '';
+  position: absolute;
+  inset: 40px 0 0;
+  background:
+    radial-gradient(circle, rgba(199, 53, 104, 0.22) 1px, transparent 1.6px),
+    linear-gradient(90deg, rgba(111, 169, 144, 0.08) 1px, transparent 1px),
+    linear-gradient(rgba(111, 169, 144, 0.08) 1px, transparent 1px);
+  background-position: 16px 16px, 0 0, 0 0;
+  background-size: 96px 96px, 32px 32px, 32px 32px;
+  mask-image: linear-gradient(to bottom, transparent, rgba(0, 0, 0, 0.28), transparent 86%);
+  pointer-events: none;
+  z-index: 0;
+}
+
+body[data-theme="nte_eloi"] .workspace::after {
+  content: '';
+  position: absolute;
+  z-index: 2;
+  bottom: 16px;
+  left: 20px;
+  width: 106px;
+  height: 150px;
+  background: url('./assets/themes/nte_eloi_sheep.png') left bottom / 118px 150px no-repeat;
+  filter: drop-shadow(0 8px 14px rgba(199, 53, 104, 0.24));
+  pointer-events: none;
+  animation: mascotFloat 4s ease-in-out infinite 0.4s;
+}
+
+body[data-theme="nte_eloi"] .editor-empty-state {
+  position: relative;
+  z-index: 1;
+  flex: 0 1 760px;
+  width: min(760px, calc(100% - 72px));
+  min-height: 340px;
+  place-content: center start;
+  align-self: center;
+  padding: 54px 350px 54px 56px;
+  border: 1px solid rgba(225, 101, 149, 0.5);
+  border-radius: 28px;
+  background-color: rgba(255, 254, 254, 0.92);
+  background-image:
+    url('./assets/themes/nte_eloi_bust.png'),
+    radial-gradient(circle at 78% 40%, rgba(239, 74, 137, 0.2), transparent 38%),
+    radial-gradient(circle at 18% 12%, rgba(93, 218, 176, 0.2), transparent 32%),
+    linear-gradient(135deg, rgba(222, 241, 232, 0.82), rgba(255, 255, 255, 0.38) 46%, rgba(255, 235, 243, 0.72));
+  background-position: right 4px bottom, right center, left top, center;
+  background-repeat: no-repeat;
+  background-size: 360px auto, 420px 420px, 380px 380px, cover;
+  box-shadow:
+    0 24px 70px rgba(58, 84, 73, 0.16),
+    0 0 0 5px rgba(255, 255, 255, 0.55),
+    0 0 42px rgba(229, 77, 135, 0.14),
+    inset 0 1px rgba(255, 255, 255, 0.96);
+  overflow: hidden;
+  text-align: left;
+  animation: eloiCardGlow 4.8s ease-in-out infinite;
+}
+
+body[data-theme="crimson"] {
+  --theme-background: #170e0f;
+  --theme-canvas: #1f1214;
+  --theme-sidebar: #120a0b;
+  --theme-sidebar-rail: #1b0f11;
+  --theme-surface: #261618;
+  --theme-surface-soft: #301c1e;
+  --theme-card: rgba(38, 22, 24, 0.8);
+  --theme-card-hover: #301c1e;
+  --theme-border: #4a2427;
+  --theme-text: #fce8e9;
+  --theme-muted: #b88689;
+  --theme-accent: #e63946;
+  --theme-accent-hover: #f0525f;
+  --theme-accent-soft: rgba(230, 57, 70, 0.2);
+}
+
 body[data-theme] {
   color: var(--theme-text);
   background: var(--theme-background);
@@ -3834,6 +4557,274 @@ body[data-theme] {
 body[data-theme] .sidebar {
   border-color: var(--theme-border);
   background: var(--theme-sidebar);
+  position: relative;
+}
+
+.sidebar-mascot {
+  position: absolute;
+  bottom: 16px;
+  right: 16px;
+  width: 84px;
+  height: 84px;
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+  border-radius: 50%;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.35s ease, transform 0.35s ease;
+  z-index: 0;
+}
+
+body[data-theme="miku"] .sidebar-mascot {
+  background-image: url('./assets/themes/miku.jpg');
+  opacity: 0.55;
+  box-shadow: 0 0 24px rgba(57, 197, 187, 0.5);
+  border: 2px solid rgba(57, 197, 187, 0.6);
+}
+
+body[data-theme="sakura"] .sidebar-mascot {
+  background-image: url('./assets/themes/sakura.jpg');
+  opacity: 0.55;
+  box-shadow: 0 0 24px rgba(255, 117, 160, 0.5);
+  border: 2px solid rgba(255, 117, 160, 0.6);
+}
+
+body[data-theme="violet"] .sidebar-mascot {
+  background-image: url('./assets/themes/violet.jpg');
+  opacity: 0.55;
+  box-shadow: 0 0 24px rgba(139, 92, 246, 0.5);
+  border: 2px solid rgba(139, 92, 246, 0.6);
+}
+
+body[data-theme="cyberpunk"] .sidebar-mascot {
+  background-image: url('./assets/themes/cyberpunk.jpg');
+  opacity: 0.6;
+  box-shadow: 0 0 24px rgba(254, 228, 64, 0.5);
+  border: 2px solid rgba(254, 228, 64, 0.6);
+}
+
+body[data-theme="pixel"] .sidebar-mascot {
+  background-image: url('./assets/themes/pixel.jpg');
+  opacity: 0.55;
+  box-shadow: 0 0 20px rgba(15, 56, 15, 0.4);
+  border: 2px solid #8bac0f;
+}
+
+body[data-theme="nte_city"] .sidebar-mascot {
+  background-image: url('./assets/themes/nte_city.jpg');
+  opacity: 0.65;
+  box-shadow: 0 0 24px rgba(0, 242, 254, 0.6);
+  border: 2px solid rgba(0, 242, 254, 0.7);
+}
+
+body[data-theme="nte_mint"] .sidebar-mascot {
+  background-image: url('./assets/themes/nte_mint.jpg');
+  opacity: 0.65;
+  box-shadow: 0 0 24px rgba(0, 210, 148, 0.6);
+  border: 2px solid rgba(0, 210, 148, 0.7);
+}
+
+body[data-theme="nte_anomaly"] .sidebar-mascot {
+  background-image: url('./assets/themes/nte_city.jpg');
+  opacity: 0.65;
+  box-shadow: 0 0 24px rgba(255, 183, 3, 0.6);
+  border: 2px solid rgba(255, 183, 3, 0.7);
+}
+
+body[data-theme="nte_eloi"] .sidebar-mascot {
+  right: 10px;
+  bottom: 4px;
+  left: auto;
+  width: 210px;
+  height: 282px;
+  border: 0;
+  border-radius: 0;
+  background: url('./assets/themes/nte_eloi_full.png') center bottom / 210px 282px no-repeat;
+  opacity: 1;
+  image-rendering: -webkit-optimize-contrast;
+  filter: drop-shadow(0 6px 7px rgba(117, 68, 87, 0.26));
+  animation: mascotFloat 4.6s ease-in-out infinite 0.8s;
+}
+
+.topbar-mascot {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background-size: cover;
+  background-position: center;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.3s ease;
+  margin-right: 8px;
+}
+
+body[data-theme="nte_eloi"] .topbar-mascot {
+  background-image: url('./assets/themes/nte_eloi.png');
+  opacity: 1;
+  border: 1px solid rgba(199, 53, 104, 0.58);
+  background-color: #ffffff;
+  box-shadow: 0 3px 10px rgba(95, 62, 75, 0.16);
+  image-rendering: -webkit-optimize-contrast;
+}
+
+.workspace-mascot {
+  position: absolute;
+  bottom: 12px;
+  right: 16px;
+  width: 130px;
+  height: 130px;
+  background-size: contain;
+  background-position: bottom right;
+  background-repeat: no-repeat;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.35s ease, transform 0.3s ease;
+  z-index: 1;
+}
+
+@keyframes mascotFloat {
+  0%, 100% {
+    transform: translateY(0) scale(1);
+  }
+  50% {
+    transform: translateY(-8px) scale(1.04);
+  }
+}
+
+body[data-theme="crimson"] .sidebar-mascot {
+  background-image: url('./assets/themes/crimson.jpg');
+  opacity: 0.6;
+  box-shadow: 0 0 24px rgba(230, 57, 70, 0.5);
+  border: 2px solid rgba(230, 57, 70, 0.6);
+}
+
+/* Watermarks for ACG & Gaming Themes on Editor Empty State */
+body[data-theme="miku"] .editor-empty-state::after {
+  content: '🎵 MIKU VOCALNOTE';
+  display: block;
+  margin-top: 18px;
+  font-size: 12px;
+  color: #39c5bb;
+  letter-spacing: 3px;
+  font-weight: 700;
+  opacity: 0.75;
+}
+
+body[data-theme="sakura"] .editor-empty-state::after {
+  content: '🌸 SAKURA ANIME NOTE';
+  display: block;
+  margin-top: 18px;
+  font-size: 12px;
+  color: #ff75a0;
+  letter-spacing: 3px;
+  font-weight: 700;
+  opacity: 0.75;
+}
+
+body[data-theme="violet"] .editor-empty-state::after {
+  content: '💜 VIOLET EVERNOTE';
+  display: block;
+  margin-top: 18px;
+  font-size: 12px;
+  color: #8b5cf6;
+  letter-spacing: 3px;
+  font-weight: 700;
+  opacity: 0.75;
+}
+
+body[data-theme="cyberpunk"] .editor-empty-state::after {
+  content: '⚡ CYBERPUNK NEON 2077';
+  display: block;
+  margin-top: 18px;
+  font-size: 12px;
+  color: #fee440;
+  letter-spacing: 3px;
+  font-weight: 700;
+  opacity: 0.75;
+}
+
+body[data-theme="pixel"] .editor-empty-state::after {
+  content: '👾 8-BIT RETRO GAMEBOY';
+  display: block;
+  margin-top: 18px;
+  font-size: 12px;
+  color: #0f380f;
+  letter-spacing: 3px;
+  font-weight: 700;
+  opacity: 0.75;
+}
+
+body[data-theme="nte_city"] .editor-empty-state::after {
+  content: '🌆 NTE HELLA CITY ANOMALY';
+  display: block;
+  margin-top: 18px;
+  font-size: 12px;
+  color: #00f2fe;
+  letter-spacing: 3px;
+  font-weight: 700;
+  opacity: 0.8;
+}
+
+body[data-theme="nte_mint"] .editor-empty-state::after {
+  content: '🌿 NTE MINT ANTIQUE STORE';
+  display: block;
+  margin-top: 18px;
+  font-size: 12px;
+  color: #00d294;
+  letter-spacing: 3px;
+  font-weight: 700;
+  opacity: 0.8;
+}
+
+body[data-theme="nte_anomaly"] .editor-empty-state::after {
+  content: '⚠️ NTE ANOMALY HAZARD WARNING';
+  display: block;
+  margin-top: 18px;
+  font-size: 12px;
+  color: #ffb703;
+  letter-spacing: 3px;
+  font-weight: 700;
+  opacity: 0.8;
+}
+
+body[data-theme="nte_eloi"] .editor-empty-state::before {
+  content: '✦ 异环档案 · ELOI ✦';
+  width: max-content;
+  margin-bottom: 18px;
+  border: 1px solid rgba(199, 53, 104, 0.22);
+  border-radius: 999px;
+  padding: 6px 11px;
+  background: linear-gradient(90deg, rgba(255, 255, 255, 0.88), rgba(252, 226, 237, 0.86), rgba(226, 246, 238, 0.88));
+  background-size: 180% 100%;
+  color: #a42b55;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 1.8px;
+  box-shadow: 0 4px 14px rgba(199, 53, 104, 0.12);
+  animation: eloiLabelShine 3s linear infinite;
+}
+
+body[data-theme="nte_eloi"] .editor-empty-state::after {
+  content: '◇ 和伊洛伊一起，把闪闪发光的灵感收进档案。';
+  display: block;
+  max-width: 270px;
+  margin-top: 22px;
+  color: #6d7c76;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+}
+
+body[data-theme="crimson"] .editor-empty-state::after {
+  content: '⚔️ CRIMSON DARK DRAGON';
+  display: block;
+  margin-top: 18px;
+  font-size: 12px;
+  color: #e63946;
+  letter-spacing: 3px;
+  font-weight: 700;
+  opacity: 0.75;
 }
 
 body[data-theme] .brand {
@@ -4021,9 +5012,41 @@ body[data-theme] .file-preview-status {
 
 body[data-theme] .file-viewer-path-row,
 body[data-theme] .pdf-document-bar,
-body[data-theme] .pdf-outline {
+body[data-theme] .pdf-outline,
+body[data-theme] .word-outline,
+body[data-theme] .word-outline-heading {
   border-color: var(--theme-border);
   background: var(--theme-surface-soft);
+}
+
+body[data-theme] .word-outline-toggle {
+  border-color: var(--theme-border);
+  background: var(--theme-surface);
+  color: var(--theme-muted);
+}
+
+body[data-theme] .word-outline-toggle:hover,
+body[data-theme] .word-outline-toggle.is-active,
+body[data-theme] .word-outline-list button.is-current {
+  border-color: var(--theme-accent);
+  background: var(--theme-accent-soft);
+  color: var(--theme-accent);
+}
+
+body[data-theme] .word-outline-heading,
+body[data-theme] .word-outline-list button,
+body[data-theme] .word-outline-empty {
+  color: var(--theme-muted);
+}
+
+body[data-theme] .word-outline-list button:hover {
+  background: var(--theme-surface);
+  color: var(--theme-text);
+}
+
+body[data-theme] .word-outline-list button.is-current {
+  color: var(--theme-accent);
+  box-shadow: inset 3px 0 var(--theme-accent);
 }
 
 body[data-theme] .primary-button {
@@ -4129,4 +5152,215 @@ body[data-theme] .settings-theme-option small {
 body[data-theme] .settings-theme-option:has(input:checked) {
   border-color: var(--theme-accent);
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--theme-accent) 18%, transparent);
+}
+
+body[data-theme="nte_eloi"] .sidebar {
+  box-shadow: 8px 0 28px rgba(54, 79, 68, 0.07);
+}
+
+body[data-theme="nte_eloi"] .sidebar-body {
+  position: relative;
+  z-index: 1;
+}
+
+body[data-theme="nte_eloi"] .brand {
+  background: linear-gradient(180deg, rgba(248, 251, 249, 0.98), rgba(231, 240, 235, 0.92));
+}
+
+body[data-theme="nte_eloi"] .library-view-switcher {
+  background:
+    radial-gradient(circle at 50% 12%, rgba(237, 85, 143, 0.18), transparent 24%),
+    linear-gradient(180deg, #e9f3ed, #d9e9e1);
+}
+
+body[data-theme="nte_eloi"] .library-view-button.is-active {
+  border-color: rgba(199, 53, 104, 0.52);
+  background: linear-gradient(145deg, #ffffff, #fde8f0 68%, #e7f7f0);
+  color: #b22f5e;
+  box-shadow: 0 5px 16px rgba(199, 53, 104, 0.18), inset 0 1px #ffffff;
+}
+
+body[data-theme="nte_eloi"] .library-view-button:hover {
+  border-color: rgba(199, 53, 104, 0.34);
+  background: rgba(255, 255, 255, 0.68);
+  transform: translateY(-1px);
+}
+
+body[data-theme="nte_eloi"] .breadcrumb {
+  border-color: rgba(164, 188, 177, 0.52);
+  background: rgba(255, 255, 255, 0.58);
+  box-shadow: none;
+}
+
+body[data-theme="nte_eloi"] .note-item {
+  border: 1px solid rgba(172, 193, 183, 0.58);
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.88), rgba(247, 252, 249, 0.72));
+  box-shadow: 0 4px 12px rgba(62, 88, 77, 0.06), inset 0 1px rgba(255, 255, 255, 0.94);
+  backdrop-filter: blur(10px);
+}
+
+body[data-theme="nte_eloi"] .note-item:hover,
+body[data-theme="nte_eloi"] .note-item.active {
+  border-color: rgba(199, 53, 104, 0.34);
+  box-shadow: 0 10px 24px rgba(199, 53, 104, 0.13), 0 0 0 2px rgba(255, 255, 255, 0.72);
+  transform: translateY(-2px) scale(1.012);
+}
+
+body[data-theme="nte_eloi"] .note-item.folder-item {
+  background: linear-gradient(135deg, rgba(238, 248, 242, 0.94), rgba(255, 244, 248, 0.82));
+}
+
+body[data-theme="nte_eloi"] .folder-icon path:first-child {
+  fill: #aed1c1;
+  stroke: #719d89;
+}
+
+body[data-theme="nte_eloi"] .folder-icon path:last-child {
+  stroke: #719d89;
+}
+
+body[data-theme="nte_eloi"] .folder-count-folders {
+  background: #e1eee8;
+  color: #537c69;
+}
+
+body[data-theme="nte_eloi"] .folder-count-files {
+  background: #f5e9ee;
+  color: #99506b;
+}
+
+body[data-theme="nte_eloi"] .workspace-tabs-bar {
+  position: relative;
+  background: rgba(238, 244, 240, 0.88);
+  backdrop-filter: blur(14px);
+}
+
+body[data-theme="nte_eloi"] .workspace-tabs-bar::after {
+  content: '';
+  position: absolute;
+  right: 0;
+  bottom: -1px;
+  left: 0;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, #6edbb5 28%, #ef5792 62%, #86b8ef 82%, transparent);
+  background-size: 180% 100%;
+  animation: eloiLineFlow 4s linear infinite;
+}
+
+body[data-theme="nte_eloi"] .content-shell {
+  background: transparent;
+  align-items: center;
+  justify-content: center;
+}
+
+body[data-theme="nte_eloi"] .editor-empty-state h2 {
+  max-width: 330px;
+  margin-bottom: 12px;
+  font-size: clamp(24px, 1.8vw, 29px);
+  letter-spacing: -0.5px;
+  background: linear-gradient(100deg, #24352e 4%, #236c57 42%, #b42f60 76%, #594d83);
+  background-clip: text;
+  color: transparent;
+}
+
+body[data-theme="nte_eloi"] .editor-empty-state p {
+  max-width: 290px;
+  color: #64756e;
+  font-size: 13px;
+  line-height: 1.75;
+}
+
+body[data-theme="nte_eloi"] .topbar-mascot {
+  animation: eloiBadgePulse 3.6s ease-in-out infinite;
+}
+
+body[data-theme="nte_eloi"] .workspace-mascot {
+  display: block;
+  right: -76px;
+  bottom: -92px;
+  width: 270px;
+  height: 270px;
+  border: 1px solid rgba(199, 53, 104, 0.22);
+  border-radius: 50%;
+  background:
+    radial-gradient(circle at center, transparent 42%, rgba(255, 255, 255, 0.8) 43%, transparent 45%),
+    conic-gradient(from 30deg, rgba(102, 219, 180, 0.12), rgba(238, 73, 137, 0.46), rgba(118, 178, 237, 0.18), rgba(102, 219, 180, 0.12));
+  opacity: 0.72;
+  box-shadow: 0 0 48px rgba(217, 65, 124, 0.16), inset 0 0 32px rgba(255, 255, 255, 0.72);
+  animation: eloiOrbitSpin 18s linear infinite;
+}
+
+body[data-theme="nte_eloi"] .workspace-mascot::before,
+body[data-theme="nte_eloi"] .workspace-mascot::after {
+  content: '';
+  position: absolute;
+  border: 1px solid rgba(84, 178, 146, 0.32);
+  border-radius: 50%;
+}
+
+body[data-theme="nte_eloi"] .workspace-mascot::before {
+  inset: 34px;
+  box-shadow: 0 0 24px rgba(89, 204, 166, 0.2);
+}
+
+body[data-theme="nte_eloi"] .workspace-mascot::after {
+  inset: 72px;
+  border-color: rgba(199, 53, 104, 0.28);
+  box-shadow: 0 0 18px rgba(229, 69, 130, 0.18);
+}
+
+body[data-theme="nte_eloi"] .note-list::-webkit-scrollbar-thumb {
+  background: linear-gradient(#72c7aa, #db5c8d);
+}
+
+@keyframes eloiAuraShift {
+  0% { background-position: 0% 20%; }
+  100% { background-position: 100% 80%; }
+}
+
+@keyframes eloiCardGlow {
+  0%, 100% { transform: translateY(0); filter: saturate(1); }
+  50% { transform: translateY(-5px); filter: saturate(1.08); }
+}
+
+@keyframes eloiLabelShine {
+  0% { background-position: 0% 50%; }
+  100% { background-position: 180% 50%; }
+}
+
+@keyframes eloiLineFlow {
+  0% { background-position: 180% 0; }
+  100% { background-position: -180% 0; }
+}
+
+@keyframes eloiBadgePulse {
+  0%, 100% { box-shadow: 0 3px 10px rgba(95, 62, 75, 0.16), 0 0 0 0 rgba(199, 53, 104, 0.16); }
+  50% { box-shadow: 0 4px 16px rgba(199, 53, 104, 0.28), 0 0 0 5px rgba(199, 53, 104, 0); }
+}
+
+@keyframes eloiOrbitSpin {
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  body[data-theme="nte_eloi"] .workspace,
+  body[data-theme="nte_eloi"] .workspace::after,
+  body[data-theme="nte_eloi"] .editor-empty-state,
+  body[data-theme="nte_eloi"] .editor-empty-state::before,
+  body[data-theme="nte_eloi"] .workspace-tabs-bar::after,
+  body[data-theme="nte_eloi"] .sidebar-mascot,
+  body[data-theme="nte_eloi"] .topbar-mascot,
+  body[data-theme="nte_eloi"] .workspace-mascot {
+    animation: none;
+  }
+}
+
+@media (max-width: 1180px) {
+  body[data-theme="nte_eloi"] .editor-empty-state {
+    width: calc(100% - 40px);
+    min-height: 310px;
+    padding: 42px 250px 42px 40px;
+    background-position: right -18px bottom, right center, left top, center;
+    background-size: 300px auto, 360px 360px, 320px 320px, cover;
+  }
 }

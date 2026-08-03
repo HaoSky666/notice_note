@@ -90,12 +90,14 @@
           <path d="m10 6.5 3.5 3.5-3.5 3.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
         </svg>
       </button>
+      <div id="sidebarMascot" class="sidebar-mascot" aria-hidden="true"></div>
       <div id="sidebarResizer" class="sidebar-resizer"></div>
     </aside>
 
     <main class="workspace">
       <div class="workspace-tabs-bar">
         <div id="workspaceTabs" class="workspace-tabs"></div>
+        <div id="topbarMascot" class="topbar-mascot" aria-hidden="true"></div>
         <div class="notification-center">
           <button id="notificationBell" class="notification-bell" type="button" title="提醒通知" aria-label="提醒通知">
             <svg width="17" height="17" viewBox="0 0 24 24" fill="none" aria-hidden="true">
@@ -198,14 +200,30 @@
             <p id="fileViewerMeta"></p>
           </div>
           <span id="fileViewerType" class="file-viewer-type"></span>
+          <div id="fileViewerActions" class="file-viewer-actions">
+            <button id="fileViewerEditButton" class="secondary-button" type="button" hidden>✏️ 编辑内容</button>
+            <button id="fileViewerSaveButton" class="primary-button" type="button" hidden>💾 保存修改</button>
+            <button id="fileViewerAddRowButton" class="secondary-button" type="button" hidden>➕ 添加行</button>
+            <button id="fileViewerAddColButton" class="secondary-button" type="button" hidden>➕ 添加列</button>
+            <button id="fileViewerOpenExternalButton" class="secondary-button" type="button" title="在 Word/Excel 外部软件中编辑修改">💻 外部打开</button>
+          </div>
         </div>
         <div class="file-viewer-path-row">
           <span>文件位置</span>
           <code id="fileViewerPath"></code>
+          <span id="fileViewerToast" class="file-viewer-toast" hidden></span>
+          <button id="wordOutlineToggle" class="word-outline-toggle" type="button" title="显示或隐藏目录" aria-label="显示或隐藏 Word 目录" hidden>目录</button>
         </div>
-        <div id="fileViewerContent" class="file-viewer-content"></div>
+        <div class="file-viewer-body">
+          <aside id="wordOutline" class="word-outline" hidden>
+            <div class="word-outline-heading">文档目录</div>
+            <nav id="wordOutlineList" class="word-outline-list" aria-label="Word 文档目录"></nav>
+          </aside>
+          <div id="fileViewerContent" class="file-viewer-content"></div>
+        </div>
       </section>
       </div>
+      <div id="workspaceMascot" class="workspace-mascot" aria-hidden="true"></div>
     </main>
 
     <dialog id="reminderDialog" class="reminder-dialog">
@@ -252,77 +270,89 @@
     </dialog>
     <dialog id="settingsDialog" class="settings-dialog">
       <form method="dialog" class="settings-card">
-        <header class="settings-heading">
-          <div>
-            <h2>设置</h2>
-            <p>调整 Notice Note 的使用偏好</p>
-          </div>
-          <button id="closeSettingsDialogButton" class="reminder-manager-close" type="button" title="关闭" aria-label="关闭">×</button>
-        </header>
-        <section class="settings-section">
-          <fieldset class="settings-theme-fieldset">
-            <legend>界面风格</legend>
-            <div class="settings-theme-options">
-              <label class="settings-theme-option">
-                <input type="radio" name="interfaceTheme" value="paper">
-                <span class="settings-theme-preview theme-preview-paper" aria-hidden="true"><i></i><i></i><i></i></span>
-                <strong>暖色纸张</strong>
-                <small>柔和米色，保持当前风格</small>
-              </label>
-              <label class="settings-theme-option">
-                <input type="radio" name="interfaceTheme" value="blue">
-                <span class="settings-theme-preview theme-preview-blue" aria-hidden="true"><i></i><i></i><i></i></span>
-                <strong>清爽蓝</strong>
-                <small>明亮简洁，层次更清晰</small>
-              </label>
-              <label class="settings-theme-option">
-                <input type="radio" name="interfaceTheme" value="mint">
-                <span class="settings-theme-preview theme-preview-mint" aria-hidden="true"><i></i><i></i><i></i></span>
-                <strong>薄荷绿</strong>
-                <small>自然淡雅，阅读更舒缓</small>
+        <div id="settingsMainView" class="settings-view">
+          <header class="settings-heading">
+            <div>
+              <h2>设置</h2>
+              <p>调整 Notice Note 的使用偏好</p>
+            </div>
+            <button id="closeSettingsDialogButton" class="reminder-manager-close" type="button" title="关闭" aria-label="关闭">×</button>
+          </header>
+          <section class="settings-section">
+            <div class="settings-theme-summary-card">
+              <div class="settings-theme-summary-left">
+                <span id="currentThemePreview" class="settings-theme-preview theme-preview-paper" aria-hidden="true"><i></i><i></i><i></i></span>
+                <div class="settings-theme-summary-info">
+                  <span class="settings-theme-summary-label">界面风格</span>
+                  <strong id="currentThemeName">暖色纸张</strong>
+                  <small id="currentThemeDesc">柔和米色，保持当前风格</small>
+                </div>
+              </div>
+              <button id="openThemePickerButton" class="secondary-button" type="button">浏览与切换主题...</button>
+            </div>
+            <div class="settings-item">
+              <div class="settings-item-copy">
+                <strong>工作日随机回顾</strong>
+                <p>周一至周五，每天从没有待提醒的回顾清单中选择一篇，标记为“今日回顾”。</p>
+              </div>
+              <label class="settings-switch" title="启用工作日随机回顾">
+                <input id="dailyReviewEnabledInput" type="checkbox">
+                <span></span>
               </label>
             </div>
-          </fieldset>
-          <div class="settings-item">
-            <div class="settings-item-copy">
-              <strong>工作日随机回顾</strong>
-              <p>周一至周五，每天从没有待提醒的回顾清单中选择一篇，标记为“今日回顾”。</p>
+            <div class="daily-review-current">
+              <span>今日回顾</span>
+              <strong id="dailyReviewCurrentTitle">尚未选择</strong>
             </div>
-            <label class="settings-switch" title="启用工作日随机回顾">
-              <input id="dailyReviewEnabledInput" type="checkbox">
-              <span aria-hidden="true"></span>
-            </label>
-          </div>
-          <div class="daily-review-current">
-            <span>今日回顾</span>
-            <strong id="dailyReviewCurrentTitle">尚未选择</strong>
-          </div>
-          <div class="settings-storage-card">
-            <div class="settings-storage-heading">
-              <div>
-                <strong>存储位置</strong>
-                <p>笔记、附件和资料文件所在的根目录</p>
+            <div class="settings-storage-card">
+              <div class="settings-storage-heading">
+                <div>
+                  <strong>存储位置</strong>
+                  <p>笔记、附件和资料文件所在的根目录</p>
+                </div>
+              </div>
+              <code id="settingsStoragePath" class="settings-storage-path"></code>
+              <div class="settings-storage-actions">
+                <button id="chooseStorageButton" class="secondary-button" type="button">更改位置</button>
+                <button id="resetStorageButton" class="secondary-button" type="button">恢复默认</button>
               </div>
             </div>
-            <code id="settingsStoragePath" class="settings-storage-path"></code>
-            <div class="settings-storage-actions">
-              <button id="chooseStorageButton" class="secondary-button" type="button">更改位置</button>
-              <button id="resetStorageButton" class="secondary-button" type="button">恢复默认</button>
-            </div>
-          </div>
-          <div class="settings-storage-card">
-            <div class="settings-storage-heading">
-              <div>
-                <strong>手机离线包</strong>
-                <p>导出一个文件，再到手机 App 中导入；导出时会提示解锁加密目录，请妥善保管导出文件</p>
+            <div class="settings-storage-card">
+              <div class="settings-storage-heading">
+                <div>
+                  <strong>手机离线包</strong>
+                  <p>导出一个文件，再到手机 App 中导入；导出时会提示解锁加密目录，请妥善保管导出文件</p>
+                </div>
+              </div>
+              <div class="settings-storage-actions">
+                <button id="exportMobilePackageButton" class="secondary-button" type="button">导出手机离线包</button>
+                <span id="exportMobilePackageStatus" class="settings-export-status" role="status"></span>
               </div>
             </div>
-            <div class="settings-storage-actions">
-              <button id="exportMobilePackageButton" class="secondary-button" type="button">导出手机离线包</button>
-              <span id="exportMobilePackageStatus" class="settings-export-status" role="status"></span>
+          </section>
+        </div>
+
+        <div id="settingsThemePickerView" class="settings-view" hidden>
+          <header class="settings-heading settings-heading-picker">
+            <div class="settings-heading-left">
+              <button id="backToSettingsMainButton" class="secondary-button back-button" type="button">← 返回设置</button>
+              <div>
+                <h2>界面风格工坊</h2>
+                <p>挑选极简日常、二次元动漫或游戏电竞风主题</p>
+              </div>
             </div>
-          </div>
-        </section>
+            <button id="closeSettingsDialogButton2" class="reminder-manager-close" type="button" title="关闭" aria-label="关闭">×</button>
+          </header>
+          <nav class="theme-picker-tabs" aria-label="主题分类">
+            <button class="theme-picker-tab is-active" type="button" data-category="all">全部 (10)</button>
+            <button class="theme-picker-tab" type="button" data-category="minimal">🌿 极简日常</button>
+            <button class="theme-picker-tab" type="button" data-category="anime">🌸 二次元动漫</button>
+            <button class="theme-picker-tab" type="button" data-category="gaming">🎮 游戏电竞</button>
+          </nav>
+          <section class="theme-picker-body">
+            <div id="themePickerGrid" class="theme-picker-grid"></div>
+          </section>
+        </div>
       </form>
     </dialog>
     <div id="imageLightbox" class="image-lightbox" role="dialog" aria-modal="true" aria-label="图片预览" hidden>
