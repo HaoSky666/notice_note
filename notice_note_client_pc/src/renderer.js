@@ -5117,7 +5117,47 @@ async function refreshNotes() {
   }
 }
 
+async function discardDraft(draftId) {
+  const draft = draftsMap.get(draftId);
+  if (!draft) return;
+
+  const confirmed = confirm(`确定丢弃草稿「${draft.title || "未命名草稿"}」吗？`);
+  if (!confirmed) return;
+
+  const tabKey = getWorkspaceTabKey("draft", draftId);
+  draftsMap.delete(draftId);
+  workspaceTabViewStates.delete(tabKey);
+
+  const index = workspaceTabs.findIndex(
+    (t) => getWorkspaceTabKey(t.type, t.id) === tabKey,
+  );
+  if (index >= 0) {
+    workspaceTabs.splice(index, 1);
+  }
+
+  if (activeDraftId === draftId) {
+    const nextTab = workspaceTabs[Math.min(index, workspaceTabs.length - 1)];
+    if (nextTab) {
+      showWorkspaceTab(nextTab);
+    } else {
+      activeWorkspaceTabKey = null;
+      activeDraftId = null;
+      activeNoteId = null;
+      activePdfId = null;
+      activeResourceId = null;
+      renderEditor();
+    }
+  } else {
+    renderWorkspaceTabs();
+  }
+}
+
 async function deleteActiveNote() {
+  if (activeDraftId) {
+    await discardDraft(activeDraftId);
+    return;
+  }
+
   const note = getActiveNote();
   if (!note) {
     return;
@@ -5943,6 +5983,7 @@ function createDraft() {
     title: "",
     content: "",
     fileType: "md",
+    reminders: [],
     folderId: activeFolderId || null,
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
