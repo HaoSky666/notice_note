@@ -47,6 +47,7 @@ button {
   padding: 8px 10px;
   border-bottom: 1px solid #dfd8cc;
   background: linear-gradient(180deg, rgba(248, 243, 234, 0.9), rgba(235, 228, 215, 0.72));
+  z-index: 100;
 }
 
 .brand-actions {
@@ -56,6 +57,7 @@ button {
   position: absolute;
   left: 50%;
   transform: translateX(-50%);
+  z-index: 101;
 }
 
 .toolbar-btn {
@@ -95,6 +97,7 @@ button {
 
 .new-menu {
   position: relative;
+  z-index: 1000;
 }
 
 .new-menu-dropdown {
@@ -108,8 +111,8 @@ button {
   border: 1px solid #dfd8cc;
   border-radius: 6px;
   padding: 4px;
-  box-shadow: 0 6px 20px rgba(37, 35, 31, 0.15);
-  z-index: 100;
+  box-shadow: 0 6px 20px rgba(37, 35, 31, 0.25);
+  z-index: 9999;
 }
 
 .new-menu-dropdown.is-open {
