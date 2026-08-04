@@ -2418,10 +2418,12 @@ function sendNotesChanged() {
 async function upsertNote(_event, input) {
   const note = normalizeNote(input);
   const index = notes.findIndex((item) => item.id === note.id);
+  let targetNote;
 
   if (index >= 0) {
     const oldNote = notes[index];
-    notes[index] = { ...oldNote, ...note };
+    targetNote = { ...oldNote, ...note };
+    notes[index] = targetNote;
 
     // 如果标题改变了或文件夹改变了，需要移动/重命名文件
     if (oldNote.title !== note.title || oldNote.folderId !== note.folderId) {
@@ -2444,17 +2446,20 @@ async function upsertNote(_event, input) {
       }
     }
   } else {
-    notes.unshift(note);
+    targetNote = note;
+    notes.unshift(targetNote);
   }
 
+  targetNote.isReminderFile = reminderFileMarks.has(getNoteReminderFileKey(targetNote.id));
+
   sortNotesByCreatedAt();
-  await saveNote(note);
+  await saveNote(targetNote);
   if (updateDailyReviewSelection()) {
     await saveConfig();
   }
   scheduleReminderCheck();
   sendNotesChanged();
-  return note;
+  return targetNote;
 }
 
 async function deleteNote(_event, noteId) {

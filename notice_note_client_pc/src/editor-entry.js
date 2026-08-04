@@ -132,6 +132,35 @@ function collectFencedCodeBlocks(doc) {
   return blocks;
 }
 
+function expandVisibleRangesForCodeBlocks(doc, visibleRanges, codeBlocks) {
+  const ranges = visibleRanges.map(({ from, to }) => {
+    const startLine = doc.lineAt(from).number;
+    const endLine = doc.lineAt(to).number;
+    let expandedFrom = from;
+    let expandedTo = to;
+
+    for (const block of codeBlocks) {
+      if (block.endLine < startLine || block.startLine > endLine) {
+        continue;
+      }
+      expandedFrom = Math.min(expandedFrom, doc.line(block.startLine).from);
+      expandedTo = Math.max(expandedTo, doc.line(block.endLine).to);
+    }
+
+    return { from: expandedFrom, to: expandedTo };
+  }).sort((left, right) => left.from - right.from);
+
+  return ranges.reduce((merged, range) => {
+    const previous = merged[merged.length - 1];
+    if (previous && range.from <= previous.to + 1) {
+      previous.to = Math.max(previous.to, range.to);
+    } else {
+      merged.push({ ...range });
+    }
+    return merged;
+  }, []);
+}
+
 function splitTableRow(text) {
   const trimmed = text.trim().replace(/^\|/, '').replace(/\|$/, '');
   const cells = [];
@@ -317,7 +346,8 @@ function buildLivePreviewDecorations(view, options = {}, codeBlocks = []) {
   }
 
   const items = [];
-  for (const { from, to } of view.visibleRanges) {
+  const renderRanges = expandVisibleRangesForCodeBlocks(view.state.doc, view.visibleRanges, codeBlocks);
+  for (const { from, to } of renderRanges) {
     let pos = from;
     while (pos <= to) {
       const line = view.state.doc.lineAt(pos);

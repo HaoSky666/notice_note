@@ -820,6 +820,16 @@ border-top: 2px solid #2f6b55;
   background: #f0ebe0;
 }
 
+.context-menu-item:disabled {
+  color: #a89f91;
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.context-menu-item:disabled:hover {
+  background: transparent;
+}
+
 .context-menu-separator {
   height: 1px;
   margin: 4px 0;
@@ -3486,23 +3496,23 @@ body[data-theme] .cm-rendered-link {
 }
 
 .reminder-manager-card {
-  display: grid;
-  gap: 0;
+  display: flex;
+  flex-direction: column;
   max-height: min(720px, calc(100vh - 48px));
-  border: 1px solid #ddd1c0;
+  border: 1px solid var(--theme-border, #ddd1c0);
   border-radius: 16px;
-  background: #fbf8f2;
-  box-shadow: 0 24px 70px rgba(37, 31, 25, 0.25);
+  background: var(--theme-surface, #fbf8f2);
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.25);
   overflow: hidden;
 }
 
 .reminder-manager-heading {
   display: flex;
   align-items: center;
-  gap: 13px;
-  border-bottom: 1px solid #eadfce;
-  padding: 20px 22px;
-  background: linear-gradient(135deg, #fffdf9 0%, #f4eadb 100%);
+  gap: 14px;
+  border-bottom: 1px solid var(--theme-border, #eadfce);
+  padding: 18px 22px;
+  background: var(--theme-surface-soft, #f4eadb);
 }
 
 .reminder-manager-icon {
@@ -3512,8 +3522,8 @@ body[data-theme] .cm-rendered-link {
   border-radius: 12px;
   display: grid;
   place-items: center;
-  background: #f1dfc1;
-  color: #8a5d20;
+  background: var(--theme-accent-soft, #f1dfc1);
+  color: var(--theme-accent, #8a5d20);
 }
 
 .reminder-manager-heading-copy {
@@ -3523,15 +3533,16 @@ body[data-theme] .cm-rendered-link {
 
 .reminder-manager-heading h2 {
   margin: 0;
-  color: #2f2a24;
-  font-size: 19px;
+  color: var(--theme-text, #2f2a24);
+  font-size: 18px;
+  font-weight: 700;
 }
 
 .reminder-manager-heading p {
   overflow: hidden;
   margin: 4px 0 0;
-  color: #877b6c;
-  font-size: 11px;
+  color: var(--theme-muted, #877b6c);
+  font-size: 12px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -3541,11 +3552,20 @@ body[data-theme] .cm-rendered-link {
   width: 32px;
   height: 32px;
   border: 0;
-  border-radius: 9px;
+  border-radius: 8px;
   background: transparent;
-  color: #8c7f6f;
-  font-size: 22px;
+  color: var(--theme-muted, #8c7f6f);
+  font-size: 20px;
   line-height: 1;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  transition: background 0.15s, color 0.15s;
+}
+
+.reminder-manager-close:hover {
+  background: var(--theme-accent-soft, rgba(0, 0, 0, 0.06));
+  color: var(--theme-text, #25231f);
 }
 
 .reminder-manager-close:hover {
@@ -5127,9 +5147,49 @@ body[data-theme] .cm-gutters {
 body[data-theme] .settings-card,
 body[data-theme] .settings-item,
 body[data-theme] .settings-storage-card,
-body[data-theme] .settings-theme-option {
+body[data-theme] .settings-theme-option,
+body[data-theme] .reminder-manager-card,
+body[data-theme] .draft-save-body {
   border-color: var(--theme-border);
   background: var(--theme-surface);
+}
+
+body[data-theme] .reminder-manager-heading,
+body[data-theme] .draft-save-footer {
+  border-color: var(--theme-border);
+  background: var(--theme-surface-soft);
+}
+
+body[data-theme] .reminder-manager-heading h2,
+body[data-theme] .draft-save-field label {
+  color: var(--theme-text);
+}
+
+body[data-theme] .reminder-manager-heading p {
+  color: var(--theme-muted);
+}
+
+body[data-theme] .reminder-input-text,
+body[data-theme] .reminder-input-select {
+  border-color: var(--theme-border);
+  background-color: var(--theme-surface-soft);
+  color: var(--theme-text);
+}
+
+body[data-theme] .reminder-input-select option {
+  background-color: var(--theme-surface);
+  color: var(--theme-text);
+}
+
+body[data-theme] .draft-save-footer .secondary-button {
+  border-color: var(--theme-border);
+  background: var(--theme-surface);
+  color: var(--theme-text);
+}
+
+body[data-theme] .draft-save-footer .secondary-button:hover {
+  background: var(--theme-accent-soft);
+  border-color: var(--theme-accent);
 }
 
 body[data-theme] .settings-heading {
@@ -5394,43 +5454,140 @@ body[data-theme="nte_eloi"] .workspace-tab.is-active {
 }
 
 .draft-icon-box {
-  background: #fff3cd !important;
-  color: #856404 !important;
-  font-size: 20px;
+  background: var(--theme-accent-soft, #fff3cd) !important;
+  color: var(--theme-accent, #856404) !important;
+  font-size: 22px;
 }
 
 .draft-save-body {
-  padding: 20px 22px;
+  padding: 22px 24px;
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 18px;
+  background: var(--theme-surface, #ffffff);
 }
 
 .draft-save-field {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 7px;
 }
 
 .draft-save-field label {
   font-size: 13px;
   font-weight: 600;
-  color: #4a4237;
+  color: var(--theme-text, #3d3830);
+  letter-spacing: 0.1px;
+}
+
+.reminder-input-text,
+.reminder-input-select {
+  width: 100%;
+  box-sizing: border-box;
+  height: 42px;
+  padding: 0 14px;
+  font-family: inherit;
+  font-size: 14px;
+  color: var(--theme-text, #25231f);
+  background-color: var(--theme-surface-soft, #fffdf9);
+  border: 1px solid var(--theme-border, #d9ccb5);
+  border-radius: 10px;
+  outline: none;
+  pointer-events: auto !important;
+  user-select: auto !important;
+  -webkit-user-select: auto !important;
+  transition: border-color 0.15s, box-shadow 0.15s, background-color 0.15s;
+}
+
+.reminder-input-text {
+  cursor: text;
+}
+
+.reminder-input-text:hover,
+.reminder-input-select:hover {
+  border-color: var(--theme-accent, #2f6b55);
+}
+
+.reminder-input-text:focus,
+.reminder-input-select:focus {
+  border-color: var(--theme-accent, #2f6b55);
+  background-color: var(--theme-surface, #ffffff);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--theme-accent, #2f6b55) 20%, transparent);
+}
+
+.reminder-input-select {
+  padding-right: 36px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23756e62' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 12px center;
+  background-size: 14px;
+  cursor: pointer;
+}
+
+.reminder-input-select option {
+  background-color: var(--theme-surface, #ffffff);
+  color: var(--theme-text, #25231f);
+  padding: 8px 12px;
 }
 
 .draft-save-footer {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 16px 22px;
-  background: #f4eadb;
-  border-top: 1px solid #eadfce;
+  padding: 16px 24px;
+  background: var(--theme-surface-soft, #f4eadb);
+  border-top: 1px solid var(--theme-border, #eadfce);
 }
 
 .draft-save-footer-right {
   display: flex;
   align-items: center;
   gap: 10px;
+}
+
+.draft-save-footer .secondary-button,
+.draft-save-footer .primary-button {
+  height: 40px;
+  padding: 0 18px;
+  font-size: 13.5px;
+  font-weight: 500;
+  border-radius: 9px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.draft-save-footer .secondary-button {
+  border: 1px solid var(--theme-border, #dcd4c5);
+  background: var(--theme-surface, #ffffff);
+  color: var(--theme-text, #3d3830);
+}
+
+.draft-save-footer .secondary-button:hover {
+  background: var(--theme-accent-soft, #f5efe6);
+  border-color: var(--theme-accent, #2f6b55);
+}
+
+.draft-save-footer .secondary-button.danger-button {
+  border-color: rgba(220, 53, 69, 0.35);
+  color: #dc3545;
+  background: var(--theme-surface, #ffffff);
+}
+
+.draft-save-footer .secondary-button.danger-button:hover {
+  background: rgba(220, 53, 69, 0.08);
+  border-color: #dc3545;
+}
+
+.draft-save-footer .primary-button {
+  border: 1px solid var(--theme-accent, #2f6b55);
+  background: var(--theme-accent, #2f6b55);
+  color: #ffffff;
+  box-shadow: 0 2px 8px color-mix(in srgb, var(--theme-accent, #2f6b55) 25%, transparent);
+}
+
+.draft-save-footer .primary-button:hover {
+  background: var(--theme-accent-hover, #245a46);
+  border-color: var(--theme-accent-hover, #245a46);
 }
 
 .draft-badge-pill {

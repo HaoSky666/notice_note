@@ -4,7 +4,6 @@ const reminderInput = document.querySelector("#reminderInput");
 const reminderList = document.querySelector("#reminderList");
 const editorRoot = document.querySelector("#editorRoot");
 const contentShell = document.querySelector("#contentShell");
-const insertImageButton = document.querySelector("#insertImageButton");
 const saveButton = document.querySelector("#saveButton");
 const newNoteButton = document.querySelector("#newNoteButton");
 const addReminderButton = document.querySelector("#addReminderButton");
@@ -205,6 +204,9 @@ const PDF_OUTLINE_WIDTH_KEY = "notice-note:pdf-outline-width";
 const PDF_OUTLINE_MIN_WIDTH = 160;
 const PDF_OUTLINE_MAX_WIDTH = 600;
 const INTERFACE_THEME_KEY = "notice-note:interface-theme";
+const DRAFTS_PERSIST_KEY = "notice-note:drafts";
+const WORKSPACE_TABS_PERSIST_KEY = "notice-note:workspace-tabs";
+const ACTIVE_TAB_PERSIST_KEY = "notice-note:active-workspace-tab";
 const THEME_LIST = [
   {
     id: "paper",
@@ -919,6 +921,80 @@ function reorderWorkspaceTabs(draggedTabKey, targetTabKey, placeAfter) {
   }
   workspaceTabs.splice(targetIndex + (placeAfter ? 1 : 0), 0, draggedTab);
   renderWorkspaceTabs();
+  saveDraftsToStorage();
+}
+
+function saveDraftsToStorage() {
+  try {
+    if (activeDraftId && draftsMap.has(activeDraftId)) {
+      const activeDraft = draftsMap.get(activeDraftId);
+      if (titleInput) activeDraft.title = titleInput.value;
+      if (typeof getEditorValue === "function") activeDraft.content = getEditorValue();
+      activeDraft.updatedAt = new Date().toISOString();
+    }
+    const draftsArray = Array.from(draftsMap.values());
+    localStorage.setItem(DRAFTS_PERSIST_KEY, JSON.stringify(draftsArray));
+    localStorage.setItem(
+      WORKSPACE_TABS_PERSIST_KEY,
+      JSON.stringify(workspaceTabs),
+    );
+    localStorage.setItem(ACTIVE_TAB_PERSIST_KEY, activeWorkspaceTabKey || "");
+  } catch (err) {
+    console.error("保存草稿与工作区状态失败:", err);
+  }
+}
+
+function loadDraftsFromStorage() {
+  try {
+    const rawDrafts = localStorage.getItem(DRAFTS_PERSIST_KEY);
+    if (rawDrafts) {
+      const draftsArray = JSON.parse(rawDrafts);
+      if (Array.isArray(draftsArray)) {
+        draftsMap.clear();
+        for (const draft of draftsArray) {
+          if (draft && draft.id) {
+            draftsMap.set(draft.id, draft);
+          }
+        }
+      }
+    }
+
+    const rawTabs = localStorage.getItem(WORKSPACE_TABS_PERSIST_KEY);
+    const savedActiveKey = localStorage.getItem(ACTIVE_TAB_PERSIST_KEY);
+
+    if (rawTabs) {
+      const tabsArray = JSON.parse(rawTabs);
+      if (Array.isArray(tabsArray)) {
+        workspaceTabs = tabsArray.filter((tab) => {
+          if (!tab || !tab.type || !tab.id) return false;
+          return getWorkspaceTabResource(tab) !== null;
+        });
+      }
+    }
+
+    if (
+      savedActiveKey &&
+      workspaceTabs.some(
+        (t) => getWorkspaceTabKey(t.type, t.id) === savedActiveKey,
+      )
+    ) {
+      const activeTab = workspaceTabs.find(
+        (t) => getWorkspaceTabKey(t.type, t.id) === savedActiveKey,
+      );
+      if (activeTab) {
+        showWorkspaceTab(activeTab);
+        return;
+      }
+    }
+
+    if (workspaceTabs.length > 0) {
+      showWorkspaceTab(workspaceTabs[0]);
+    } else {
+      renderWorkspaceTabs();
+    }
+  } catch (err) {
+    console.error("恢复草稿与工作区状态失败:", err);
+  }
 }
 
 function getActiveWorkspaceTab() {
@@ -1178,6 +1254,7 @@ function showWorkspaceTab(tab) {
     renderEditor();
   }
   renderWorkspaceTabs();
+  saveDraftsToStorage();
 }
 
 async function activateWorkspaceTab(type, id) {
@@ -1240,6 +1317,7 @@ async function closeWorkspaceTab(tabKey) {
   if (!isActive) {
     workspaceTabViewStates.delete(tabKey);
     renderWorkspaceTabs();
+    saveDraftsToStorage();
     return;
   }
 
@@ -1257,6 +1335,7 @@ async function closeWorkspaceTab(tabKey) {
   activePdfId = null;
   activeResourceId = null;
   renderEditor();
+  saveDraftsToStorage();
 }
 
 async function closeOtherWorkspaceTabs(tabKey) {
@@ -2659,6 +2738,30 @@ async function insertImage() {
   queueSave();
 }
 
+function insertCodeBlock() {
+  const note = getActiveNote();
+  if (!note) {
+    return;
+  }
+
+  const selectionText = window.getSelection()?.toString() || "";
+  const snippet = selectionText
+    ? `\n\`\`\`\n${selectionText}\n\`\`\`\n`
+    : `\n\`\`\`\n\n\`\`\`\n`;
+
+  if (markdownEditor && typeof markdownEditor.insertMarkdown === "function") {
+    markdownEditor.insertMarkdown(snippet);
+    markdownEditor.focus?.();
+  } else {
+    const currentValue = getEditorValue();
+    setEditorValue(
+      `${currentValue}${currentValue.endsWith("\n") || !currentValue ? "" : "\n"}${snippet}`,
+    );
+  }
+
+  queueSave();
+}
+
 async function handlePastedImage(file) {
   const note = getActiveNote();
   if (!note || !file) {
@@ -3221,7 +3324,6 @@ function renderEditor() {
     editorTopbar.hidden = true;
     titleInput.disabled = true;
     openReminderConfigButton.disabled = true;
-    insertImageButton.disabled = true;
     deleteNoteButton.disabled = true;
     saveButton.disabled = true;
     editorRoot.hidden = true;
@@ -3231,7 +3333,6 @@ function renderEditor() {
       editorTopbar.hidden = false;
       titleInput.disabled = false;
       openReminderConfigButton.disabled = true;
-      insertImageButton.disabled = false;
       deleteNoteButton.disabled = false;
       deleteNoteButton.textContent = "丢弃草稿";
       saveButton.disabled = false;
@@ -3246,7 +3347,6 @@ function renderEditor() {
       editorTopbar.hidden = false;
       titleInput.disabled = false;
       openReminderConfigButton.disabled = false;
-      insertImageButton.disabled = false;
       deleteNoteButton.disabled = false;
       deleteNoteButton.textContent = "删除";
       saveButton.disabled = false;
@@ -4960,7 +5060,7 @@ async function selectResourceFile(fileId) {
 function replaceNote(updatedNote) {
   const index = notes.findIndex((note) => note.id === updatedNote.id);
   if (index >= 0) {
-    notes[index] = updatedNote;
+    notes[index] = { ...notes[index], ...updatedNote };
   } else {
     notes.unshift(updatedNote);
   }
@@ -5006,6 +5106,7 @@ function queueSave() {
       draft.content = getEditorValue();
       draft.updatedAt = new Date().toISOString();
       renderWorkspaceTabs();
+      saveDraftsToStorage();
     }
     return;
   }
@@ -5244,6 +5345,7 @@ async function boot() {
   renderNoteList();
   renderEditor();
   renderReminderNotifications();
+  loadDraftsFromStorage();
 
   window.noticeNote.onNotesChanged((nextNotes) => {
     mergeIncomingNotes(nextNotes);
@@ -5520,9 +5622,6 @@ autoReminderButton.addEventListener("click", () => {
 deleteNoteButton.addEventListener("click", () => {
   deleteActiveNote().catch(console.error);
 });
-insertImageButton.addEventListener("click", () => {
-  insertImage().catch(console.error);
-});
 pdfZoomOut.addEventListener("click", () => {
   changePdfZoom(-0.1).catch((error) =>
     showPdfStatus(`PDF 渲染失败：${error.message}`, true),
@@ -5659,12 +5758,21 @@ showSidebarButton.addEventListener("click", () => {
 // Right-click context menu on note list
 let contextMenu = null;
 
-function createContextMenuItem(label, onClick) {
+function createContextMenuItem(label, onClick, disabled = false) {
   const item = document.createElement("button");
   item.className = "context-menu-item";
   item.type = "button";
   item.textContent = label;
+  if (disabled) {
+    item.disabled = true;
+  }
+  item.addEventListener("mousedown", (e) => {
+    e.preventDefault();
+  });
   item.addEventListener("click", () => {
+    if (disabled) {
+      return;
+    }
     hideContextMenu();
     onClick();
   });
@@ -5693,6 +5801,141 @@ function getContextMenuEntry(target) {
     return { type: "folder", id: item.dataset.folderId };
   }
   return null;
+}
+
+function showEditorContextMenu(x, y, target) {
+  hideContextMenu();
+
+  contextMenu = document.createElement("div");
+  contextMenu.className = "context-menu";
+  contextMenu.style.left = `${x}px`;
+  contextMenu.style.top = `${y}px`;
+
+  const activeNote = getActiveNote();
+  const canInsert = Boolean(activeNote);
+
+  const activeEl = document.activeElement;
+  const selectionText = window.getSelection()?.toString() || "";
+  let hasSelection = selectionText.length > 0;
+
+  if (activeEl && (activeEl.tagName === "INPUT" || activeEl.tagName === "TEXTAREA")) {
+    if (activeEl.selectionStart != null && activeEl.selectionEnd != null) {
+      hasSelection = activeEl.selectionStart !== activeEl.selectionEnd;
+    }
+  }
+
+  contextMenu.append(
+    createContextMenuItem(
+      "剪切",
+      () => {
+        const curActive = document.activeElement;
+        const text = window.getSelection()?.toString() || "";
+
+        if (curActive && (curActive.tagName === "INPUT" || curActive.tagName === "TEXTAREA")) {
+          const start = curActive.selectionStart;
+          const end = curActive.selectionEnd;
+          if (start != null && end != null && start !== end) {
+            const val = curActive.value;
+            const cutText = val.slice(start, end);
+            navigator.clipboard.writeText(cutText).catch(() => {});
+            curActive.value = val.slice(0, start) + val.slice(end);
+            curActive.selectionStart = curActive.selectionEnd = start;
+            curActive.dispatchEvent(new Event("input", { bubbles: true }));
+          } else {
+            document.execCommand("cut");
+          }
+        } else if (
+          markdownEditor &&
+          (curActive?.closest("#editorRoot") ||
+            editorRoot?.contains(curActive) ||
+            target?.closest("#editorRoot"))
+        ) {
+          if (text) {
+            navigator.clipboard.writeText(text).catch(() => {});
+            markdownEditor.insertMarkdown("");
+          } else {
+            document.execCommand("cut");
+          }
+        } else {
+          document.execCommand("cut");
+        }
+      },
+      !hasSelection,
+    ),
+
+    createContextMenuItem(
+      "复制",
+      () => {
+        const text = window.getSelection()?.toString();
+        if (text) {
+          navigator.clipboard.writeText(text).catch(() => {
+            document.execCommand("copy");
+          });
+        } else {
+          document.execCommand("copy");
+        }
+      },
+      !hasSelection,
+    ),
+
+    createContextMenuItem("粘贴", async () => {
+      try {
+        const text = await navigator.clipboard.readText();
+        if (!text) {
+          document.execCommand("paste");
+          return;
+        }
+        const activeEl = document.activeElement;
+        if (activeEl && (activeEl.tagName === "INPUT" || activeEl.tagName === "TEXTAREA")) {
+          const start = activeEl.selectionStart ?? activeEl.value.length;
+          const end = activeEl.selectionEnd ?? activeEl.value.length;
+          const val = activeEl.value;
+          activeEl.value = val.slice(0, start) + text + val.slice(end);
+          activeEl.selectionStart = activeEl.selectionEnd = start + text.length;
+          activeEl.dispatchEvent(new Event("input", { bubbles: true }));
+        } else if (
+          markdownEditor &&
+          (markdownEditor.hasFocus?.() ||
+            activeEl?.closest("#editorRoot") ||
+            editorRoot?.contains(activeEl) ||
+            target?.closest("#editorRoot"))
+        ) {
+          markdownEditor.insertMarkdown(text);
+        } else {
+          document.execCommand("paste");
+        }
+      } catch (err) {
+        document.execCommand("paste");
+      }
+    }),
+
+    createContextMenuSeparator(),
+
+    createContextMenuItem(
+      "插入图片",
+      () => {
+        insertImage().catch(console.error);
+      },
+      !canInsert,
+    ),
+    createContextMenuItem(
+      "插入代码块",
+      () => {
+        insertCodeBlock();
+      },
+      !canInsert,
+    ),
+  );
+
+  document.body.append(contextMenu);
+
+  const rect = contextMenu.getBoundingClientRect();
+  if (rect.right > window.innerWidth) {
+    contextMenu.style.left = `${x - rect.width}px`;
+  }
+  if (rect.bottom > window.innerHeight) {
+    contextMenu.style.top = `${y - rect.height}px`;
+  }
 }
 
 function showContextMenu(x, y, entry = null) {
@@ -5857,6 +6100,27 @@ document.addEventListener("click", (e) => {
   }
 });
 
+if (editorPanel) {
+  editorPanel.addEventListener("contextmenu", (event) => {
+    if (event.target.closest("button, select, a, dialog")) {
+      return;
+    }
+    if (event.target.closest(".cm-rendered-image img")) {
+      return;
+    }
+    if (
+      event.target.closest(
+        ".cm-table-column-menu-button, .cm-table-row-menu-button, .cm-table-column-menu",
+      )
+    ) {
+      return;
+    }
+
+    event.preventDefault();
+    showEditorContextMenu(event.clientX, event.clientY, event.target);
+  });
+}
+
 document.addEventListener("contextmenu", (event) => {
   const image = event.target.closest?.(".cm-rendered-image img");
   if (!image) {
@@ -5999,6 +6263,7 @@ function createDraft() {
     workspaceTabs.push(tab);
   }
   showWorkspaceTab(tab);
+  saveDraftsToStorage();
   // 用 requestAnimationFrame 确保 Tab 栏在所有同步操作完成后一定重新渲染
   requestAnimationFrame(() => renderWorkspaceTabs());
   titleInput.focus();
@@ -6035,6 +6300,9 @@ function openDraftSaveDialog(draftId, tabKey = null) {
 
   draftFileTypeSelect.value = draft.fileType || "md";
   draftSaveDialog.showModal();
+  requestAnimationFrame(() => {
+    draftTitleInput?.focus?.();
+  });
 }
 
 confirmSaveDraftButton?.addEventListener("click", async () => {
@@ -6077,6 +6345,7 @@ confirmSaveDraftButton?.addEventListener("click", async () => {
     await activateWorkspaceTab("note", savedNote.id);
     renderNoteList();
     renderWorkspaceTabs();
+    saveDraftsToStorage();
   } catch (err) {
     console.error("保存草稿失败:", err);
   } finally {
@@ -6114,6 +6383,11 @@ discardDraftButton?.addEventListener("click", () => {
   } else {
     renderWorkspaceTabs();
   }
+  saveDraftsToStorage();
+});
+
+window.addEventListener("beforeunload", () => {
+  saveDraftsToStorage();
 });
 
 cancelDraftButton?.addEventListener("click", () => {
