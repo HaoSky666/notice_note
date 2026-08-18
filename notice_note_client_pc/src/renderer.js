@@ -5,6 +5,7 @@ const reminderList = document.querySelector("#reminderList");
 const editorRoot = document.querySelector("#editorRoot");
 const contentShell = document.querySelector("#contentShell");
 const saveButton = document.querySelector("#saveButton");
+const saveStatus = document.querySelector("#saveStatus");
 const newNoteButton = document.querySelector("#newNoteButton");
 const addReminderButton = document.querySelector("#addReminderButton");
 const deleteNoteButton = document.querySelector("#deleteNoteButton");
@@ -71,6 +72,8 @@ const newMenuDropdown = document.querySelector("#newMenuDropdown");
 const newNoteOption = document.querySelector("#newNoteOption");
 const newFolderOption = document.querySelector("#newFolderOption");
 const breadcrumb = document.querySelector("#breadcrumb");
+const noteListSearch = document.querySelector("#noteListSearch");
+const noteSearchInput = document.querySelector("#noteSearchInput");
 const showAllFilesButton = document.querySelector("#showAllFilesButton");
 const showReminderCalendarButton = document.querySelector(
   "#showReminderCalendarButton",
@@ -102,6 +105,9 @@ const fileViewerType = document.querySelector("#fileViewerType");
 const fileViewerPath = document.querySelector("#fileViewerPath");
 const fileViewerContent = document.querySelector("#fileViewerContent");
 const fileViewerToast = document.querySelector("#fileViewerToast");
+const fileViewerReadOnlyNotice = document.querySelector(
+  "#fileViewerReadOnlyNotice",
+);
 const fileViewerActions = document.querySelector("#fileViewerActions");
 const fileViewerEditButton = document.querySelector("#fileViewerEditButton");
 const fileViewerSaveButton = document.querySelector("#fileViewerSaveButton");
@@ -165,7 +171,8 @@ let reminderCalendarMonth = new Date(
   1,
 );
 let selectedReminderDate = toLocalDateKey(new Date());
-let saveTimer;
+const noteSaveStates = new Map();
+let noteRecoveryLogCache = null;
 let storageInfo = null;
 let appSettings = null;
 let markdownEditor = null;
@@ -186,6 +193,7 @@ let imageZoom = 1;
 let workspaceTabs = [];
 let activeWorkspaceTabKey = null;
 let draggedWorkspaceTabKey = null;
+let workspaceContentRenderVersion = 0;
 const workspaceTabViewStates = new Map();
 let filePreviewVersion = 0;
 let draftsMap = new Map();
@@ -207,6 +215,7 @@ const INTERFACE_THEME_KEY = "notice-note:interface-theme";
 const DRAFTS_PERSIST_KEY = "notice-note:drafts";
 const WORKSPACE_TABS_PERSIST_KEY = "notice-note:workspace-tabs";
 const ACTIVE_TAB_PERSIST_KEY = "notice-note:active-workspace-tab";
+const NOTE_RECOVERY_PERSIST_KEY = "notice-note:recovery-log:v1";
 const THEME_LIST = [
   {
     id: "paper",
@@ -412,6 +421,28 @@ function closeImageLightbox() {
   imageLightboxPreviousFocus = null;
 }
 
+function trapImageLightboxFocus(event) {
+  const controls = [
+    ...imageLightbox.querySelectorAll("button:not(:disabled)"),
+  ];
+  if (controls.length === 0) {
+    return;
+  }
+  const firstControl = controls[0];
+  const lastControl = controls[controls.length - 1];
+  const activeElement = document.activeElement;
+  const shouldWrapBackward =
+    event.shiftKey &&
+    (activeElement === firstControl || !imageLightbox.contains(activeElement));
+  const shouldWrapForward =
+    !event.shiftKey &&
+    (activeElement === lastControl || !imageLightbox.contains(activeElement));
+  if (controls.length === 1 || shouldWrapBackward || shouldWrapForward) {
+    event.preventDefault();
+    (event.shiftKey ? lastControl : firstControl).focus();
+  }
+}
+
 function resolveNoteImageSrc(src) {
   const imageSource = String(src || "").trim();
   if (!imageSource || /^(?:[a-z][a-z\d+.-]*:|\/\/|\/|#)/i.test(imageSource)) {
@@ -473,6 +504,9 @@ function renderThemePickerGrid() {
 
   themePickerTabs.forEach((tab) => {
     const cat = tab.dataset.category;
+    const isActive = cat === activeThemeCategory;
+    tab.classList.toggle("is-active", isActive);
+    tab.setAttribute("aria-pressed", String(isActive));
     if (cat === "all") tab.textContent = `全部 (${allCount})`;
     else if (cat === "minimal") tab.textContent = `🌿 极简日常 (${minimalCount})`;
     else if (cat === "anime") tab.textContent = `🌸 二次元动漫 (${animeCount})`;
@@ -499,17 +533,17 @@ function renderThemePickerGrid() {
         : `<span class="settings-theme-preview theme-preview-${t.id}" aria-hidden="true"><i></i><i></i><i></i></span>`;
 
       return `
-      <div class="theme-picker-card-item ${isSelected ? "is-selected" : ""}" data-theme-id="${t.id}">
+      <button class="theme-picker-card-item ${isSelected ? "is-selected" : ""}" type="button" data-theme-id="${t.id}" aria-label="应用主题：${t.name}。${t.desc}" aria-pressed="${isSelected}">
         ${previewHtml}
-        <div class="theme-picker-card-info">
-          <div class="theme-picker-card-header">
+        <span class="theme-picker-card-info">
+          <span class="theme-picker-card-header">
             <strong>${t.name}</strong>
             <span class="theme-category-badge category-${t.category}">${categoryBadge}</span>
-          </div>
+          </span>
           <small>${t.desc}</small>
-        </div>
-        ${isSelected ? '<span class="theme-applied-badge">✓ 当前应用</span>' : '<button class="theme-apply-btn" type="button">使用</button>'}
-      </div>
+        </span>
+        ${isSelected ? '<span class="theme-applied-badge">✓ 当前应用</span>' : '<span class="theme-apply-btn">使用</span>'}
+      </button>
     `;
     })
     .join("");
@@ -729,18 +763,99 @@ function sortNotes(noteItems) {
   });
 }
 
-function getFilteredNotes() {
-  if (sidebarViewMode === "reminder") {
-    return notes.filter((note) => note.isReminderFile);
+function getNoteSearchKeyword() {
+  return noteSearchInput?.value.trim().toLocaleLowerCase("zh-CN") || "";
+}
+
+function clearNoteListSearch() {
+  if (noteSearchInput) {
+    noteSearchInput.value = "";
   }
-  return notes.filter((note) => note.folderId === activeFolderId);
+}
+
+function includesNoteSearchKeyword(value, keyword) {
+  return String(value || "")
+    .toLocaleLowerCase("zh-CN")
+    .includes(keyword);
+}
+
+function getSearchFolderIds() {
+  const folderIds = new Set([activeFolderId]);
+  const childrenByParent = new Map();
+  for (const folder of folders) {
+    const children = childrenByParent.get(folder.parentId) || [];
+    children.push(folder.id);
+    childrenByParent.set(folder.parentId, children);
+  }
+  const pendingFolderIds = [activeFolderId];
+  while (pendingFolderIds.length > 0) {
+    const parentId = pendingFolderIds.pop();
+    for (const folderId of childrenByParent.get(parentId) || []) {
+      if (!folderIds.has(folderId)) {
+        folderIds.add(folderId);
+        pendingFolderIds.push(folderId);
+      }
+    }
+  }
+  return folderIds;
+}
+
+function createNoteSearchPreview(content, keyword) {
+  const normalizedContent = String(content || "")
+    .replace(/!\[[^\]]*\]\([^)]+\)/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!normalizedContent) {
+    return "";
+  }
+
+  const matchIndex = normalizedContent
+    .toLocaleLowerCase("zh-CN")
+    .indexOf(keyword);
+  if (matchIndex < 0) {
+    return normalizedContent.slice(0, 100);
+  }
+
+  const start = Math.max(0, matchIndex - 28);
+  const end = Math.min(normalizedContent.length, matchIndex + keyword.length + 64);
+  return `${start > 0 ? "…" : ""}${normalizedContent.slice(start, end)}${end < normalizedContent.length ? "…" : ""}`;
+}
+
+function getFilteredNotes() {
+  const keyword = getNoteSearchKeyword();
+  const searchFolderIds = keyword && sidebarViewMode === "all"
+    ? getSearchFolderIds()
+    : null;
+  const visibleNotes = sidebarViewMode === "reminder"
+    ? notes.filter((note) => note.isReminderFile)
+    : notes.filter((note) => searchFolderIds
+      ? searchFolderIds.has(note.folderId)
+      : note.folderId === activeFolderId);
+  if (!keyword) {
+    return visibleNotes;
+  }
+  return visibleNotes.filter((note) =>
+    includesNoteSearchKeyword(note.title, keyword)
+    || includesNoteSearchKeyword(note.content, keyword),
+  );
 }
 
 function getFilteredResources() {
-  if (sidebarViewMode === "reminder") {
-    return resourceFiles.filter((file) => file.isReminderFile);
+  const keyword = getNoteSearchKeyword();
+  const searchFolderIds = keyword && sidebarViewMode === "all"
+    ? getSearchFolderIds()
+    : null;
+  const visibleResources = sidebarViewMode === "reminder"
+    ? resourceFiles.filter((file) => file.isReminderFile)
+    : resourceFiles.filter((file) => searchFolderIds
+      ? searchFolderIds.has(file.folderId)
+      : file.folderId === activeFolderId);
+  if (!keyword) {
+    return visibleResources;
   }
-  return resourceFiles.filter((file) => file.folderId === activeFolderId);
+  return visibleResources.filter((file) =>
+    includesNoteSearchKeyword(file.name, keyword),
+  );
 }
 
 function getWorkspaceTabKey(type, id) {
@@ -812,6 +927,11 @@ function renderWorkspaceTabs() {
     const mainButton = document.createElement("button");
     mainButton.className = "workspace-tab-main";
     mainButton.type = "button";
+    mainButton.setAttribute("role", "tab");
+    mainButton.setAttribute(
+      "aria-selected",
+      String(tabKey === activeWorkspaceTabKey),
+    );
     mainButton.title =
       tab.type === "note"
         ? resource.title
@@ -851,6 +971,13 @@ function renderWorkspaceTabs() {
     closeButton.textContent = "×";
 
     mainButton.append(icon, label);
+    mainButton.addEventListener("pointerdown", (event) => {
+      if (event.button !== 0) {
+        return;
+      }
+      event.preventDefault();
+      activateWorkspaceTab(tab.type, tab.id).catch(console.error);
+    });
     mainButton.addEventListener("click", () => {
       activateWorkspaceTab(tab.type, tab.id).catch(console.error);
     });
@@ -1223,13 +1350,7 @@ function closeViewerSearch() {
   viewerSearchCount.textContent = "0 / 0";
 }
 
-function showWorkspaceTab(tab) {
-  closeViewerSearch();
-  const tabKey = getWorkspaceTabKey(tab.type, tab.id);
-  if (activeWorkspaceTabKey !== tabKey) {
-    saveActiveWorkspaceTabViewState();
-  }
-  activeWorkspaceTabKey = tabKey;
+function renderWorkspaceTabContent(tab) {
   if (tab.type === "draft") {
     activeDraftId = tab.id;
     activeNoteId = null;
@@ -1253,8 +1374,33 @@ function showWorkspaceTab(tab) {
     activeResourceId = null;
     renderEditor();
   }
-  renderWorkspaceTabs();
-  saveDraftsToStorage();
+}
+
+function showWorkspaceTab(tab, { deferContent = false } = {}) {
+  closeViewerSearch();
+  const tabKey = getWorkspaceTabKey(tab.type, tab.id);
+  if (activeWorkspaceTabKey !== tabKey) {
+    saveActiveWorkspaceTabViewState();
+  }
+  activeWorkspaceTabKey = tabKey;
+  const renderVersion = ++workspaceContentRenderVersion;
+  const renderContent = () => {
+    if (
+      renderVersion !== workspaceContentRenderVersion
+      || activeWorkspaceTabKey !== tabKey
+    ) {
+      return;
+    }
+    renderWorkspaceTabContent(tab);
+    saveDraftsToStorage();
+  };
+
+  if (deferContent) {
+    renderWorkspaceTabs();
+    requestAnimationFrame(renderContent);
+  } else {
+    renderContent();
+  }
 }
 
 async function activateWorkspaceTab(type, id) {
@@ -1268,7 +1414,7 @@ async function activateWorkspaceTab(type, id) {
     return;
   }
 
-  await flushPendingSave();
+  const pendingSave = flushPendingSave();
   if (
     !workspaceTabs.some(
       (item) => getWorkspaceTabKey(item.type, item.id) === tabKey,
@@ -1276,7 +1422,8 @@ async function activateWorkspaceTab(type, id) {
   ) {
     workspaceTabs.push(tab);
   }
-  showWorkspaceTab(tab);
+  showWorkspaceTab(tab, { deferContent: true });
+  pendingSave.catch(console.error);
 }
 
 async function closeWorkspaceTab(tabKey) {
@@ -1436,7 +1583,7 @@ function reconcileWorkspaceTabs() {
 }
 
 function getCurrentFolders() {
-  if (sidebarViewMode !== "all") {
+  if (sidebarViewMode !== "all" || getNoteSearchKeyword()) {
     return [];
   }
   return folders.filter((folder) => folder.parentId === activeFolderId);
@@ -1472,6 +1619,9 @@ function resolveFolderIdByNamePath(names, sourceFolders = folders) {
 
 function renderBreadcrumb() {
   breadcrumb.innerHTML = "";
+  if (noteListSearch) {
+    noteListSearch.hidden = sidebarViewMode === "calendar";
+  }
 
   if (sidebarViewMode === "reminder") {
     const reminderBtn = document.createElement("button");
@@ -1819,6 +1969,7 @@ function renderNoteList() {
     return;
   }
 
+  const searchKeyword = getNoteSearchKeyword();
   const currentFolders = getCurrentFolders();
   const filteredNotes = getFilteredNotes();
   const filteredResources = getFilteredResources();
@@ -1827,6 +1978,18 @@ function renderNoteList() {
 
   if (sidebarViewMode === "calendar") {
     renderReminderCalendar();
+    return;
+  }
+
+  if (
+    searchKeyword
+    && filteredNotes.length === 0
+    && filteredResources.length === 0
+  ) {
+    const empty = document.createElement("p");
+    empty.className = "note-list-empty";
+    empty.textContent = "没有找到标题或正文匹配的内容";
+    noteList.append(empty);
     return;
   }
 
@@ -1842,10 +2005,26 @@ function renderNoteList() {
     return;
   }
 
+  if (
+    sidebarViewMode === "all" &&
+    currentFolders.length === 0 &&
+    filteredNotes.length === 0 &&
+    filteredResources.length === 0
+  ) {
+    const empty = document.createElement("p");
+    empty.className = "note-list-empty";
+    empty.textContent = "当前目录还是空的，可点击左上角 + 新建内容";
+    noteList.append(empty);
+    return;
+  }
+
   for (const folder of currentFolders) {
     const item = document.createElement("div");
     item.className = "note-item folder-item";
     item.dataset.folderId = folder.id;
+    item.setAttribute("role", "button");
+    item.tabIndex = 0;
+    item.setAttribute("aria-label", `打开文件夹 ${folder.name}`);
 
     // Drop target: accept notes/folders dragged into this folder
     item.addEventListener("dragover", (e) => {
@@ -1871,14 +2050,18 @@ function renderNoteList() {
       }
     });
 
-    // Draggable: folders can be dragged
-    item.draggable = true;
-    item.addEventListener("dragstart", (e) => {
+    const dragHandle = document.createElement("span");
+    dragHandle.className = "note-drag-handle";
+    dragHandle.textContent = "⋮⋮";
+    dragHandle.title = "拖动文件夹到其他文件夹";
+    dragHandle.setAttribute("aria-label", "拖动文件夹到其他文件夹");
+    dragHandle.draggable = true;
+    dragHandle.addEventListener("dragstart", (e) => {
       e.dataTransfer.setData("text/plain", `folder:${folder.id}`);
       e.dataTransfer.effectAllowed = "move";
       item.classList.add("dragging");
     });
-    item.addEventListener("dragend", () => {
+    dragHandle.addEventListener("dragend", () => {
       item.classList.remove("dragging");
     });
 
@@ -1946,9 +2129,39 @@ function renderNoteList() {
     });
 
     actions.append(renameBtn, deleteBtn);
-    item.append(icon, name, counts, actions);
-    item.addEventListener("click", () => {
+    const folderMeta = document.createElement("span");
+    folderMeta.className = "folder-meta";
+    folderMeta.append(counts, actions);
+    item.append(dragHandle, icon, name, folderMeta);
+    let pointerOpenHandled = false;
+    const openFolder = () => {
       openFolderWithAccessCheck(folder.id).catch(console.error);
+    };
+    item.addEventListener("pointerdown", (event) => {
+      if (
+        event.button !== 0
+        || event.target.closest(".folder-action-btn, .note-drag-handle")
+      ) {
+        return;
+      }
+      pointerOpenHandled = true;
+      openFolder();
+    });
+    item.addEventListener("click", () => {
+      if (pointerOpenHandled) {
+        pointerOpenHandled = false;
+        return;
+      }
+      openFolder();
+    });
+    item.addEventListener("keydown", (event) => {
+      if (
+        event.target === item &&
+        (event.key === "Enter" || event.key === " ")
+      ) {
+        event.preventDefault();
+        openFolderWithAccessCheck(folder.id).catch(console.error);
+      }
     });
     noteList.append(item);
   }
@@ -1958,21 +2171,26 @@ function renderNoteList() {
   });
   for (const note of orderedNotes) {
     const item = document.createElement("button");
-    item.className = `note-item${!activePdfId && !activeResourceId && note.id === activeNoteId ? " active" : ""}`;
+    const isActiveNote =
+      !activePdfId && !activeResourceId && note.id === activeNoteId;
+    item.className = `note-item${isActiveNote ? " active" : ""}`;
     item.type = "button";
     item.dataset.noteId = note.id;
-    item.addEventListener("click", () =>
-      selectNote(note.id).catch(console.error),
-    );
-
-    // Draggable: notes can be dragged into folders
-    item.draggable = true;
-    item.addEventListener("dragstart", (e) => {
+    if (isActiveNote) {
+      item.setAttribute("aria-current", "page");
+    }
+    const dragHandle = document.createElement("span");
+    dragHandle.className = "note-drag-handle";
+    dragHandle.textContent = "⋮⋮";
+    dragHandle.title = "拖动笔记到其他文件夹";
+    dragHandle.setAttribute("aria-label", "拖动笔记到其他文件夹");
+    dragHandle.draggable = true;
+    dragHandle.addEventListener("dragstart", (e) => {
       e.dataTransfer.setData("text/plain", `note:${note.id}`);
       e.dataTransfer.effectAllowed = "move";
       item.classList.add("dragging");
     });
-    item.addEventListener("dragend", () => {
+    dragHandle.addEventListener("dragend", () => {
       item.classList.remove("dragging");
     });
 
@@ -1982,7 +2200,7 @@ function renderNoteList() {
     const title = document.createElement("strong");
     title.textContent = note.title || "未命名笔记";
     title.title = title.textContent;
-    titleRow.append(title);
+    titleRow.append(dragHandle, title);
     titleRow.append(
       createDailyReviewToggle({ type: "note", id: note.id }, note),
     );
@@ -2013,6 +2231,14 @@ function renderNoteList() {
       badgeRow.append(reminderFileBadge);
     }
 
+    if (isActiveNote) {
+      const currentMarker = document.createElement("span");
+      currentMarker.className = "note-current-marker";
+      currentMarker.textContent = "正在查看";
+      currentMarker.title = "当前打开的文件";
+      badgeRow.append(currentMarker);
+    }
+
     const textBadge = document.createElement("span");
     textBadge.className = `file-type-badge ${note.fileType}`;
     textBadge.textContent = note.fileType.toUpperCase();
@@ -2023,7 +2249,7 @@ function renderNoteList() {
       item.append(badgeRow);
     }
 
-    if (sidebarViewMode === "reminder") {
+    if (sidebarViewMode === "reminder" || searchKeyword) {
       const folderPath = document.createElement("div");
       folderPath.className = "reminder-file-path";
       const pathParts = getFolderNamePath(note.folderId);
@@ -2031,6 +2257,19 @@ function renderNoteList() {
         pathParts.length > 0 ? pathParts.join(" / ") : "根目录";
       folderPath.title = folderPath.textContent;
       item.append(folderPath);
+    }
+
+    if (
+      searchKeyword
+      && !includesNoteSearchKeyword(note.title, searchKeyword)
+    ) {
+      const previewText = createNoteSearchPreview(note.content, searchKeyword);
+      if (previewText) {
+        const preview = document.createElement("div");
+        preview.className = "note-search-preview";
+        preview.textContent = previewText;
+        item.append(preview);
+      }
     }
 
     const timeMeta = document.createElement("div");
@@ -2058,6 +2297,25 @@ function renderNoteList() {
       item.append(reminderMeta, createDailyReviewLastTime(note));
     }
 
+    let pointerOpenHandled = false;
+    const openNote = () => selectNote(note.id).catch(console.error);
+    item.addEventListener("pointerdown", (event) => {
+      if (
+        event.button !== 0
+        || event.target.closest(".daily-review-toggle, .note-drag-handle")
+      ) {
+        return;
+      }
+      pointerOpenHandled = true;
+      openNote();
+    });
+    item.addEventListener("click", () => {
+      if (pointerOpenHandled) {
+        pointerOpenHandled = false;
+        return;
+      }
+      openNote();
+    });
     noteList.append(item);
   }
 
@@ -2074,9 +2332,26 @@ function renderNoteList() {
     item.type = "button";
     item.dataset.fileId = file.id;
     if (file.canOpen) {
-      item.addEventListener("click", () =>
-        selectResourceFile(file.id).catch(console.error),
-      );
+      let pointerOpenHandled = false;
+      const openResource = () =>
+        selectResourceFile(file.id).catch(console.error);
+      item.addEventListener("pointerdown", (event) => {
+        if (
+          event.button !== 0
+          || event.target.closest(".daily-review-toggle")
+        ) {
+          return;
+        }
+        pointerOpenHandled = true;
+        openResource();
+      });
+      item.addEventListener("click", () => {
+        if (pointerOpenHandled) {
+          pointerOpenHandled = false;
+          return;
+        }
+        openResource();
+      });
     } else {
       item.title = "该文件类型仅支持在列表中查看";
     }
@@ -2123,7 +2398,7 @@ function renderNoteList() {
     if (badgeRow.childElementCount > 0) {
       item.append(badgeRow);
     }
-    if (sidebarViewMode === "reminder") {
+    if (sidebarViewMode === "reminder" || searchKeyword) {
       const folderPath = document.createElement("div");
       folderPath.className = "reminder-file-path";
       const pathParts = getFolderNamePath(file.folderId);
@@ -2141,6 +2416,7 @@ function renderNoteList() {
 }
 
 function selectFolder(folderId) {
+  clearNoteListSearch();
   sidebarViewMode = "all";
   showAllFilesButton.classList.add("is-active");
   showReminderCalendarButton.classList.remove("is-active");
@@ -2191,6 +2467,7 @@ async function openFolderWithAccessCheck(folderId) {
 }
 
 function setSidebarViewMode(mode, shouldRender = true) {
+  clearNoteListSearch();
   sidebarViewMode = ["calendar", "reminder"].includes(mode) ? mode : "all";
   showAllFilesButton.classList.toggle("is-active", sidebarViewMode === "all");
   showReminderCalendarButton.classList.toggle(
@@ -2212,6 +2489,7 @@ async function moveNoteToFolder(noteId, folderId) {
     await window.noticeNote.moveNote(noteId, folderId);
   } catch (error) {
     console.error("移动笔记失败:", error);
+    alert(error.message || "移动笔记失败");
   }
 }
 
@@ -2220,6 +2498,7 @@ async function moveFolderToFolder(folderId, targetFolderId) {
     await window.noticeNote.moveFolder(folderId, targetFolderId);
   } catch (error) {
     console.error("移动文件夹失败:", error);
+    alert(error.message || "移动文件夹失败");
   }
 }
 
@@ -2232,6 +2511,7 @@ async function moveResourceToFolder(fileId, folderId) {
     }
   } catch (error) {
     console.error("移动文件失败:", error);
+    alert(error.message || "移动文件失败");
   }
 }
 
@@ -2433,6 +2713,7 @@ async function createFolder() {
     await window.noticeNote.createFolder(name, activeFolderId);
   } catch (error) {
     console.error("创建文件夹失败:", error);
+    alert(error.message || "创建文件夹失败");
   }
 }
 
@@ -2480,22 +2761,30 @@ function showFolderPasswordDialog(title, confirmLabel = "确定") {
   return new Promise((resolve) => {
     const dialog = document.createElement("dialog");
     dialog.className = "folder-dialog folder-password-dialog";
-    dialog.innerHTML = `
-      <div class="folder-dialog-content">
-        <label>${title}</label>
-        <input type="password" id="folderPasswordInput" placeholder="输入密码" autofocus>
-        <div class="folder-dialog-actions">
-          <button class="secondary-button" id="folderPasswordCancel">取消</button>
-          <button class="primary-button" id="folderPasswordConfirm">${confirmLabel}</button>
-        </div>
-      </div>
-    `;
+    const content = document.createElement("div");
+    content.className = "folder-dialog-content";
+    const label = document.createElement("label");
+    label.textContent = title;
+    const input = document.createElement("input");
+    input.type = "password";
+    input.placeholder = "输入密码";
+    input.autocomplete = "current-password";
+    const actions = document.createElement("div");
+    actions.className = "folder-dialog-actions";
+    const cancelBtn = document.createElement("button");
+    cancelBtn.type = "button";
+    cancelBtn.className = "secondary-button";
+    cancelBtn.textContent = "取消";
+    const confirmBtn = document.createElement("button");
+    confirmBtn.type = "button";
+    confirmBtn.className = "primary-button";
+    confirmBtn.textContent = confirmLabel;
+    actions.append(cancelBtn, confirmBtn);
+    content.append(label, input, actions);
+    dialog.append(content);
     document.body.append(dialog);
     dialog.showModal();
 
-    const input = dialog.querySelector("#folderPasswordInput");
-    const cancelBtn = dialog.querySelector("#folderPasswordCancel");
-    const confirmBtn = dialog.querySelector("#folderPasswordConfirm");
     input.focus();
 
     const close = (value) => {
@@ -2550,6 +2839,16 @@ async function setFolderPasswordForFolder(folderId) {
   if (!folder) {
     return;
   }
+  let currentPassword = "";
+  if (folder.isProtected) {
+    currentPassword = await showFolderPasswordDialog(
+      `输入「${folder.name}」的当前密码`,
+      "下一步",
+    );
+    if (!currentPassword) {
+      return;
+    }
+  }
   const password = await showFolderPasswordDialog(
     `为「${folder.name}」设置访问密码`,
     folder.isProtected ? "更新密码" : "设置密码",
@@ -2558,7 +2857,11 @@ async function setFolderPasswordForFolder(folderId) {
     return;
   }
   try {
-    await window.noticeNote.setFolderPassword(folderId, password);
+    await window.noticeNote.setFolderPassword(
+      folderId,
+      password,
+      currentPassword,
+    );
     await refreshNotes();
   } catch (error) {
     alert(error.message || "设置密码失败");
@@ -2570,11 +2873,18 @@ async function clearFolderPasswordForFolder(folderId) {
   if (!folder) {
     return;
   }
+  const currentPassword = await showFolderPasswordDialog(
+    `输入「${folder.name}」的当前密码以清除保护`,
+    "清除密码",
+  );
+  if (!currentPassword) {
+    return;
+  }
   if (!confirm(`确定清除文件夹「${folder.name}」的访问密码吗？`)) {
     return;
   }
   try {
-    await window.noticeNote.clearFolderPassword(folderId);
+    await window.noticeNote.clearFolderPassword(folderId, currentPassword);
     await refreshNotes();
   } catch (error) {
     alert(error.message || "清除密码失败");
@@ -2588,8 +2898,8 @@ async function deleteFolder(folderId) {
   const noteCount = getFolderNoteCount(folderId);
   const message =
     noteCount > 0
-      ? `确定删除文件夹「${folder.name}」吗？该文件夹下有 ${noteCount} 个笔记，将会一起删除。`
-      : `确定删除文件夹「${folder.name}」吗？`;
+      ? `确定将文件夹「${folder.name}」移到回收站吗？该文件夹下有 ${noteCount} 个笔记，将会一起移动。`
+      : `确定将文件夹「${folder.name}」移到回收站吗？`;
 
   if (!confirm(message)) return;
 
@@ -2602,6 +2912,7 @@ async function deleteFolder(folderId) {
     }
   } catch (error) {
     console.error("删除文件夹失败:", error);
+    alert(error.message || "删除文件夹失败");
   }
 }
 
@@ -2613,6 +2924,7 @@ async function renameFolder(folderId, currentName) {
     await window.noticeNote.renameFolder(folderId, newName);
   } catch (error) {
     console.error("重命名文件夹失败:", error);
+    alert(error.message || "重命名文件夹失败");
   }
 }
 
@@ -3364,6 +3676,7 @@ function renderEditor() {
   }
 
   isRenderingEditor = false;
+  renderSaveStatus();
   renderNoteList();
   renderReminders();
   renderWorkspaceTabs();
@@ -4774,173 +5087,51 @@ function renderResourceFile() {
 function resetFileViewerActions(file) {
   isFileEditingMode = false;
   showFileViewerToast('');
-  const isEditable = file && (file.kind === 'word' || file.kind === 'spreadsheet');
+  const isOfficePreview = file && (file.kind === 'word' || file.kind === 'spreadsheet');
   if (fileViewerEditButton) {
-    fileViewerEditButton.hidden = !isEditable;
-    fileViewerEditButton.textContent = file?.kind === 'spreadsheet' ? '✏️ 编辑表格' : '✏️ 编辑文档';
+    fileViewerEditButton.hidden = true;
+    fileViewerEditButton.disabled = true;
   }
   if (fileViewerSaveButton) {
     fileViewerSaveButton.hidden = true;
+    fileViewerSaveButton.disabled = true;
   }
   if (fileViewerAddRowButton) {
     fileViewerAddRowButton.hidden = true;
+    fileViewerAddRowButton.disabled = true;
   }
   if (fileViewerAddColButton) {
     fileViewerAddColButton.hidden = true;
+    fileViewerAddColButton.disabled = true;
   }
   if (fileViewerOpenExternalButton) {
     fileViewerOpenExternalButton.hidden = !file;
   }
+  if (fileViewerReadOnlyNotice) {
+    fileViewerReadOnlyNotice.hidden = !isOfficePreview;
+  }
 }
 
 function toggleFileEditingMode() {
-  const file = resourceFiles.find((item) => item.id === activeResourceId);
-  if (!file) return;
-
-  isFileEditingMode = !isFileEditingMode;
-  if (fileViewerSaveButton) fileViewerSaveButton.hidden = !isFileEditingMode;
-  if (fileViewerEditButton) {
-    fileViewerEditButton.textContent = isFileEditingMode
-      ? '❌ 退出编辑'
-      : (file.kind === 'spreadsheet' ? '✏️ 编辑表格' : '✏️ 编辑文档');
-  }
-
-  if (file.kind === 'spreadsheet') {
-    if (fileViewerAddRowButton) fileViewerAddRowButton.hidden = !isFileEditingMode;
-    if (fileViewerAddColButton) fileViewerAddColButton.hidden = !isFileEditingMode;
-
-    const cells = fileViewerContent.querySelectorAll('.spreadsheet-table td');
-    cells.forEach((td) => {
-      td.contentEditable = String(isFileEditingMode);
-      td.classList.toggle('is-editable-cell', isFileEditingMode);
-    });
-    showFileViewerToast(
-      isFileEditingMode
-        ? '已开启表格编辑模式：双击或点击单元格直接输入，修改后点击“保存修改”。'
-        : ''
-    );
-  } else if (file.kind === 'word') {
-    const wordDoc = fileViewerContent.querySelector('.word-preview');
-    if (wordDoc) {
-      wordDoc.contentEditable = String(isFileEditingMode);
-      wordDoc.classList.toggle('is-editing-word', isFileEditingMode);
-    }
-    showFileViewerToast(
-      isFileEditingMode
-        ? '已开启 Word 文档编辑模式：可以直接在此处修改文字段落，编辑完成后点击“保存修改”。'
-        : ''
-    );
-  }
+  showFileViewerToast(
+    '为避免破坏原文件格式、公式和样式，请使用“外部打开”修改。',
+    true,
+  );
 }
 
 async function saveActiveFileChanges() {
-  const file = resourceFiles.find((item) => item.id === activeResourceId);
-  if (!file) return;
-
-  if (fileViewerSaveButton) {
-    fileViewerSaveButton.disabled = true;
-    fileViewerSaveButton.textContent = '⏳ 保存中...';
-  }
-
-  try {
-    if (file.kind === 'word') {
-      const wordDoc = fileViewerContent.querySelector('.word-preview');
-      if (!wordDoc) throw new Error('未找到文档内容');
-
-      const paragraphNodes = [...wordDoc.querySelectorAll('p, h1, h2, h3, h4, h5, h6')];
-      const paragraphsData = paragraphNodes.map((node) => {
-        const text = node.textContent.trim();
-        let heading = 0;
-        if (/^H1$/i.test(node.tagName) || node.classList.contains('word-document-title')) heading = 1;
-        else if (/^H2$/i.test(node.tagName)) heading = 2;
-        else if (/^H3$/i.test(node.tagName)) heading = 3;
-
-        return {
-          text,
-          heading,
-          bold: Boolean(node.querySelector('strong, b')),
-          italic: Boolean(node.querySelector('em, i'))
-        };
-      });
-
-      const res = await window.noticeNote.saveWordFile(file.id, {
-        html: wordDoc.innerHTML,
-        paragraphs: paragraphsData
-      });
-      showFileViewerToast('✓ Word 文档修改已成功保存！');
-      if (res && res.filePath) {
-        file.path = res.filePath;
-        file.id = res.filePath;
-        activeResourceId = res.filePath;
-      }
-    } else if (file.kind === 'spreadsheet') {
-      const tables = [...fileViewerContent.querySelectorAll('.spreadsheet-table')];
-      const sheetsData = tables.map((table, tIdx) => {
-        const rows = [...table.querySelectorAll('tr')].map((tr) => {
-          const cells = [...tr.querySelectorAll('td')].map((td) => {
-            return { value: td.textContent.trim() };
-          });
-          return { cells };
-        });
-        return { name: `Sheet${tIdx + 1}`, rows };
-      });
-
-      await window.noticeNote.saveSpreadsheetFile(file.id, sheetsData);
-      showFileViewerToast('✓ Excel 表格修改已成功保存！');
-    }
-
-    const version = ++filePreviewVersion;
-    if (file.kind === 'word') {
-      skipNextFileReload = true;
-      const wordDoc = fileViewerContent.querySelector('.word-preview');
-      if (wordDoc) {
-        wordDoc.contentEditable = 'false';
-        wordDoc.classList.remove('is-editing-word');
-      }
-      isFileEditingMode = false;
-      renderWordOutline(wordDoc || fileViewerContent);
-      resetFileViewerActions(file);
-    } else {
-      await loadResourcePreview(file, version);
-      resetFileViewerActions(file);
-    }
-  } catch (error) {
-    showFileViewerToast(`保存失败：${error.message}`, true);
-  } finally {
-    if (fileViewerSaveButton) {
-      fileViewerSaveButton.disabled = false;
-      fileViewerSaveButton.textContent = '💾 保存修改';
-    }
-  }
+  showFileViewerToast(
+    '应用内保存已停用，以避免损坏 Word/Excel 文件；请使用“外部打开”。',
+    true,
+  );
 }
 
 function addSpreadsheetRow() {
-  const table = fileViewerContent.querySelector('.spreadsheet-table');
-  if (!table) return;
-  const firstRow = table.querySelector('tr');
-  const colCount = firstRow ? firstRow.querySelectorAll('td').length : 5;
-  const newTr = document.createElement('tr');
-  for (let i = 0; i < colCount; i++) {
-    const td = document.createElement('td');
-    td.contentEditable = 'true';
-    td.className = 'is-editable-cell';
-    td.textContent = '';
-    newTr.append(td);
-  }
-  table.append(newTr);
+  toggleFileEditingMode();
 }
 
 function addSpreadsheetCol() {
-  const table = fileViewerContent.querySelector('.spreadsheet-table');
-  if (!table) return;
-  const rows = table.querySelectorAll('tr');
-  rows.forEach((tr) => {
-    const td = document.createElement('td');
-    td.contentEditable = 'true';
-    td.className = 'is-editable-cell';
-    td.textContent = '';
-    tr.append(td);
-  });
+  toggleFileEditingMode();
 }
 
 function openActiveFileExternal() {
@@ -4966,9 +5157,12 @@ function mergeIncomingNotes(nextNotes) {
   }
 
   const activeNote = getActiveNote();
+  const activeSaveState = activeNote ? getNoteSaveState(activeNote.id) : null;
   const shouldKeepDraft =
     activeNote &&
-    isEditingActiveNote() &&
+    (isEditingActiveNote()
+      || activeSaveState.dirty
+      || Boolean(activeSaveState.inflight)) &&
     nextNotes.some((note) => note.id === activeNote.id);
 
   if (!shouldKeepDraft) {
@@ -5017,6 +5211,7 @@ function createMarkdownEditor() {
     placeholder: "点击这里记录 Markdown 笔记。",
     isPlainText: () => ["txt", "json"].includes(getActiveNote()?.fileType),
     resolveImageSrc: resolveNoteImageSrc,
+    onOpenImage: openImageLightbox,
     onOpenLink: (href) => {
       window.noticeNote
         .openExternalUrl(href)
@@ -5067,35 +5262,275 @@ function replaceNote(updatedNote) {
   notes = sortNotes(notes);
 }
 
-async function saveActiveNote() {
+function getNoteSaveState(noteId) {
+  let state = noteSaveStates.get(noteId);
+  if (!state) {
+    state = {
+      dirty: false,
+      inflight: null,
+      generation: 0,
+      timer: null,
+      lastError: null,
+      status: "idle",
+    };
+    noteSaveStates.set(noteId, state);
+  }
+  return state;
+}
+
+function readNoteRecoveryLog() {
+  if (noteRecoveryLogCache) {
+    return noteRecoveryLogCache;
+  }
+  try {
+    const parsed = JSON.parse(
+      localStorage.getItem(NOTE_RECOVERY_PERSIST_KEY) || "{}",
+    );
+    noteRecoveryLogCache = parsed && typeof parsed === "object" ? parsed : {};
+  } catch (error) {
+    console.error("读取笔记恢复日志失败:", error);
+    noteRecoveryLogCache = {};
+  }
+  return noteRecoveryLogCache;
+}
+
+function writeNoteRecoveryLog() {
+  try {
+    localStorage.setItem(
+      NOTE_RECOVERY_PERSIST_KEY,
+      JSON.stringify(readNoteRecoveryLog()),
+    );
+  } catch (error) {
+    console.error("写入笔记恢复日志失败:", error);
+  }
+}
+
+function isNoteInProtectedFolder(note) {
+  const ancestorIds = getFolderAncestorIds(note?.folderId);
+  return folders.some(
+    (folder) => folder.isProtected && ancestorIds.has(folder.id),
+  );
+}
+
+function removeNoteRecovery(noteId) {
+  const recoveryLog = readNoteRecoveryLog();
+  if (!Object.hasOwn(recoveryLog, noteId)) {
+    return;
+  }
+  delete recoveryLog[noteId];
+  writeNoteRecoveryLog();
+}
+
+function persistNoteRecovery(note) {
+  if (!note || activeDraftId || isNoteInProtectedFolder(note)) {
+    if (note?.id) {
+      removeNoteRecovery(note.id);
+    }
+    return;
+  }
+  const recoveryLog = readNoteRecoveryLog();
+  recoveryLog[note.id] = {
+    title: String(note.title || ""),
+    content: String(note.content || ""),
+    updatedAt: new Date().toISOString(),
+  };
+  writeNoteRecoveryLog();
+}
+
+function persistActiveNoteRecovery() {
+  if (activeDraftId) {
+    return;
+  }
+  const note = getActiveNote();
+  const draft = getDraftNote();
+  if (!note || !draft) {
+    return;
+  }
+  const state = noteSaveStates.get(note.id);
+  if (!state?.dirty && !state?.inflight) {
+    return;
+  }
+  note.title = draft.title;
+  note.content = draft.content;
+  persistNoteRecovery(note);
+}
+
+function restoreNotesFromRecoveryLog() {
+  const recoveryLog = readNoteRecoveryLog();
+  const restoredTitles = [];
+  for (const [noteId, recovery] of Object.entries(recoveryLog)) {
+    const note = notes.find((item) => item.id === noteId);
+    if (!note || isNoteInProtectedFolder(note)) {
+      delete recoveryLog[noteId];
+      continue;
+    }
+    const title = String(recovery?.title || "");
+    const content = String(recovery?.content || "");
+    if (note.title === title && note.content === content) {
+      delete recoveryLog[noteId];
+      continue;
+    }
+    note.title = title;
+    note.content = content;
+    const state = getNoteSaveState(note.id);
+    state.dirty = true;
+    state.generation += 1;
+    state.status = "recovered";
+    restoredTitles.push(note.title || "未命名笔记");
+    scheduleNoteSave(note.id);
+  }
+  writeNoteRecoveryLog();
+  return restoredTitles;
+}
+
+function getSaveErrorMessage(error) {
+  return String(error?.message || "未知错误").replace(
+    /^Error invoking remote method '[^']+': (?:[A-Za-z]*Error: )?/,
+    "",
+  );
+}
+
+function renderSaveStatus() {
+  if (!saveStatus || activeDraftId || !activeNoteId) {
+    if (saveStatus) {
+      saveStatus.textContent = "";
+      saveStatus.className = "save-status";
+    }
+    return;
+  }
+  const state = noteSaveStates.get(activeNoteId);
+  saveStatus.className = "save-status";
+  saveButton.textContent = state?.lastError ? "重试保存" : "保存";
+  if (state?.inflight) {
+    saveStatus.textContent = "正在保存…";
+    saveStatus.classList.add("is-saving");
+  } else if (state?.lastError) {
+    saveStatus.textContent = `保存失败：${getSaveErrorMessage(state.lastError)}`;
+    saveStatus.classList.add("is-error");
+  } else if (state?.dirty) {
+    saveStatus.textContent = state.status === "recovered"
+      ? "已恢复未保存内容，等待保存…"
+      : "等待自动保存…";
+    saveStatus.classList.add("is-saving");
+  } else if (state?.status === "saved") {
+    saveStatus.textContent = "已保存";
+  } else {
+    saveStatus.textContent = "";
+  }
+}
+
+function markNoteDirty(note, { schedule = true } = {}) {
+  const state = getNoteSaveState(note.id);
+  state.dirty = true;
+  state.generation += 1;
+  state.lastError = null;
+  state.status = "dirty";
+  persistNoteRecovery(note);
+  if (schedule) {
+    scheduleNoteSave(note.id);
+  }
+  renderSaveStatus();
+  return state;
+}
+
+function scheduleNoteSave(noteId) {
+  const state = getNoteSaveState(noteId);
+  clearTimeout(state.timer);
+  state.timer = setTimeout(() => {
+    state.timer = null;
+    requestNoteSave(noteId).catch((error) => {
+      console.error("自动保存笔记失败:", error);
+    });
+  }, 600);
+}
+
+function requestNoteSave(noteId) {
+  const state = getNoteSaveState(noteId);
+  clearTimeout(state.timer);
+  state.timer = null;
+  if (state.inflight) {
+    return state.inflight;
+  }
+  if (!state.dirty) {
+    renderSaveStatus();
+    return Promise.resolve();
+  }
+
+  state.inflight = (async () => {
+    while (state.dirty) {
+      state.dirty = false;
+      const generation = state.generation;
+      const note = notes.find((item) => item.id === noteId);
+      if (!note) {
+        removeNoteRecovery(noteId);
+        return;
+      }
+      state.status = "saving";
+      renderSaveStatus();
+      try {
+        const snapshot = JSON.parse(JSON.stringify(note));
+        const savedNote = await window.noticeNote.saveNote(snapshot);
+        state.lastError = null;
+        if (state.generation === generation && !state.dirty) {
+          replaceNote(savedNote);
+          removeNoteRecovery(noteId);
+          state.status = "saved";
+        }
+        if (activeWorkspaceTabKey === getWorkspaceTabKey("note", noteId)) {
+          activeNoteId = noteId;
+          renderReminders();
+        }
+        renderNoteList();
+        renderWorkspaceTabs();
+      } catch (error) {
+        state.dirty = true;
+        state.lastError = error;
+        state.status = "error";
+        throw error;
+      }
+    }
+  })().finally(() => {
+    state.inflight = null;
+    renderSaveStatus();
+  });
+  return state.inflight;
+}
+
+async function saveActiveNote({ manual = false } = {}) {
   if (activeDraftId) {
     openDraftSaveDialog(activeDraftId);
     return;
   }
-  clearTimeout(saveTimer);
-  saveTimer = null;
   const draft = getDraftNote();
   if (!draft) {
     return;
   }
-  const savedNote = await window.noticeNote.saveNote(draft);
-  replaceNote(savedNote);
-  if (activeWorkspaceTabKey === getWorkspaceTabKey("note", savedNote.id)) {
-    activeNoteId = savedNote.id;
-    renderReminders();
+  const note = notes.find((item) => item.id === draft.id);
+  if (!note) {
+    return;
   }
-  renderNoteList();
-  renderWorkspaceTabs();
+  const state = getNoteSaveState(note.id);
+  note.title = draft.title;
+  note.content = draft.content;
+  markNoteDirty(note, { schedule: false });
+  if (manual) {
+    state.status = "saving";
+    renderSaveStatus();
+  }
+  await requestNoteSave(note.id);
 }
 
 async function flushPendingSave() {
-  if (!saveTimer) {
-    return;
+  persistActiveNoteRecovery();
+  const pendingSaves = [];
+  for (const [noteId, state] of noteSaveStates) {
+    clearTimeout(state.timer);
+    state.timer = null;
+    if (state.dirty || state.inflight) {
+      pendingSaves.push(requestNoteSave(noteId));
+    }
   }
-
-  clearTimeout(saveTimer);
-  saveTimer = null;
-  await saveActiveNote();
+  await Promise.all(pendingSaves);
 }
 
 function queueSave() {
@@ -5115,11 +5550,8 @@ function queueSave() {
     return;
   }
 
-  clearTimeout(saveTimer);
-  saveTimer = setTimeout(() => {
-    saveTimer = null;
-    saveActiveNote().catch(console.error);
-  }, 600);
+  const note = getActiveNote();
+  markNoteDirty(note);
 }
 
 async function addReminder() {
@@ -5193,6 +5625,7 @@ async function createNote() {
 async function refreshNotes() {
   refreshButton.disabled = true;
   try {
+    await flushPendingSave();
     const activeFolderPath = getFolderNamePath(activeFolderId);
     const library = await window.noticeNote.refreshLibrary();
     notes = sortNotes(library.notes);
@@ -5274,17 +5707,22 @@ async function deleteNoteById(noteId) {
     return;
   }
 
-  const confirmed = confirm(`确定删除「${note.title || "未命名笔记"}」吗？`);
+  const confirmed = confirm(`确定将「${note.title || "未命名笔记"}」移到回收站吗？`);
   if (!confirmed) {
     return;
   }
 
   if (note.id === activeNoteId) {
-    clearTimeout(saveTimer);
-    saveTimer = null;
+    const state = noteSaveStates.get(note.id);
+    if (state) {
+      clearTimeout(state.timer);
+      state.timer = null;
+    }
   }
   const deletedTabKey = getWorkspaceTabKey("note", note.id);
   notes = sortNotes(await window.noticeNote.deleteNote(note.id));
+  noteSaveStates.delete(note.id);
+  removeNoteRecovery(note.id);
   workspaceTabs = workspaceTabs.filter((tab) => {
     return getWorkspaceTabKey(tab.type, tab.id) !== deletedTabKey;
   });
@@ -5300,7 +5738,7 @@ async function deleteResourceFile(fileId) {
     return;
   }
 
-  const confirmed = confirm(`确定删除「${file.name}」吗？`);
+  const confirmed = confirm(`确定将「${file.name}」移到回收站吗？`);
   if (!confirmed) {
     return;
   }
@@ -5337,6 +5775,7 @@ async function boot() {
   resourceFiles = await window.noticeNote.listFiles();
   storageInfo = await window.noticeNote.getStorage();
   appSettings = await window.noticeNote.getSettings();
+  const restoredTitles = restoreNotesFromRecoveryLog();
   activeNoteId = null;
   workspaceTabs = [];
   activeWorkspaceTabKey = null;
@@ -5346,6 +5785,11 @@ async function boot() {
   renderEditor();
   renderReminderNotifications();
   loadDraftsFromStorage();
+  if (restoredTitles.length > 0) {
+    setTimeout(() => {
+      alert(`已恢复 ${restoredTitles.length} 篇未保存笔记，正在重新保存。`);
+    }, 0);
+  }
 
   window.noticeNote.onNotesChanged((nextNotes) => {
     mergeIncomingNotes(nextNotes);
@@ -5434,7 +5878,10 @@ titleInput.addEventListener("input", () => {
 });
 
 saveButton.addEventListener("click", () => {
-  saveActiveNote().catch(console.error);
+  saveActiveNote({ manual: true }).catch((error) => {
+    console.error("手动保存笔记失败:", error);
+    renderSaveStatus();
+  });
 });
 newNoteButton.addEventListener("click", () => {
   newMenuDropdown.classList.toggle("is-open");
@@ -5458,7 +5905,7 @@ exportMobilePackageButton.addEventListener("click", async () => {
       if (!lockedFolder) {
         break;
       }
-      exportMobilePackageStatus.textContent = `请解锁加密目录「${lockedFolder.name}」`;
+      exportMobilePackageStatus.textContent = `请解锁密码保护目录「${lockedFolder.name}」`;
       const unlocked = await promptUnlockFolder(lockedFolder.id);
       if (!unlocked) {
         exportMobilePackageStatus.textContent = "已取消导出";
@@ -5527,38 +5974,40 @@ dailyReviewEnabledInput.addEventListener("change", () => {
       dailyReviewEnabledInput.disabled = false;
     });
 });
-chooseStorageButton.addEventListener("click", () => {
+chooseStorageButton.addEventListener("click", async () => {
   chooseStorageButton.disabled = true;
-  window.noticeNote
-    .chooseStorage()
-    .then((result) => {
-      if (result?.storage) {
-        storageInfo = result.storage;
-        renderStorageInfo();
-      }
-    })
-    .catch(console.error)
-    .finally(() => {
-      chooseStorageButton.disabled = false;
-    });
+  try {
+    await flushPendingSave();
+    const result = await window.noticeNote.chooseStorage();
+    if (result?.storage) {
+      storageInfo = result.storage;
+      renderStorageInfo();
+    }
+  } catch (error) {
+    console.error("更改存储位置失败:", error);
+    alert(`更改存储位置失败：${getSaveErrorMessage(error)}`);
+  } finally {
+    chooseStorageButton.disabled = false;
+  }
 });
-resetStorageButton.addEventListener("click", () => {
+resetStorageButton.addEventListener("click", async () => {
   resetStorageButton.disabled = true;
-  window.noticeNote
-    .resetStorage()
-    .then((result) => {
-      if (result?.storage) {
-        storageInfo = result.storage;
-        renderStorageInfo();
-      }
-    })
-    .catch(console.error)
-    .finally(() => {
-      resetStorageButton.disabled = Boolean(storageInfo?.isDefault);
-    });
+  try {
+    await flushPendingSave();
+    const result = await window.noticeNote.resetStorage();
+    if (result?.storage) {
+      storageInfo = result.storage;
+      renderStorageInfo();
+    }
+  } catch (error) {
+    console.error("恢复默认存储位置失败:", error);
+    alert(`恢复默认存储位置失败：${getSaveErrorMessage(error)}`);
+  } finally {
+    resetStorageButton.disabled = Boolean(storageInfo?.isDefault);
+  }
 });
 showAllFilesButton.addEventListener("click", () => {
-  setSidebarViewMode("all");
+  openFolderWithAccessCheck(null).catch(console.error);
 });
 showReminderCalendarButton.addEventListener("click", () => {
   setSidebarViewMode("calendar");
@@ -5620,7 +6069,10 @@ autoReminderButton.addEventListener("click", () => {
     });
 });
 deleteNoteButton.addEventListener("click", () => {
-  deleteActiveNote().catch(console.error);
+  deleteActiveNote().catch((error) => {
+    console.error("删除笔记失败:", error);
+    alert(error.message || "删除笔记失败");
+  });
 });
 pdfZoomOut.addEventListener("click", () => {
   changePdfZoom(-0.1).catch((error) =>
@@ -5698,6 +6150,14 @@ fileViewerContent.addEventListener(
   },
   { passive: false },
 );
+noteSearchInput?.addEventListener("input", renderNoteList);
+noteSearchInput?.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && noteSearchInput.value) {
+    event.preventDefault();
+    clearNoteListSearch();
+    renderNoteList();
+  }
+});
 viewerSearchInput.addEventListener("input", updateViewerSearch);
 viewerSearchInput.addEventListener("keydown", (event) => {
   if (event.key === "Enter") {
@@ -6012,11 +6472,17 @@ function showContextMenu(x, y, entry = null) {
       createContextMenuSeparator(),
       createContextMenuItem("删除", () => {
         if (entry.type === "note") {
-          deleteNoteById(entry.id).catch(console.error);
+          deleteNoteById(entry.id).catch((error) => {
+            console.error("删除笔记失败:", error);
+            alert(error.message || "删除笔记失败");
+          });
         } else if (entry.type === "folder") {
           deleteFolder(entry.id).catch(console.error);
         } else if (entry.type === "file") {
-          deleteResourceFile(entry.id).catch(console.error);
+          deleteResourceFile(entry.id).catch((error) => {
+            console.error("删除资料文件失败:", error);
+            alert(error.message || "删除资料文件失败");
+          });
         }
       }),
     );
@@ -6105,7 +6571,11 @@ if (editorPanel) {
     if (event.target.closest("button, select, a, dialog")) {
       return;
     }
-    if (event.target.closest(".cm-rendered-image img")) {
+    if (
+      event.target.closest(
+        ".cm-rendered-image img, .cm-image-preview-below img",
+      )
+    ) {
       return;
     }
     if (
@@ -6122,7 +6592,9 @@ if (editorPanel) {
 }
 
 document.addEventListener("contextmenu", (event) => {
-  const image = event.target.closest?.(".cm-rendered-image img");
+  const image = event.target.closest?.(
+    ".cm-rendered-image img, .cm-image-preview-below img",
+  );
   if (!image) {
     return;
   }
@@ -6148,17 +6620,11 @@ document.addEventListener("contextmenu", (event) => {
     }),
     createContextMenuItem("删除图片", async () => {
       hideContextMenu();
-      if (!confirm("确定删除这张图片吗？")) {
-        return;
-      }
-      const success = await window.noticeNote.deleteImage({
-        imageUrl: imageSrc,
-      });
-      if (!success) {
-        alert("删除图片失败");
+      if (!confirm("确定从笔记中移除这张图片，并将图片文件移到回收站吗？")) {
         return;
       }
       if (markdownEditor && activeNoteId) {
+        const previousContent = markdownEditor.getMarkdown();
         const removed = markdownEditor.removeImageByUrl?.(imageSrc);
         if (!removed) {
           const content = markdownEditor.getMarkdown();
@@ -6180,8 +6646,24 @@ document.addEventListener("contextmenu", (event) => {
             markdownEditor.getMarkdown(),
             note,
           );
-          queueSave();
+          markNoteDirty(note, { schedule: false });
+          try {
+            await requestNoteSave(note.id);
+          } catch (error) {
+            markdownEditor.setMarkdown(previousContent);
+            note.content = normalizeEditorContent(previousContent, note);
+            markNoteDirty(note);
+            alert(`移除图片引用失败：${getSaveErrorMessage(error)}`);
+            return;
+          }
         }
+      }
+      const success = await window.noticeNote.deleteImage({
+        imageUrl: imageSrc,
+        noteId: activeNoteId,
+      });
+      if (!success) {
+        alert("图片已从笔记移除，但图片文件仍保留在内部存储中");
       }
     }),
   );
@@ -6198,7 +6680,7 @@ document.addEventListener("contextmenu", (event) => {
 
 document.addEventListener("click", (event) => {
   const image = event.target.closest?.(
-    ".cm-rendered-image img, .word-preview img, .file-preview-image",
+    ".cm-rendered-image img, .cm-image-preview-below img, .word-preview img, .file-preview-image",
   );
   if (!image) {
     return;
@@ -6232,6 +6714,10 @@ imageLightbox.addEventListener(
 );
 
 document.addEventListener("keydown", (e) => {
+  if (!imageLightbox.hidden && e.key === "Tab") {
+    trapImageLightboxFocus(e);
+    return;
+  }
   if (e.key === "Escape") {
     if (!imageLightbox.hidden) {
       e.preventDefault();
@@ -6387,8 +6873,11 @@ discardDraftButton?.addEventListener("click", () => {
 });
 
 window.addEventListener("beforeunload", () => {
+  persistActiveNoteRecovery();
   saveDraftsToStorage();
 });
+
+window.noticeNoteFlushForQuit = flushPendingSave;
 
 cancelDraftButton?.addEventListener("click", () => {
   draftSaveDialog.close();

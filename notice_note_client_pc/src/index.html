@@ -87,6 +87,13 @@
             <div class="breadcrumb" id="breadcrumb">
               <button class="breadcrumb-item active" data-folder-id="">全部文件</button>
             </div>
+            <label id="noteListSearch" class="note-list-search">
+              <svg width="15" height="15" viewBox="0 0 18 18" fill="none" aria-hidden="true">
+                <circle cx="8" cy="8" r="4.75" stroke="currentColor" stroke-width="1.5"/>
+                <path d="m11.5 11.5 3.25 3.25" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+              </svg>
+              <input id="noteSearchInput" type="search" placeholder="搜索当前目录及子目录" autocomplete="off" aria-label="搜索当前目录及子目录中的文件">
+            </label>
           </div>
           <div id="noteList" class="note-list"></div>
         </div>
@@ -103,7 +110,7 @@
 
     <main class="workspace">
       <div class="workspace-tabs-bar">
-        <div id="workspaceTabs" class="workspace-tabs"></div>
+        <div id="workspaceTabs" class="workspace-tabs" role="tablist" aria-label="已打开的文件"></div>
         <div id="topbarMascot" class="topbar-mascot" aria-hidden="true"></div>
         <div class="notification-center">
           <button id="notificationBell" class="notification-bell" type="button" title="提醒通知" aria-label="提醒通知">
@@ -149,6 +156,7 @@
             <span id="reminderButtonCount" class="reminder-trigger-count" hidden>0</span>
           </button>
           <button id="deleteNoteButton" class="secondary-button danger-button">删除</button>
+          <span id="saveStatus" class="save-status" aria-live="polite"></span>
           <button id="saveButton" class="primary-button">保存</button>
         </div>
 
@@ -218,6 +226,7 @@
           <span>文件位置</span>
           <code id="fileViewerPath"></code>
           <span id="fileViewerToast" class="file-viewer-toast" hidden></span>
+          <span id="fileViewerReadOnlyNotice" class="file-viewer-readonly-notice" hidden>为避免破坏 Word/Excel 原有格式、公式和样式，应用内仅提供只读预览；请使用“外部打开”修改。</span>
           <button id="wordOutlineToggle" class="word-outline-toggle" type="button" title="显示或隐藏目录" aria-label="显示或隐藏 Word 目录" hidden>目录</button>
         </div>
         <div class="file-viewer-body">
@@ -232,7 +241,7 @@
       <div id="workspaceMascot" class="workspace-mascot" aria-hidden="true"></div>
     </main>
 
-    <dialog id="reminderDialog" class="reminder-dialog">
+    <dialog id="reminderDialog" class="reminder-dialog" aria-labelledby="reminderDialogTitle">
       <form method="dialog" class="reminder-manager-card">
         <header class="reminder-manager-heading">
           <div class="reminder-manager-icon" aria-hidden="true">
@@ -242,7 +251,7 @@
             </svg>
           </div>
           <div class="reminder-manager-heading-copy">
-            <h2>提醒管理</h2>
+            <h2 id="reminderDialogTitle">提醒管理</h2>
             <p id="reminderDialogNoteTitle">为当前笔记安排提醒</p>
           </div>
           <button id="closeReminderDialogButton" class="reminder-manager-close" type="button" title="关闭" aria-label="关闭">×</button>
@@ -274,12 +283,12 @@
         </section>
       </form>
     </dialog>
-    <dialog id="settingsDialog" class="settings-dialog">
+    <dialog id="settingsDialog" class="settings-dialog" aria-labelledby="settingsDialogTitle">
       <form method="dialog" class="settings-card">
         <div id="settingsMainView" class="settings-view">
           <header class="settings-heading">
             <div>
-              <h2>设置</h2>
+              <h2 id="settingsDialogTitle">设置</h2>
               <p>调整 Notice Note 的使用偏好</p>
             </div>
             <button id="closeSettingsDialogButton" class="reminder-manager-close" type="button" title="关闭" aria-label="关闭">×</button>
@@ -298,11 +307,11 @@
             </div>
             <div class="settings-item">
               <div class="settings-item-copy">
-                <strong>工作日随机回顾</strong>
+                <strong id="dailyReviewEnabledLabel">工作日随机回顾</strong>
                 <p>周一至周五，每天从没有待提醒的回顾清单中选择一篇，标记为“今日回顾”。</p>
               </div>
               <label class="settings-switch" title="启用工作日随机回顾">
-                <input id="dailyReviewEnabledInput" type="checkbox">
+                <input id="dailyReviewEnabledInput" type="checkbox" aria-labelledby="dailyReviewEnabledLabel">
                 <span></span>
               </label>
             </div>
@@ -327,7 +336,7 @@
               <div class="settings-storage-heading">
                 <div>
                   <strong>手机离线包</strong>
-                  <p>导出一个文件，再到手机 App 中导入；导出时会提示解锁加密目录，请妥善保管导出文件</p>
+                  <p>导出一个文件，再到手机 App 中导入；密码保护仅限制应用内访问，磁盘文件和导出包仍是明文，请妥善保管</p>
                 </div>
               </div>
               <div class="settings-storage-actions">
@@ -350,10 +359,10 @@
             <button id="closeSettingsDialogButton2" class="reminder-manager-close" type="button" title="关闭" aria-label="关闭">×</button>
           </header>
           <nav class="theme-picker-tabs" aria-label="主题分类">
-            <button class="theme-picker-tab is-active" type="button" data-category="all">全部 (10)</button>
-            <button class="theme-picker-tab" type="button" data-category="minimal">🌿 极简日常</button>
-            <button class="theme-picker-tab" type="button" data-category="anime">🌸 二次元动漫</button>
-            <button class="theme-picker-tab" type="button" data-category="gaming">🎮 游戏电竞</button>
+            <button class="theme-picker-tab is-active" type="button" data-category="all" aria-label="显示全部主题" aria-pressed="true">全部 (10)</button>
+            <button class="theme-picker-tab" type="button" data-category="minimal" aria-label="显示极简日常主题" aria-pressed="false">🌿 极简日常</button>
+            <button class="theme-picker-tab" type="button" data-category="anime" aria-label="显示二次元动漫主题" aria-pressed="false">🌸 二次元动漫</button>
+            <button class="theme-picker-tab" type="button" data-category="gaming" aria-label="显示游戏电竞主题" aria-pressed="false">🎮 游戏电竞</button>
           </nav>
           <section class="theme-picker-body">
             <div id="themePickerGrid" class="theme-picker-grid"></div>

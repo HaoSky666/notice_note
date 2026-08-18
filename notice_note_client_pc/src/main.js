@@ -1,10 +1,24 @@
 process.noDeprecation = true;
-const { app, BrowserWindow, ipcMain, Notification, dialog, Menu, Tray, clipboard, shell } = require('electron');
+const {
+  app,
+  BrowserWindow,
+  ipcMain,
+  Notification,
+  dialog,
+  Menu,
+  Tray,
+  clipboard,
+  shell,
+  net: electronNet
+} = require('electron');
 const path = require('node:path');
-const { createReadStream, createWriteStream, watch } = require('node:fs');
+const { createReadStream, createWriteStream, watch, constants: fsConstants } = require('node:fs');
 const fs = require('node:fs/promises');
+const dns = require('node:dns/promises');
+const nodeNet = require('node:net');
 const { finished } = require('node:stream/promises');
 const {
+  createHash,
   randomBytes,
   randomUUID,
   scryptSync,
@@ -22,6 +36,9 @@ const NOTES_DIR_NAME = 'notes';
 const OLD_NOTE_FILE_NAME = 'notes.json';
 const CONFIG_FILE_NAME = 'config.json';
 const REMINDER_CHECK_INTERVAL = 30 * 1000;
+const MAX_REMOTE_IMAGE_BYTES = 20 * 1024 * 1024;
+const REMOTE_IMAGE_TIMEOUT = 15 * 1000;
+const MAX_REMOTE_IMAGE_REDIRECTS = 5;
 const DAILY_REMINDER_TIMES = ['09:30', '15:00'];
 const IMAGE_ASSET_DIR_NAME = 'notice_note_images';
 const APP_DATA_DIR_NAME = '.notice-note';
@@ -60,6 +77,117 @@ let dailyReviewHistory = {};
 let dailyReviewHandledDate = null;
 let dailyReviewDeferred = { date: null, entryKey: null };
 const unlockedFolderIds = new Set();
+
+async function pathExists(filePath) {
+  try {
+    await fs.access(filePath);
+    return true;
+  } catch (error) {
+    if (error.code === 'ENOENT') {
+      return false;
+    }
+    throw error;
+  }
+}
+
+async function replaceFileSafely(tempPath, targetPath) {
+  try {
+    await fs.rename(tempPath, targetPath);
+    return;
+  } catch (error) {
+    if (!['EEXIST', 'EPERM', 'EACCES'].includes(error.code) || !await pathExists(targetPath)) {
+      throw error;
+    }
+  }
+
+  const rollbackPath = path.join(
+    path.dirname(targetPath),
+    `.${path.basename(targetPath)}.${randomUUID()}.rollback`
+  );
+  await fs.rename(targetPath, rollbackPath);
+  try {
+    await fs.rename(tempPath, targetPath);
+    await fs.rm(rollbackPath, { force: true });
+  } catch (error) {
+    try {
+      if (!await pathExists(targetPath)) {
+        await fs.rename(rollbackPath, targetPath);
+      }
+    } catch (rollbackError) {
+      console.error('恢复原文件失败:', targetPath, rollbackError);
+    }
+    throw error;
+  }
+}
+
+async function atomicWriteFile(targetPath, data, options = {}) {
+  const targetDir = path.dirname(targetPath);
+  const tempPath = path.join(targetDir, `.${path.basename(targetPath)}.${randomUUID()}.tmp`);
+  const backupPath = `${targetPath}.bak`;
+  await fs.mkdir(targetDir, { recursive: true });
+
+  let handle;
+  try {
+    handle = await fs.open(tempPath, 'wx', 0o600);
+    await handle.writeFile(data, options.encoding ? { encoding: options.encoding } : undefined);
+    await handle.sync();
+    await handle.close();
+    handle = null;
+
+    if (options.keepBackup && await pathExists(targetPath)) {
+      const backupTempPath = path.join(
+        targetDir,
+        `.${path.basename(targetPath)}.${randomUUID()}.backup.tmp`
+      );
+      try {
+        await fs.copyFile(targetPath, backupTempPath, fsConstants.COPYFILE_EXCL);
+        await replaceFileSafely(backupTempPath, backupPath);
+      } finally {
+        await fs.rm(backupTempPath, { force: true });
+      }
+    }
+
+    await replaceFileSafely(tempPath, targetPath);
+  } finally {
+    if (handle) {
+      await handle.close().catch(() => {});
+    }
+    await fs.rm(tempPath, { force: true }).catch(() => {});
+  }
+}
+
+async function atomicWriteJson(targetPath, value) {
+  await atomicWriteFile(targetPath, JSON.stringify(value, null, 2), {
+    encoding: 'utf8',
+    keepBackup: true
+  });
+}
+
+async function readJsonWithBackup(targetPath, fallbackValue) {
+  const backupPath = `${targetPath}.bak`;
+  let primaryError = null;
+
+  try {
+    return JSON.parse(await fs.readFile(targetPath, 'utf8'));
+  } catch (error) {
+    primaryError = error;
+  }
+
+  try {
+    const backupRaw = await fs.readFile(backupPath, 'utf8');
+    const parsed = JSON.parse(backupRaw);
+    await atomicWriteFile(targetPath, backupRaw, { encoding: 'utf8' });
+    console.warn('已从备份恢复损坏或缺失的 JSON 文件:', targetPath);
+    return parsed;
+  } catch (backupError) {
+    if (primaryError?.code === 'ENOENT' && backupError.code === 'ENOENT') {
+      return fallbackValue;
+    }
+    throw new Error(`无法读取 ${path.basename(targetPath)}，主文件和备份均不可用`, {
+      cause: primaryError
+    });
+  }
+}
 
 if (process.platform === 'win32') {
   app.setAppUserModelId('com.notice-note.app');
@@ -138,9 +266,17 @@ function createTray() {
     },
     {
       label: '退出',
-      click: () => {
-        isQuitting = true;
-        app.quit();
+      click: async () => {
+        try {
+          if (mainWindow && !mainWindow.isDestroyed()) {
+            await mainWindow.webContents.executeJavaScript('window.noticeNoteFlushForQuit?.()');
+          }
+          isQuitting = true;
+          app.quit();
+        } catch (error) {
+          showMainWindow();
+          dialog.showErrorBox('退出前保存失败', `笔记尚未安全保存，应用未退出：${error.message}`);
+        }
       }
     }
   ]));
@@ -191,13 +327,11 @@ function getFolderMetadataKey(folderPath) {
 }
 
 async function loadFolderMetadata() {
-  try {
-    const raw = await fs.readFile(getFolderMetadataPath(), 'utf8');
-    const parsed = JSON.parse(raw);
-    folderMetadata = parsed && typeof parsed === 'object' ? parsed : {};
-  } catch {
-    folderMetadata = {};
+  const parsed = await readJsonWithBackup(getFolderMetadataPath(), {});
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error('文件夹元数据格式无效');
   }
+  folderMetadata = parsed;
 }
 
 async function saveFolderMetadata() {
@@ -206,22 +340,8 @@ async function saveFolderMetadata() {
     const folderPath = getFolderPath(folder.id);
     nextMetadata[getFolderMetadataKey(folderPath)] = { ...folder };
   }
+  await atomicWriteJson(getFolderMetadataPath(), nextMetadata);
   folderMetadata = nextMetadata;
-  await fs.mkdir(getAppDataPath(), { recursive: true });
-  await fs.writeFile(getFolderMetadataPath(), JSON.stringify(folderMetadata, null, 2), 'utf8');
-}
-
-async function removeLegacyFolderMetadataFiles(dirPath) {
-  const entries = await fs.readdir(dirPath, { withFileTypes: true });
-  for (const entry of entries) {
-    if (entry.isFile() && entry.name === '.folder.json') {
-      await fs.unlink(path.join(dirPath, entry.name));
-      continue;
-    }
-    if (entry.isDirectory() && !isInternalDirectory(entry.name)) {
-      await removeLegacyFolderMetadataFiles(path.join(dirPath, entry.name));
-    }
-  }
 }
 
 async function removeObsoleteMobileImageCache() {
@@ -239,15 +359,39 @@ function getNoteMetadataKey(filePath) {
   return path.relative(getNotesPath(), filePath).split(path.sep).join('/');
 }
 
-function markInternalNoteWrite(filePath) {
+function markInternalNoteWrite(filePath, content) {
+  if (content === undefined) {
+    return;
+  }
   const key = getNoteMetadataKey(filePath).toLowerCase();
   const expiresAt = Date.now() + 2000;
-  internalNoteWrites.set(key, expiresAt);
+  const hash = createHash('sha256').update(content).digest('hex');
+  internalNoteWrites.set(key, { expiresAt, hash });
   setTimeout(() => {
-    if (internalNoteWrites.get(key) === expiresAt) {
+    if (internalNoteWrites.get(key)?.expiresAt === expiresAt) {
       internalNoteWrites.delete(key);
     }
   }, 2100);
+}
+
+async function isExpectedInternalNoteWrite(filePath, key) {
+  const expected = internalNoteWrites.get(key);
+  if (!expected || expected.expiresAt <= Date.now()) {
+    internalNoteWrites.delete(key);
+    return false;
+  }
+  try {
+    const content = await fs.readFile(filePath);
+    const hash = createHash('sha256').update(content).digest('hex');
+    if (hash === expected.hash) {
+      internalNoteWrites.delete(key);
+      return true;
+    }
+  } catch {
+    // 文件移动或删除时按外部变化处理。
+  }
+  internalNoteWrites.delete(key);
+  return false;
 }
 
 function isInternalDirectory(name) {
@@ -255,37 +399,27 @@ function isInternalDirectory(name) {
 }
 
 async function loadNoteMetadata() {
-  try {
-    const raw = await fs.readFile(getNoteMetadataPath(), 'utf8');
-    const parsed = JSON.parse(raw);
-    noteMetadata = parsed && typeof parsed === 'object' ? parsed : {};
-  } catch {
-    noteMetadata = {};
+  const parsed = await readJsonWithBackup(getNoteMetadataPath(), {});
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error('笔记元数据格式无效');
   }
+  noteMetadata = parsed;
 }
 
 async function saveNoteMetadata() {
-  await fs.mkdir(getAppDataPath(), { recursive: true });
-  await fs.writeFile(getNoteMetadataPath(), JSON.stringify(noteMetadata, null, 2), 'utf8');
+  await atomicWriteJson(getNoteMetadataPath(), noteMetadata);
 }
 
 async function loadReminderFileMarks() {
-  try {
-    const raw = await fs.readFile(getReminderFileMarksPath(), 'utf8');
-    const parsed = JSON.parse(raw);
-    reminderFileMarks = new Set(Array.isArray(parsed) ? parsed.filter((item) => typeof item === 'string') : []);
-  } catch {
-    reminderFileMarks = new Set();
+  const parsed = await readJsonWithBackup(getReminderFileMarksPath(), []);
+  if (!Array.isArray(parsed)) {
+    throw new Error('提醒文件标记格式无效');
   }
+  reminderFileMarks = new Set(parsed.filter((item) => typeof item === 'string'));
 }
 
 async function saveReminderFileMarks() {
-  await fs.mkdir(getAppDataPath(), { recursive: true });
-  await fs.writeFile(
-    getReminderFileMarksPath(),
-    JSON.stringify([...reminderFileMarks].sort(), null, 2),
-    'utf8'
-  );
+  await atomicWriteJson(getReminderFileMarksPath(), [...reminderFileMarks].sort());
 }
 
 function getNoteReminderFileKey(noteId) {
@@ -391,8 +525,8 @@ async function backupLegacyMarkdown(filePath, content) {
     await fs.access(backupPath);
   } catch {
     await fs.mkdir(path.dirname(backupPath), { recursive: true });
-    markInternalNoteWrite(backupPath);
-    await fs.writeFile(backupPath, content, 'utf8');
+    markInternalNoteWrite(backupPath, content);
+    await atomicWriteFile(backupPath, content, { encoding: 'utf8' });
   }
 }
 
@@ -458,7 +592,8 @@ async function getUniqueFilePath(dir, baseName, extension = '.md') {
 
 function getImageExtension(fileName, mimeType) {
   const fromName = path.extname(fileName || '').toLowerCase();
-  if (fromName) {
+  const allowedExtensions = new Set(['.png', '.jpg', '.jpeg', '.gif', '.bmp', '.webp', '.svg']);
+  if (allowedExtensions.has(fromName)) {
     return fromName;
   }
 
@@ -475,14 +610,38 @@ function getImageExtension(fileName, mimeType) {
   return mimeMap[String(mimeType || '').toLowerCase()] || '.png';
 }
 
-async function copyImageForNote(noteId, sourcePath) {
-  const sourceExt = path.extname(sourcePath) || '.png';
-  const assetDir = getImageAssetDir();
-  await fs.mkdir(assetDir, { recursive: true });
+function getAccessibleNote(noteId) {
+  const note = notes.find((item) => item.id === noteId);
+  if (!note) {
+    throw new Error('笔记不存在');
+  }
+  assertFolderAccessible(note.folderId);
+  return note;
+}
 
-  const fileName = `${Date.now()}${sourceExt}`;
-  const targetPath = path.join(assetDir, fileName);
-  await fs.copyFile(sourcePath, targetPath);
+async function writeUniqueImageFile(assetDir, extension, writer) {
+  await fs.mkdir(assetDir, { recursive: true });
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const targetPath = path.join(assetDir, `${randomUUID()}${extension}`);
+    try {
+      await writer(targetPath);
+      return targetPath;
+    } catch (error) {
+      if (error.code !== 'EEXIST') {
+        throw error;
+      }
+    }
+  }
+  throw new Error('无法创建唯一的图片文件');
+}
+
+async function copyImageForNote(noteId, sourcePath) {
+  getAccessibleNote(noteId);
+  const sourceExt = getImageExtension(sourcePath, '');
+  const assetDir = getImageAssetDir();
+  const targetPath = await writeUniqueImageFile(assetDir, sourceExt, (filePath) => {
+    return fs.copyFile(sourcePath, filePath, fsConstants.COPYFILE_EXCL);
+  });
   const altText = sanitizeFileName(path.basename(sourcePath, sourceExt));
 
   return {
@@ -493,17 +652,22 @@ async function copyImageForNote(noteId, sourcePath) {
 }
 
 async function saveClipboardImageForNote(noteId, payload) {
-  if (!payload || !Array.isArray(payload.bytes) || payload.bytes.length === 0) {
+  const hasBytes = Array.isArray(payload?.bytes) || ArrayBuffer.isView(payload?.bytes);
+  if (!hasBytes || payload.bytes.length === 0) {
     return null;
+  }
+  getAccessibleNote(noteId);
+
+  const imageBuffer = Buffer.from(payload.bytes);
+  if (imageBuffer.length > MAX_REMOTE_IMAGE_BYTES) {
+    throw new Error('图片不能超过 20MB');
   }
 
   const assetDir = getImageAssetDir();
-  await fs.mkdir(assetDir, { recursive: true });
-
   const ext = getImageExtension(payload.fileName, payload.mimeType);
-  const fileName = `${Date.now()}${ext}`;
-  const targetPath = path.join(assetDir, fileName);
-  await fs.writeFile(targetPath, Buffer.from(payload.bytes));
+  const targetPath = await writeUniqueImageFile(assetDir, ext, (filePath) => {
+    return fs.writeFile(filePath, imageBuffer, { flag: 'wx' });
+  });
 
   const altText = sanitizeFileName(path.basename(payload.fileName || 'image', ext));
   return {
@@ -514,9 +678,11 @@ async function saveClipboardImageForNote(noteId, payload) {
 }
 
 async function loadConfig() {
-  try {
-    const raw = await fs.readFile(getConfigPath(), 'utf8');
-    const config = JSON.parse(raw);
+  const config = await readJsonWithBackup(getConfigPath(), null);
+  if (config !== null && (!config || typeof config !== 'object' || Array.isArray(config))) {
+    throw new Error('应用配置格式无效');
+  }
+  if (config) {
     dailyReviewEnabled = config.dailyReviewEnabled !== false;
     dailyReviewSelection = config.dailyReviewSelection
       && typeof config.dailyReviewSelection === 'object'
@@ -549,7 +715,7 @@ async function loadConfig() {
     } else {
       notesPath = getDefaultNotesPath();
     }
-  } catch (error) {
+  } else {
     notesPath = getDefaultNotesPath();
     dailyReviewEnabled = true;
     dailyReviewSelection = { date: null, entryKey: null };
@@ -560,8 +726,7 @@ async function loadConfig() {
 }
 
 async function saveConfig() {
-  await fs.mkdir(app.getPath('userData'), { recursive: true });
-  await fs.writeFile(getConfigPath(), JSON.stringify({
+  await atomicWriteJson(getConfigPath(), {
     notesPath: getNotesPath(),
     dailyReviewEnabled,
     dailyReviewSelection,
@@ -569,7 +734,7 @@ async function saveConfig() {
     dailyReviewHistoryVersion: 2,
     dailyReviewHandledDate,
     dailyReviewDeferred
-  }, null, 2), 'utf8');
+  });
 }
 
 function getResourceDailyReviewKey(filePath) {
@@ -577,11 +742,14 @@ function getResourceDailyReviewKey(filePath) {
 }
 
 function getDailyReviewCandidates() {
+  const isProtected = (folderId) => Boolean(getLockedFolderForFolderId(folderId, new Set(), true));
   const noteCandidates = notes
-    .filter((note) => note.isReminderFile && !note.reminders.some((reminder) => !reminder.done))
+    .filter((note) => note.isReminderFile
+      && !isProtected(note.folderId)
+      && !note.reminders.some((reminder) => !reminder.done))
     .map((note) => ({ key: getNoteReminderFileKey(note.id), target: note }));
   const fileCandidates = resourceFiles
-    .filter((file) => file.isReminderFile && file.canOpen)
+    .filter((file) => file.isReminderFile && file.canOpen && !isProtected(file.folderId))
     .map((file) => ({ key: getResourceDailyReviewKey(file.path), target: file }));
   return [...noteCandidates, ...fileCandidates];
 }
@@ -652,6 +820,162 @@ function isPathInside(parentPath, targetPath) {
   return relativePath === '' || (!relativePath.startsWith('..') && !path.isAbsolute(relativePath));
 }
 
+function isPrivateIpv4(address) {
+  const parts = address.split('.').map(Number);
+  if (parts.length !== 4 || parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) {
+    return true;
+  }
+  const [first, second] = parts;
+  return first === 0
+    || first === 10
+    || first === 127
+    || (first === 100 && second >= 64 && second <= 127)
+    || (first === 169 && second === 254)
+    || (first === 172 && second >= 16 && second <= 31)
+    || (first === 192 && second === 168)
+    || (first === 198 && [18, 19].includes(second))
+    || first >= 224;
+}
+
+function isPrivateIpAddress(address) {
+  const normalizedAddress = String(address || '').toLowerCase().split('%')[0];
+  if (nodeNet.isIPv4(normalizedAddress)) {
+    return isPrivateIpv4(normalizedAddress);
+  }
+  if (!nodeNet.isIPv6(normalizedAddress)) {
+    return true;
+  }
+
+  const mappedIpv4 = /^::ffff:(\d+(?:\.\d+){3})$/.exec(normalizedAddress);
+  if (mappedIpv4) {
+    return isPrivateIpv4(mappedIpv4[1]);
+  }
+  const mappedHex = /^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/.exec(normalizedAddress);
+  if (mappedHex) {
+    const value = (Number.parseInt(mappedHex[1], 16) << 16) | Number.parseInt(mappedHex[2], 16);
+    return isPrivateIpv4([
+      (value >>> 24) & 255,
+      (value >>> 16) & 255,
+      (value >>> 8) & 255,
+      value & 255
+    ].join('.'));
+  }
+
+  return normalizedAddress === '::'
+    || normalizedAddress === '::1'
+    || normalizedAddress.startsWith('fc')
+    || normalizedAddress.startsWith('fd')
+    || /^fe[89ab]/.test(normalizedAddress)
+    || normalizedAddress.startsWith('ff');
+}
+
+async function validateRemoteImageUrl(value) {
+  const remoteUrl = new URL(String(value || ''));
+  if (!['http:', 'https:'].includes(remoteUrl.protocol)) {
+    throw new Error('仅支持 HTTP 或 HTTPS 图片地址');
+  }
+  if (remoteUrl.username || remoteUrl.password) {
+    throw new Error('图片地址不能包含登录凭据');
+  }
+
+  const hostname = remoteUrl.hostname.replace(/^\[|\]$/g, '').replace(/\.$/, '').toLowerCase();
+  if (!hostname || hostname === 'localhost' || hostname.endsWith('.localhost')) {
+    throw new Error('不能访问本机或私有网络图片');
+  }
+
+  const ipType = nodeNet.isIP(hostname);
+  const addresses = ipType
+    ? [{ address: hostname }]
+    : await dns.lookup(hostname, { all: true, verbatim: true });
+  if (addresses.length === 0 || addresses.some((item) => isPrivateIpAddress(item.address))) {
+    throw new Error('不能访问本机或私有网络图片');
+  }
+  return remoteUrl;
+}
+
+async function readResponseWithLimit(response, byteLimit) {
+  const contentLength = Number(response.headers.get('content-length'));
+  if (Number.isFinite(contentLength) && contentLength > byteLimit) {
+    throw new Error('远程图片不能超过 20MB');
+  }
+  if (!response.body) {
+    throw new Error('远程图片响应为空');
+  }
+
+  const reader = response.body.getReader();
+  const chunks = [];
+  let totalBytes = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      totalBytes += value.byteLength;
+      if (totalBytes > byteLimit) {
+        await reader.cancel();
+        throw new Error('远程图片不能超过 20MB');
+      }
+      chunks.push(Buffer.from(value));
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  return Buffer.concat(chunks, totalBytes);
+}
+
+async function downloadRemoteImage(value) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), REMOTE_IMAGE_TIMEOUT);
+  try {
+    let currentUrl = await validateRemoteImageUrl(value);
+    for (let redirectCount = 0; redirectCount <= MAX_REMOTE_IMAGE_REDIRECTS; redirectCount += 1) {
+      const response = await electronNet.fetch(currentUrl.href, {
+        redirect: 'manual',
+        signal: controller.signal,
+        headers: { 'User-Agent': 'Mozilla/5.0' }
+      });
+      if ([301, 302, 303, 307, 308].includes(response.status)) {
+        if (redirectCount === MAX_REMOTE_IMAGE_REDIRECTS) {
+          throw new Error('远程图片重定向次数过多');
+        }
+        const location = response.headers.get('location');
+        if (!location) {
+          throw new Error('远程图片重定向地址无效');
+        }
+        await response.body?.cancel();
+        currentUrl = await validateRemoteImageUrl(new URL(location, currentUrl).href);
+        continue;
+      }
+      if (!response.ok) {
+        throw new Error(`下载远程图片失败（HTTP ${response.status}）`);
+      }
+
+      const contentType = (response.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
+      const allowedRemoteImageTypes = new Set([
+        'image/png',
+        'image/jpeg',
+        'image/gif',
+        'image/bmp',
+        'image/webp'
+      ]);
+      if (!allowedRemoteImageTypes.has(contentType)) {
+        throw new Error('远程地址返回的图片类型不受支持');
+      }
+      return {
+        buffer: await readResponseWithLimit(response, MAX_REMOTE_IMAGE_BYTES),
+        contentType
+      };
+    }
+  } catch (error) {
+    if (error.name === 'AbortError') {
+      throw new Error('下载远程图片超时');
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+  throw new Error('下载远程图片失败');
+}
+
 function getMimeType(filePath) {
   const extension = path.extname(filePath).toLowerCase();
   const mimeTypes = {
@@ -720,8 +1044,8 @@ function createMobileFolderSummary(folder, visibleNotes) {
 }
 
 async function createMobileExportSnapshot() {
-  const exportedFolders = folders;
-  const exportedNotes = notes;
+  const exportedFolders = getVisibleFolders();
+  const exportedNotes = getVisibleNotes();
   const assetPaths = new Set();
   const syncedNotes = exportedNotes.map((note) => {
     const content = convertNoteImages(note.content || '', noteFileMap.get(note.id));
@@ -734,7 +1058,7 @@ async function createMobileExportSnapshot() {
     };
   });
 
-  const syncedResources = resourceFiles
+  const syncedResources = getVisibleResourceFiles()
     .filter((file) => file.canOpen)
     .map((file) => {
       const source = path.relative(getNotesPath(), file.path).replace(/\\/g, '/');
@@ -823,7 +1147,7 @@ function convertNoteImages(content, noteSourcePath) {
 async function exportMobilePackage() {
   const lockedFolder = folders.find((folder) => isFolderProtected(folder) && !unlockedFolderIds.has(folder.id));
   if (lockedFolder) {
-    throw new Error(`请先在文件列表中解锁加密目录「${lockedFolder.name}」，再导出手机离线包`);
+    throw new Error(`请先在文件列表中解锁密码保护目录「${lockedFolder.name}」，再导出手机离线包`);
   }
   const datePart = new Date().toISOString().slice(0, 10);
   const result = await dialog.showSaveDialog(mainWindow, {
@@ -931,35 +1255,64 @@ async function updateAppSettings(_event, input = {}) {
   return getAppSettings();
 }
 
-async function setFolderPassword(_event, folderId, password) {
+function assertFolderPasswordChangeAllowed(folder, currentPassword) {
+  assertFolderAccessible(folder.parentId);
+  if (isFolderProtected(folder)
+    && !unlockedFolderIds.has(folder.id)
+    && !verifyFolderPassword(folder, currentPassword)) {
+    throw new Error('当前密码不正确');
+  }
+}
+
+async function setFolderPassword(_event, folderId, password, currentPassword = '') {
   const folder = getFolderById(folderId);
   if (!folder) {
     throw new Error('文件夹不存在');
   }
+  assertFolderPasswordChangeAllowed(folder, currentPassword);
   const normalizedPassword = String(password || '').trim();
   if (normalizedPassword.length < 1) {
     throw new Error('密码不能为空');
   }
+  const previousPassword = {
+    passwordSalt: folder.passwordSalt,
+    passwordHash: folder.passwordHash
+  };
   const { salt, hash } = hashFolderPassword(normalizedPassword);
   folder.passwordSalt = salt;
   folder.passwordHash = hash;
+  try {
+    await saveFolderMetadata();
+  } catch (error) {
+    Object.assign(folder, previousPassword);
+    throw error;
+  }
   unlockedFolderIds.delete(folder.id);
-  await saveFolderMetadata();
   sendFoldersChanged();
   sendNotesChanged();
   sendPdfFilesChanged();
   return sanitizeFolderForClient(folder);
 }
 
-async function clearFolderPassword(_event, folderId) {
+async function clearFolderPassword(_event, folderId, currentPassword = '') {
   const folder = getFolderById(folderId);
   if (!folder) {
     throw new Error('文件夹不存在');
   }
+  assertFolderPasswordChangeAllowed(folder, currentPassword);
+  const previousPassword = {
+    passwordSalt: folder.passwordSalt,
+    passwordHash: folder.passwordHash
+  };
   folder.passwordSalt = '';
   folder.passwordHash = '';
+  try {
+    await saveFolderMetadata();
+  } catch (error) {
+    Object.assign(folder, previousPassword);
+    throw error;
+  }
   unlockedFolderIds.delete(folder.id);
-  await saveFolderMetadata();
   sendFoldersChanged();
   sendNotesChanged();
   sendPdfFilesChanged();
@@ -1092,16 +1445,18 @@ function normalizeLoadedNote(input) {
 
 async function loadFolders() {
   const notesDir = getNotesPath();
+  await fs.mkdir(notesDir, { recursive: true });
+  const previousFolders = folders;
   folders = [];
   await loadFolderMetadata();
 
   try {
     await scanFolderDirectory(notesDir, null);
     await saveFolderMetadata();
-    await removeLegacyFolderMetadataFiles(notesDir);
     await removeObsoleteMobileImageCache();
   } catch (error) {
-    console.error('读取文件夹失败:', error);
+    folders = previousFolders;
+    throw error;
   }
 
   return folders;
@@ -1118,7 +1473,12 @@ async function scanFolderDirectory(dirPath, parentId) {
     const folderPath = path.join(dirPath, entry.name);
     const metadataKey = getFolderMetadataKey(folderPath);
     const metaPath = path.join(folderPath, '.folder.json');
-    let data = folderMetadata[metadataKey] || {};
+    const stats = await fs.stat(folderPath);
+    const fileId = Number(stats.ino) > 0 ? String(stats.ino) : null;
+    const metadataByFileId = fileId
+      ? Object.values(folderMetadata).find((item) => item?.fileId === fileId)
+      : null;
+    let data = folderMetadata[metadataKey] || metadataByFileId || {};
 
     if (!folderMetadata[metadataKey]) {
       try {
@@ -1131,9 +1491,10 @@ async function scanFolderDirectory(dirPath, parentId) {
 
     const folder = {
       id: data.id || getStableFolderId(folderPath),
-      name: data.name || entry.name,
+      name: entry.name,
       parentId,
       createdAt: data.createdAt || new Date().toISOString(),
+      fileId,
       passwordSalt: typeof data.passwordSalt === 'string' ? data.passwordSalt : '',
       passwordHash: typeof data.passwordHash === 'string' ? data.passwordHash : ''
     };
@@ -1148,6 +1509,7 @@ async function createFolder(_event, name, parentId) {
   if (normalizedParentId && !folders.some((folder) => folder.id === normalizedParentId)) {
     throw new Error('父文件夹不存在');
   }
+  assertFolderAccessible(normalizedParentId);
 
   const parentPath = getFolderPath(normalizedParentId);
   const folderPath = path.join(parentPath, folderName);
@@ -1160,18 +1522,26 @@ async function createFolder(_event, name, parentId) {
   }
 
   await fs.mkdir(folderPath, { recursive: true });
+  const stats = await fs.stat(folderPath);
 
   const folder = {
     id: getStableFolderId(folderPath),
     name: folderName,
     parentId: normalizedParentId,
     createdAt: new Date().toISOString(),
+    fileId: Number(stats.ino) > 0 ? String(stats.ino) : null,
     passwordSalt: '',
     passwordHash: ''
   };
 
   folders.push(folder);
-  await saveFolderMetadata();
+  try {
+    await saveFolderMetadata();
+  } catch (error) {
+    folders = folders.filter((item) => item !== folder);
+    await fs.rmdir(folderPath).catch(() => {});
+    throw error;
+  }
   sendFoldersChanged();
   return folder;
 }
@@ -1179,19 +1549,38 @@ async function createFolder(_event, name, parentId) {
 async function renameFolder(_event, folderId, newName) {
   const folder = folders.find(f => f.id === folderId);
   if (!folder) throw new Error('文件夹不存在');
+  assertFolderAccessible(folderId);
 
   const oldPath = getFolderPath(folderId);
   const newFolderName = sanitizeFolderName(newName);
   const newPath = path.join(getNotesPath(), ...getFolderPathParts(folder).slice(0, -1), newFolderName);
 
+  const previousNoteMetadata = structuredClone(noteMetadata);
+  const previousReminderMarks = new Set(reminderFileMarks);
+  const previousNoteFileMap = new Map(noteFileMap);
   await fs.rename(oldPath, newPath);
-  moveNoteMetadataTree(oldPath, newPath);
-  moveResourceReminderFileMarkTree(oldPath, newPath);
-  await saveNoteMetadata();
-  await saveReminderFileMarks();
-
-  folder.name = newFolderName;
-  await saveFolderMetadata();
+  try {
+    moveNoteMetadataTree(oldPath, newPath);
+    moveResourceReminderFileMarkTree(oldPath, newPath);
+    folder.name = newFolderName;
+    await saveNoteMetadata();
+    await saveReminderFileMarks();
+    await saveFolderMetadata();
+  } catch (error) {
+    await fs.rename(newPath, oldPath).catch((rollbackError) => {
+      console.error('回滚文件夹重命名失败:', rollbackError);
+    });
+    folder.name = path.basename(oldPath);
+    noteMetadata = previousNoteMetadata;
+    reminderFileMarks = previousReminderMarks;
+    noteFileMap = previousNoteFileMap;
+    await Promise.allSettled([
+      saveNoteMetadata(),
+      saveReminderFileMarks(),
+      saveFolderMetadata()
+    ]);
+    throw error;
+  }
 
   sendFoldersChanged();
   return folder;
@@ -1200,9 +1589,10 @@ async function renameFolder(_event, folderId, newName) {
 async function deleteFolder(_event, folderId) {
   const folder = folders.find(f => f.id === folderId);
   if (!folder) throw new Error('文件夹不存在');
+  assertFolderAccessible(folderId);
 
   const folderPath = getFolderPath(folderId);
-  await fs.rm(folderPath, { recursive: true, force: true });
+  await shell.trashItem(folderPath);
   deleteNoteMetadataTree(folderPath);
   await saveNoteMetadata();
 
@@ -1311,11 +1701,18 @@ function assertFolderAccessible(folderId, unlockedSet = unlockedFolderIds) {
   if (!lockedFolder) {
     return;
   }
-  const error = new Error(`文件夹「${lockedFolder.name}」已加密，请先输入密码`);
+  const error = new Error(`文件夹「${lockedFolder.name}」受应用内密码保护，请先输入密码`);
   error.code = 'FOLDER_LOCKED';
   error.folderId = lockedFolder.id;
   error.folderName = lockedFolder.name;
   throw error;
+}
+
+function assertFolderTargetAccessible(folderId) {
+  if (folderId && !getFolderById(folderId)) {
+    throw new Error('目标文件夹不存在');
+  }
+  assertFolderAccessible(folderId);
 }
 
 function isFolderVisibleToClient(folder, unlockedSet = unlockedFolderIds) {
@@ -1397,11 +1794,8 @@ async function performLoadNotes() {
   const uniqueOldPaths = [...new Set(oldJsonPaths)];
 
   for (const oldJsonPath of uniqueOldPaths) {
-    try {
-      await fs.access(oldJsonPath);
+    if (await pathExists(oldJsonPath)) {
       await migrateFromJson(oldJsonPath, notesDir);
-    } catch {
-      // 旧文件不存在，无需迁移
     }
   }
 
@@ -1409,10 +1803,12 @@ async function performLoadNotes() {
   await loadFolders();
   await loadPdfFiles();
 
+  const previousNotes = notes;
+  const previousNoteFileMap = noteFileMap;
+  const storedMetadataByPath = noteMetadata;
   try {
     notes = [];
-    noteFileMap.clear();
-    const storedMetadataByPath = noteMetadata;
+    noteFileMap = new Map();
     noteMetadata = {};
 
     // 递归扫描目录
@@ -1420,13 +1816,18 @@ async function performLoadNotes() {
     await saveNoteMetadata();
     await removeStaleReminderFileMarks();
   } catch (error) {
-    if (error.code !== 'ENOENT') {
+    const rootMissing = error.code === 'ENOENT' && !await pathExists(notesDir);
+    if (!rootMissing) {
       dialog.showErrorBox('读取笔记失败', `无法读取笔记目录：${error.message}`);
-    } else {
-      shouldCreateInitialFile = true;
+      noteMetadata = storedMetadataByPath;
+      notes = previousNotes;
+      noteFileMap = previousNoteFileMap;
+      return;
     }
+    shouldCreateInitialFile = true;
     notes = [];
-    noteFileMap.clear();
+    noteFileMap = new Map();
+    noteMetadata = storedMetadataByPath;
   }
 
   if (notes.length === 0 && shouldCreateInitialFile) {
@@ -1457,6 +1858,7 @@ async function scanDirectory(dirPath, folderId, storedMetadataByPath, claimedMet
 
     if (entry.isFile() && ['.md', '.txt', '.json'].includes(fileExtension)
       && entry.name !== '.folder.json') {
+      const metadataKey = getNoteMetadataKey(fullPath);
       try {
         const raw = await fs.readFile(fullPath, 'utf8');
         const stats = await fs.stat(fullPath);
@@ -1466,7 +1868,6 @@ async function scanDirectory(dirPath, folderId, storedMetadataByPath, claimedMet
           && parsed.data.createdAt
           && parsed.data.updatedAt
           && Array.isArray(parsed.data.reminders));
-        const metadataKey = getNoteMetadataKey(fullPath);
         const fileId = Number(stats.ino) > 0 ? String(stats.ino) : null;
         const metadataByPath = storedMetadataByPath[metadataKey];
         const metadataByFileId = fileId
@@ -1506,11 +1907,14 @@ async function scanDirectory(dirPath, folderId, storedMetadataByPath, claimedMet
 
         if (isLegacyNote) {
           await backupLegacyMarkdown(fullPath, raw);
-          markInternalNoteWrite(fullPath);
-          await fs.writeFile(fullPath, parsed.content, 'utf8');
+          markInternalNoteWrite(fullPath, parsed.content);
+          await atomicWriteFile(fullPath, parsed.content, { encoding: 'utf8' });
           await fs.utimes(fullPath, stats.atime, stats.mtime);
         }
       } catch (error) {
+        if (storedMetadataByPath[metadataKey]) {
+          noteMetadata[metadataKey] = storedMetadataByPath[metadataKey];
+        }
         console.error(`读取笔记文件失败: ${entry.name}`, error);
       }
     } else if (entry.isDirectory() && !isInternalDirectory(entry.name)) {
@@ -1598,6 +2002,8 @@ async function loadPdfFiles() {
 }
 
 async function performLoadPdfFiles() {
+  const previousResourceFiles = resourceFiles;
+  const previousPdfFiles = pdfFiles;
   resourceFiles = [];
   pdfFiles = [];
 
@@ -1607,9 +2013,9 @@ async function performLoadPdfFiles() {
     pdfFiles = resourceFiles.filter((file) => file.kind === 'pdf');
     pdfFiles.sort((a, b) => a.name.localeCompare(b.name, 'zh-CN'));
   } catch (error) {
-    if (error.code !== 'ENOENT') {
-      console.error('读取资源文件列表失败:', error);
-    }
+    resourceFiles = previousResourceFiles;
+    pdfFiles = previousPdfFiles;
+    throw error;
   }
 }
 
@@ -1957,19 +2363,17 @@ async function saveWordFile(fileId, contentData) {
   let targetPath = file.path;
   if (file.extension === '.doc') {
     const docxPath = file.path.replace(/\.doc$/i, '.docx');
-    await fs.writeFile(docxPath, buffer);
-    try {
-      if (file.path !== docxPath) {
-        await fs.unlink(file.path);
-      }
-    } catch (e) {}
+    await atomicWriteFile(docxPath, buffer);
+    if (file.path !== docxPath) {
+      await fs.unlink(file.path);
+    }
     file.path = docxPath;
     file.id = docxPath;
     file.extension = '.docx';
     file.name = file.name.replace(/\.doc$/i, '.docx');
     file.typeLabel = 'WORD';
   } else {
-    await fs.writeFile(targetPath, buffer);
+    await atomicWriteFile(targetPath, buffer);
   }
 
   const stats = await fs.stat(file.path);
@@ -2021,7 +2425,8 @@ async function saveSpreadsheetFile(fileId, sheetsData) {
     }
   });
 
-  await workbook.xlsx.writeFile(file.path);
+  const workbookBuffer = await workbook.xlsx.writeBuffer();
+  await atomicWriteFile(file.path, Buffer.from(workbookBuffer));
   const stats = await fs.stat(file.path);
   file.size = stats.size;
   file.updatedAt = stats.mtime.toISOString();
@@ -2056,8 +2461,9 @@ async function deleteResourceFile(_event, fileId) {
   if (!file) {
     throw new Error('文件不存在');
   }
+  assertFolderAccessible(file.folderId);
 
-  await fs.unlink(file.path);
+  await shell.trashItem(file.path);
   reminderFileMarks.delete(getResourceReminderFileKey(file.path));
   await saveReminderFileMarks();
   await loadPdfFiles();
@@ -2073,11 +2479,10 @@ async function moveResourceFile(_event, fileId, targetFolderId) {
   if (!file) {
     throw new Error('文件不存在');
   }
+  assertFolderAccessible(file.folderId);
 
   const normalizedTargetFolderId = targetFolderId || null;
-  if (normalizedTargetFolderId && !folders.some((folder) => folder.id === normalizedTargetFolderId)) {
-    throw new Error('目标文件夹不存在');
-  }
+  assertFolderTargetAccessible(normalizedTargetFolderId);
   if ((file.folderId || null) === normalizedTargetFolderId) {
     return resourceFiles;
   }
@@ -2087,9 +2492,19 @@ async function moveResourceFile(_event, fileId, targetFolderId) {
   const extension = path.extname(file.name);
   const baseName = path.basename(file.name, extension);
   const targetPath = await getUniqueFilePath(targetDir, baseName, extension);
+  const previousReminderMarks = new Set(reminderFileMarks);
   await fs.rename(file.path, targetPath);
-  moveResourceReminderFileMark(file.path, targetPath);
-  await saveReminderFileMarks();
+  try {
+    moveResourceReminderFileMark(file.path, targetPath);
+    await saveReminderFileMarks();
+  } catch (error) {
+    await fs.rename(targetPath, file.path).catch((rollbackError) => {
+      console.error('回滚移动资料文件失败:', rollbackError);
+    });
+    reminderFileMarks = previousReminderMarks;
+    await saveReminderFileMarks().catch(() => {});
+    throw error;
+  }
   await loadPdfFiles();
   if (updateDailyReviewSelection()) {
     await saveConfig();
@@ -2116,6 +2531,7 @@ async function setReminderFileMark(_event, entry, marked) {
   if (!target || !key) {
     throw new Error('文件不存在');
   }
+  assertFolderAccessible(target.folderId);
 
   if (marked) {
     reminderFileMarks.add(key);
@@ -2155,6 +2571,7 @@ async function handleDailyReview(_event, entry, action) {
     || dailyReviewSelection.entryKey !== resolved.key) {
     throw new Error('当前文件不是今日回顾内容');
   }
+  assertFolderAccessible(resolved.target.folderId);
 
   let lastReviewedAt = dailyReviewHistory[resolved.key] || null;
   let deferredUntil = null;
@@ -2292,11 +2709,22 @@ function watchPdfFiles() {
         schedulePdfReload();
       } else if (['.md', '.txt', '.json'].includes(extension)
         && path.basename(relativePath) !== '.folder.json') {
-        const writeExpiresAt = internalNoteWrites.get(relativePath.toLowerCase()) || 0;
-        if (writeExpiresAt > Date.now()) {
+        const key = relativePath.toLowerCase();
+        if (internalNoteWrites.has(key)) {
+          const fullPath = path.join(getNotesPath(), relativePath);
+          isExpectedInternalNoteWrite(fullPath, key)
+            .then((isInternal) => {
+              if (!isInternal) {
+                scheduleNoteReload();
+              }
+            })
+            .catch(() => scheduleNoteReload());
           return;
         }
         scheduleNoteReload();
+      } else if (!extension && relativePath) {
+        scheduleNoteReload();
+        schedulePdfReload();
       } else if (path.basename(relativePath) !== '.folder.json') {
         schedulePdfReload();
       }
@@ -2310,26 +2738,53 @@ function watchPdfFiles() {
 async function migrateFromJson(jsonPath, notesDir) {
   const raw = await fs.readFile(jsonPath, 'utf8');
   const parsed = JSON.parse(raw);
-  if (!Array.isArray(parsed) || parsed.length === 0) {
+  const isLegacyNotes = Array.isArray(parsed)
+    && parsed.length > 0
+    && parsed.every((item) => item
+      && typeof item === 'object'
+      && !Array.isArray(item)
+      && typeof item.id === 'string'
+      && typeof item.title === 'string'
+      && typeof item.content === 'string'
+      && (item.reminders === undefined || Array.isArray(item.reminders))
+      && (item.createdAt === undefined || typeof item.createdAt === 'string')
+      && (item.updatedAt === undefined || typeof item.updatedAt === 'string'));
+  if (!isLegacyNotes) {
     return;
   }
 
   await fs.mkdir(notesDir, { recursive: true });
-
-  for (const noteData of parsed) {
-    if (!noteData) continue;
-    const normalizedNote = normalizeLoadedNote(noteData);
-    const baseName = sanitizeNoteFilename(normalizedNote.title);
-    const filePath = await getUniqueFilePath(notesDir, baseName);
-    markInternalNoteWrite(filePath);
-    await fs.writeFile(filePath, normalizedNote.content || '', 'utf8');
-    setNoteMetadata(filePath, normalizedNote);
+  const backupPath = await getUniqueFilePath(
+    path.dirname(jsonPath),
+    path.basename(jsonPath),
+    '.bak'
+  );
+  const previousMetadata = noteMetadata;
+  noteMetadata = { ...noteMetadata };
+  const generatedPaths = [];
+  try {
+    for (const noteData of parsed) {
+      const normalizedNote = normalizeLoadedNote(noteData);
+      const baseName = sanitizeNoteFilename(normalizedNote.title);
+      const filePath = await getUniqueFilePath(notesDir, baseName);
+      markInternalNoteWrite(filePath, normalizedNote.content || '');
+      await atomicWriteFile(filePath, normalizedNote.content || '', { encoding: 'utf8' });
+      generatedPaths.push(filePath);
+      setNoteMetadata(filePath, normalizedNote);
+    }
+    await saveNoteMetadata();
+    // 所有新文件和元数据都落盘后才移动旧库，保证迁移可重试。
+    await fs.rename(jsonPath, backupPath);
+  } catch (error) {
+    for (const generatedPath of generatedPaths) {
+      await fs.rm(generatedPath, { force: true }).catch(() => {});
+    }
+    noteMetadata = previousMetadata;
+    await saveNoteMetadata().catch((restoreError) => {
+      console.error('恢复迁移前元数据失败:', restoreError);
+    });
+    throw error;
   }
-  await saveNoteMetadata();
-
-  // 迁移完成后重命名旧文件
-  const backupPath = jsonPath + '.bak';
-  await fs.rename(jsonPath, backupPath);
 }
 
 async function saveNote(note) {
@@ -2340,11 +2795,11 @@ async function saveNote(note) {
   if (!filePath) {
     const baseName = sanitizeNoteFilename(note.title);
     filePath = await getUniqueFilePath(targetDir, baseName, getNoteFileExtension(note.fileType));
-    noteFileMap.set(note.id, filePath);
   }
 
-  markInternalNoteWrite(filePath);
-  await fs.writeFile(filePath, note.content || '', 'utf8');
+  markInternalNoteWrite(filePath, note.content || '');
+  await atomicWriteFile(filePath, note.content || '', { encoding: 'utf8' });
+  noteFileMap.set(note.id, filePath);
   const stats = await fs.stat(filePath);
   setNoteMetadata(filePath, note, Number(stats.ino) > 0 ? String(stats.ino) : null);
   await saveNoteMetadata();
@@ -2417,13 +2872,43 @@ function sendNotesChanged() {
 
 async function upsertNote(_event, input) {
   const note = normalizeNote(input);
-  const index = notes.findIndex((item) => item.id === note.id);
+  let index = notes.findIndex((item) => item.id === note.id);
   let targetNote;
+  let renamedPaths = null;
+
+  if (index < 0 && typeof input.sourceUrl === 'string') {
+    try {
+      const sourcePath = fileURLToPath(input.sourceUrl);
+      if (isPathInside(getNotesPath(), sourcePath) && await pathExists(sourcePath)) {
+        const resolvedSourcePath = path.resolve(sourcePath).toLowerCase();
+        const existingEntry = [...noteFileMap].find(([, filePath]) => {
+          return path.resolve(filePath).toLowerCase() === resolvedSourcePath;
+        });
+        if (existingEntry) {
+          const [existingId] = existingEntry;
+          index = notes.findIndex((item) => item.id === existingId);
+          if (existingId !== note.id) {
+            noteFileMap.delete(existingId);
+            noteFileMap.set(note.id, sourcePath);
+            const existingReminderKey = getNoteReminderFileKey(existingId);
+            if (reminderFileMarks.delete(existingReminderKey)) {
+              reminderFileMarks.add(getNoteReminderFileKey(note.id));
+            }
+          }
+        } else {
+          noteFileMap.set(note.id, sourcePath);
+        }
+      }
+    } catch {
+      // 无法恢复原始路径时继续按笔记 ID 处理。
+    }
+  }
 
   if (index >= 0) {
     const oldNote = notes[index];
+    assertFolderAccessible(oldNote.folderId);
+    assertFolderTargetAccessible(note.folderId);
     targetNote = { ...oldNote, ...note };
-    notes[index] = targetNote;
 
     // 如果标题改变了或文件夹改变了，需要移动/重命名文件
     if (oldNote.title !== note.title || oldNote.folderId !== note.folderId) {
@@ -2434,26 +2919,43 @@ async function upsertNote(_event, input) {
         const baseName = sanitizeNoteFilename(note.title);
         const extension = getNoteFileExtension(note.fileType);
         const newPath = await getUniqueFilePath(targetDir, baseName, extension);
-        try {
-          markInternalNoteWrite(oldPath);
-          markInternalNoteWrite(newPath);
-          await fs.rename(oldPath, newPath);
-          noteFileMap.set(note.id, newPath);
-          moveNoteMetadata(oldPath, newPath);
-        } catch (error) {
-          console.error('移动/重命名笔记文件失败:', error);
-        }
+        await fs.rename(oldPath, newPath);
+        noteFileMap.set(note.id, newPath);
+        moveNoteMetadata(oldPath, newPath);
+        renamedPaths = { oldPath, newPath };
       }
     }
   } else {
+    if (!noteFileMap.has(note.id)) {
+      throw new Error('笔记文件不存在，请刷新后重试');
+    }
+    assertFolderTargetAccessible(note.folderId);
     targetNote = note;
-    notes.unshift(targetNote);
   }
 
   targetNote.isReminderFile = reminderFileMarks.has(getNoteReminderFileKey(targetNote.id));
 
+  try {
+    await saveNote(targetNote);
+  } catch (error) {
+    if (renamedPaths) {
+      try {
+        await fs.rename(renamedPaths.newPath, renamedPaths.oldPath);
+        noteFileMap.set(note.id, renamedPaths.oldPath);
+        moveNoteMetadata(renamedPaths.newPath, renamedPaths.oldPath);
+      } catch (rollbackError) {
+        console.error('回滚笔记重命名失败:', rollbackError);
+      }
+    }
+    throw error;
+  }
+
+  if (index >= 0) {
+    notes[index] = targetNote;
+  } else {
+    notes.unshift(targetNote);
+  }
   sortNotesByCreatedAt();
-  await saveNote(targetNote);
   if (updateDailyReviewSelection()) {
     await saveConfig();
   }
@@ -2463,15 +2965,16 @@ async function upsertNote(_event, input) {
 }
 
 async function deleteNote(_event, noteId) {
+  const targetNote = notes.find((note) => note.id === noteId);
+  if (!targetNote) {
+    throw new Error('笔记不存在');
+  }
+  assertFolderAccessible(targetNote.folderId);
+
   // 删除文件
   const filePath = noteFileMap.get(noteId);
   if (filePath) {
-    try {
-      markInternalNoteWrite(filePath);
-      await fs.unlink(filePath);
-    } catch (error) {
-      console.error('删除笔记文件失败:', error);
-    }
+    await shell.trashItem(filePath);
     delete noteMetadata[getNoteMetadataKey(filePath)];
     noteFileMap.delete(noteId);
     await saveNoteMetadata();
@@ -2500,9 +3003,48 @@ async function useNotesPath(nextPath) {
   if (noteLoadPromise) {
     await noteLoadPromise;
   }
+  const previousState = {
+    notesPath,
+    notes,
+    folders,
+    pdfFiles,
+    resourceFiles,
+    noteFileMap,
+    noteMetadata,
+    folderMetadata,
+    reminderFileMarks,
+    dailyReviewSelection,
+    dailyReviewHistory,
+    dailyReviewHandledDate,
+    dailyReviewDeferred,
+    unlockedFolderIds: new Set(unlockedFolderIds)
+  };
   notesPath = nextPath;
-  await saveConfig();
-  await loadNotes();
+  unlockedFolderIds.clear();
+  try {
+    await loadNotes();
+    await saveConfig();
+  } catch (error) {
+    notesPath = previousState.notesPath;
+    notes = previousState.notes;
+    folders = previousState.folders;
+    pdfFiles = previousState.pdfFiles;
+    resourceFiles = previousState.resourceFiles;
+    noteFileMap = previousState.noteFileMap;
+    noteMetadata = previousState.noteMetadata;
+    folderMetadata = previousState.folderMetadata;
+    reminderFileMarks = previousState.reminderFileMarks;
+    dailyReviewSelection = previousState.dailyReviewSelection;
+    dailyReviewHistory = previousState.dailyReviewHistory;
+    dailyReviewHandledDate = previousState.dailyReviewHandledDate;
+    dailyReviewDeferred = previousState.dailyReviewDeferred;
+    unlockedFolderIds.clear();
+    for (const folderId of previousState.unlockedFolderIds) {
+      unlockedFolderIds.add(folderId);
+    }
+    await saveConfig();
+    throw error;
+  }
   watchPdfFiles();
   scheduleReminderCheck();
   sendNotesChanged();
@@ -2537,6 +3079,7 @@ async function insertImageForNote(_event, payload) {
   if (!payload || !payload.noteId) {
     return null;
   }
+  getAccessibleNote(payload.noteId);
 
   const result = await dialog.showOpenDialog(mainWindow, {
     title: '选择图片',
@@ -2594,23 +3137,28 @@ async function fireDueReminders() {
   const dueItems = getPendingReminders();
 
   for (const { note, reminder, slot } of dueItems) {
-    const body = note.content.trim()
-      ? note.content.trim().slice(0, 120)
-      : '你有一条笔记提醒到了。';
+    const isProtected = Boolean(getLockedFolderForFolderId(note.folderId, new Set(), true));
+    const body = isProtected
+      ? '一条受密码保护的笔记提醒到了，请打开应用并解锁后查看。'
+      : note.content.trim()
+        ? note.content.trim().slice(0, 120)
+        : '你有一条笔记提醒到了。';
+    const title = isProtected ? '受保护笔记提醒' : note.title;
     const payload = {
       noteId: note.id,
       reminderId: reminder.id,
-      title: note.title,
+      title,
       body,
       date: reminder.date,
-      slot
+      slot,
+      protected: isProtected
     };
 
     sendReminderFired(payload);
 
     if (Notification.isSupported()) {
       const notification = new Notification({
-        title: `提醒：${note.title}`,
+        title: `提醒：${title}`,
         body
       });
       notification.on('click', () => {
@@ -2669,22 +3217,50 @@ function scheduleReminderCheck() {
 async function migrateImageAssetDir() {
   const oldAssetDir = path.join(getNotesPath(), IMAGE_ASSET_DIR_NAME);
   const newAssetDir = path.join(getAppDataPath(), IMAGE_ASSET_DIR_NAME);
-  try {
-    await fs.access(oldAssetDir);
-  } catch {
+  if (!await pathExists(oldAssetDir)) {
     return;
   }
 
-  await fs.mkdir(path.dirname(newAssetDir), { recursive: true });
+  await fs.mkdir(newAssetDir, { recursive: true });
+  const urlMappings = new Map();
 
-  try {
-    await fs.access(newAssetDir);
-  } catch {
-    await fs.rename(oldAssetDir, newAssetDir);
+  async function mergeAssetDirectory(sourceDir, relativeDir = '') {
+    const entries = await fs.readdir(sourceDir, { withFileTypes: true });
+    for (const entry of entries) {
+      const sourcePath = path.join(sourceDir, entry.name);
+      const relativePath = path.join(relativeDir, entry.name);
+      if (entry.isDirectory()) {
+        await mergeAssetDirectory(sourcePath, relativePath);
+        continue;
+      }
+      if (!entry.isFile()) {
+        continue;
+      }
+
+      let targetPath = path.join(newAssetDir, relativePath);
+      await fs.mkdir(path.dirname(targetPath), { recursive: true });
+      if (await pathExists(targetPath)) {
+        const sourceBuffer = await fs.readFile(sourcePath);
+        const targetBuffer = await fs.readFile(targetPath);
+        if (!sourceBuffer.equals(targetBuffer)) {
+          const digest = createHash('sha256').update(sourceBuffer).digest('hex').slice(0, 16);
+          const extension = path.extname(entry.name);
+          targetPath = path.join(
+            path.dirname(targetPath),
+            `${path.basename(entry.name, extension)}-migrated-${digest}${extension}`
+          );
+          if (!await pathExists(targetPath)) {
+            await fs.copyFile(sourcePath, targetPath, fsConstants.COPYFILE_EXCL);
+          }
+        }
+      } else {
+        await fs.copyFile(sourcePath, targetPath, fsConstants.COPYFILE_EXCL);
+      }
+      urlMappings.set(pathToFileURL(sourcePath).href, pathToFileURL(targetPath).href);
+    }
   }
 
-  const oldUrlPrefix = pathToFileURL(oldAssetDir).href;
-  const newUrlPrefix = pathToFileURL(newAssetDir).href;
+  await mergeAssetDirectory(oldAssetDir);
 
   async function updateNoteFiles(dirPath) {
     const entries = await fs.readdir(dirPath, { withFileTypes: true });
@@ -2692,16 +3268,16 @@ async function migrateImageAssetDir() {
       const fullPath = path.join(dirPath, entry.name);
       if (entry.isDirectory() && !isInternalDirectory(entry.name)) {
         await updateNoteFiles(fullPath);
-      } else if (entry.isFile() && ['.md', '.txt'].includes(path.extname(entry.name).toLowerCase())) {
-        try {
-          const raw = await fs.readFile(fullPath, 'utf8');
-          if (raw.includes(oldUrlPrefix)) {
-            const updated = raw.split(oldUrlPrefix).join(newUrlPrefix);
-            markInternalNoteWrite(fullPath);
-            await fs.writeFile(fullPath, updated, 'utf8');
-          }
-        } catch (error) {
-          console.error('迁移笔记图片路径失败:', fullPath, error);
+      } else if (entry.isFile() && ['.md', '.txt', '.json'].includes(path.extname(entry.name).toLowerCase())) {
+        const raw = await fs.readFile(fullPath, 'utf8');
+        let updated = raw;
+        for (const [oldUrl, newUrl] of urlMappings) {
+          updated = updated.split(oldUrl).join(newUrl);
+        }
+        if (updated !== raw) {
+          await backupLegacyMarkdown(fullPath, raw);
+          markInternalNoteWrite(fullPath, updated);
+          await atomicWriteFile(fullPath, updated, { encoding: 'utf8' });
         }
       }
     }
@@ -2709,10 +3285,8 @@ async function migrateImageAssetDir() {
 
   await updateNoteFiles(getNotesPath());
 
-  try {
+  if (await pathExists(oldAssetDir)) {
     await fs.rm(oldAssetDir, { recursive: true, force: true });
-  } catch {
-    // ignore cleanup errors
   }
 }
 
@@ -2752,8 +3326,6 @@ async function collectReferencedImagePaths() {
   await scanNoteFiles(getNotesPath());
   return referencedPaths;
 }
-
-let imageCleanupTimer = null;
 
 async function cleanupUnusedImages() {
   const assetDirRoot = path.join(getAppDataPath(), IMAGE_ASSET_DIR_NAME);
@@ -2804,26 +3376,12 @@ async function cleanupUnusedImages() {
   }
 }
 
-function scheduleImageCleanup() {
-  if (imageCleanupTimer) {
-    clearInterval(imageCleanupTimer);
-  }
-  cleanupUnusedImages().catch((error) => {
-    console.error('图片清理失败:', error);
-  });
-  imageCleanupTimer = setInterval(() => {
-    cleanupUnusedImages().catch((error) => {
-      console.error('图片清理失败:', error);
-    });
-  }, 24 * 60 * 60 * 1000);
-}
-
 app.whenReady().then(async () => {
   await loadConfig();
   await saveConfig();
   await migrateImageAssetDir();
   await loadNotes();
-  scheduleImageCleanup();
+  // 自动清理无法看见渲染进程中的未落盘草稿，停用后避免误删草稿图片。
 
   ipcMain.handle('notes:list', () => getVisibleNotes());
   ipcMain.handle('library:refresh', async () => {
@@ -2839,8 +3397,12 @@ app.whenReady().then(async () => {
   ipcMain.handle('pdfs:list', () => getVisiblePdfFiles());
   ipcMain.handle('files:list', () => getVisibleResourceFiles());
   ipcMain.handle('files:preview', (_event, fileId) => previewResourceFile(fileId));
-  ipcMain.handle('files:save-word', (_event, fileId, payload) => saveWordFile(fileId, payload));
-  ipcMain.handle('files:save-spreadsheet', (_event, fileId, payload) => saveSpreadsheetFile(fileId, payload));
+  ipcMain.handle('files:save-word', () => {
+    throw new Error('为避免损坏原文档，应用内 Word 编辑已停用，请使用外部应用编辑');
+  });
+  ipcMain.handle('files:save-spreadsheet', () => {
+    throw new Error('为避免损坏工作表、公式或格式，应用内 Excel 编辑已停用，请使用外部应用编辑');
+  });
   ipcMain.handle('files:delete', deleteResourceFile);
   ipcMain.handle('files:move', moveResourceFile);
   ipcMain.handle('pdfs:refresh', async () => {
@@ -2866,35 +3428,59 @@ app.whenReady().then(async () => {
     return getVisibleNotes();
   });
   ipcMain.handle('notes:create', async (_event, folderId) => {
+    const normalizedFolderId = folderId || null;
+    assertFolderTargetAccessible(normalizedFolderId);
     const note = createEmptyNote();
-    note.folderId = folderId || null;
+    note.folderId = normalizedFolderId;
+    await saveNote(note);
     notes.unshift(note);
     sortNotesByCreatedAt();
-    await saveNote(note);
     sendNotesChanged();
     return createClientNote(note);
   });
   ipcMain.handle('notes:move', async (_event, noteId, folderId) => {
     const note = notes.find(n => n.id === noteId);
     if (!note) throw new Error('笔记不存在');
+    assertFolderAccessible(note.folderId);
+    const normalizedFolderId = folderId || null;
+    assertFolderTargetAccessible(normalizedFolderId);
+    if ((note.folderId || null) === normalizedFolderId) {
+      return createClientNote(note);
+    }
 
     const oldPath = noteFileMap.get(noteId);
+    let newPath = null;
     if (oldPath) {
-      const targetDir = getFolderPath(folderId);
+      const targetDir = getFolderPath(normalizedFolderId);
       await fs.mkdir(targetDir, { recursive: true });
       const baseName = sanitizeNoteFilename(note.title);
       const extension = getNoteFileExtension(note.fileType);
-      const newPath = await getUniqueFilePath(targetDir, baseName, extension);
-      markInternalNoteWrite(oldPath);
-      markInternalNoteWrite(newPath);
+      newPath = await getUniqueFilePath(targetDir, baseName, extension);
       await fs.rename(oldPath, newPath);
       noteFileMap.set(noteId, newPath);
       moveNoteMetadata(oldPath, newPath);
     }
 
-    note.folderId = folderId || null;
-    note.updatedAt = new Date().toISOString();
-    await saveNote(note);
+    const movedNote = {
+      ...note,
+      folderId: normalizedFolderId,
+      updatedAt: new Date().toISOString()
+    };
+    try {
+      await saveNote(movedNote);
+    } catch (error) {
+      if (oldPath && newPath) {
+        try {
+          await fs.rename(newPath, oldPath);
+          noteFileMap.set(noteId, oldPath);
+          moveNoteMetadata(newPath, oldPath);
+        } catch (rollbackError) {
+          console.error('回滚移动笔记失败:', rollbackError);
+        }
+      }
+      throw error;
+    }
+    Object.assign(note, movedNote);
     sendNotesChanged();
     return createClientNote(note);
   });
@@ -2909,8 +3495,10 @@ app.whenReady().then(async () => {
   ipcMain.handle('folders:move', async (_event, folderId, targetFolderId) => {
     const folder = folders.find(f => f.id === folderId);
     if (!folder) throw new Error('文件夹不存在');
+    assertFolderAccessible(folderId);
 
     const normalizedTargetFolderId = targetFolderId || null;
+    assertFolderTargetAccessible(normalizedTargetFolderId);
     let target = normalizedTargetFolderId
       ? folders.find((item) => item.id === normalizedTargetFolderId)
       : null;
@@ -2935,14 +3523,33 @@ app.whenReady().then(async () => {
       if (error.code !== 'ENOENT') throw error;
     }
 
+    const previousParentId = folder.parentId;
+    const previousNoteMetadata = structuredClone(noteMetadata);
+    const previousReminderMarks = new Set(reminderFileMarks);
+    const previousNoteFileMap = new Map(noteFileMap);
     await fs.rename(oldPath, newPath);
-    moveNoteMetadataTree(oldPath, newPath);
-    moveResourceReminderFileMarkTree(oldPath, newPath);
-    await saveNoteMetadata();
-    await saveReminderFileMarks();
-
-    folder.parentId = normalizedTargetFolderId;
-    await saveFolderMetadata();
+    try {
+      moveNoteMetadataTree(oldPath, newPath);
+      moveResourceReminderFileMarkTree(oldPath, newPath);
+      folder.parentId = normalizedTargetFolderId;
+      await saveNoteMetadata();
+      await saveReminderFileMarks();
+      await saveFolderMetadata();
+    } catch (error) {
+      await fs.rename(newPath, oldPath).catch((rollbackError) => {
+        console.error('回滚移动文件夹失败:', rollbackError);
+      });
+      folder.parentId = previousParentId;
+      noteMetadata = previousNoteMetadata;
+      reminderFileMarks = previousReminderMarks;
+      noteFileMap = previousNoteFileMap;
+      await Promise.allSettled([
+        saveNoteMetadata(),
+        saveReminderFileMarks(),
+        saveFolderMetadata()
+      ]);
+      throw error;
+    }
 
     await loadNotes();
     scheduleReminderCheck();
@@ -2976,33 +3583,13 @@ app.whenReady().then(async () => {
       return null;
     }
 
-    try {
-      const { net } = require('electron');
-      const response = await net.fetch(payload.imageUrl, {
-        redirect: 'follow',
-        headers: { 'User-Agent': 'Mozilla/5.0' }
-      });
-      if (!response.ok) {
-        return null;
-      }
-      const buffer = Buffer.from(await response.arrayBuffer());
-      const contentType = response.headers.get('content-type') || '';
-      const ext = contentType.includes('png') ? '.png'
-        : contentType.includes('gif') ? '.gif'
-        : contentType.includes('webp') ? '.webp'
-        : contentType.includes('bmp') ? '.bmp'
-        : contentType.includes('svg') ? '.svg'
-        : '.jpg';
-      const fileName = `pasted-${Date.now()}${ext}`;
-      return saveClipboardImageForNote(payload.noteId, {
-        fileName,
-        mimeType: contentType,
-        bytes: Array.from(new Uint8Array(buffer))
-      });
-    } catch (error) {
-      console.error('下载图片失败:', error);
-      return null;
-    }
+    getAccessibleNote(payload.noteId);
+    const { buffer, contentType } = await downloadRemoteImage(payload.imageUrl);
+    return saveClipboardImageForNote(payload.noteId, {
+      fileName: `remote-image${getImageExtension('', contentType)}`,
+      mimeType: contentType,
+      bytes: buffer
+    });
   });
   ipcMain.handle('images:copy', async (_event, payload) => {
     if (!payload || !payload.imageUrl) {
@@ -3015,6 +3602,15 @@ app.whenReady().then(async () => {
       } else {
         return false;
       }
+      const imageAssetRoot = path.resolve(getAppDataPath(), IMAGE_ASSET_DIR_NAME);
+      const resolvedFilePath = path.resolve(filePath);
+      if (!isPathInside(imageAssetRoot, resolvedFilePath)) {
+        const resource = resourceFiles.find((item) => path.resolve(item.path) === resolvedFilePath);
+        if (!resource || resource.kind !== 'image') {
+          return false;
+        }
+        assertFolderAccessible(resource.folderId);
+      }
       const imageBuffer = await fs.readFile(filePath);
       const nativeImage = require('electron').nativeImage;
       const img = nativeImage.createFromBuffer(imageBuffer);
@@ -3026,21 +3622,25 @@ app.whenReady().then(async () => {
     }
   });
   ipcMain.handle('images:delete', async (_event, payload) => {
-    if (!payload || !payload.imageUrl) {
+    if (!payload || !payload.imageUrl || !payload.noteId) {
       return false;
     }
     try {
+      getAccessibleNote(payload.noteId);
+      if (notes.some((note) => note.id !== payload.noteId && note.content.includes(payload.imageUrl))) {
+        throw new Error('该图片仍被其他笔记引用，已保留图片文件');
+      }
       let filePath;
       if (payload.imageUrl.startsWith('file:')) {
         filePath = fileURLToPath(payload.imageUrl);
       } else {
         return false;
       }
-      const notesDir = path.resolve(getNotesPath());
-      if (!isPathInside(notesDir, filePath)) {
+      const imageAssetRoot = path.resolve(getAppDataPath(), IMAGE_ASSET_DIR_NAME);
+      if (!isPathInside(imageAssetRoot, path.resolve(filePath))) {
         return false;
       }
-      await fs.unlink(filePath);
+      await shell.trashItem(filePath);
       return true;
     } catch (error) {
       console.error('删除图片失败:', error);
@@ -3057,6 +3657,11 @@ app.whenReady().then(async () => {
   app.on('activate', () => {
     showMainWindow();
   });
+}).catch((error) => {
+  console.error('应用启动失败:', error);
+  dialog.showErrorBox('Notice Note 启动失败', error.message || String(error));
+  isQuitting = true;
+  app.quit();
 });
 
 app.on('window-all-closed', () => {
@@ -3070,6 +3675,5 @@ isQuitting = true;
 clearTimeout(reminderTimer);
 clearTimeout(pdfReloadTimer);
 clearTimeout(noteReloadTimer);
-clearInterval(imageCleanupTimer);
 pdfWatcher?.close();
 });

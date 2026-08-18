@@ -11,8 +11,12 @@ contextBridge.exposeInMainWorld('noticeNote', {
   createFolder: (name, parentId) => ipcRenderer.invoke('folders:create', name, parentId),
   renameFolder: (folderId, newName) => ipcRenderer.invoke('folders:rename', folderId, newName),
   deleteFolder: (folderId) => ipcRenderer.invoke('folders:delete', folderId),
-  setFolderPassword: (folderId, password) => ipcRenderer.invoke('folders:set-password', folderId, password),
-  clearFolderPassword: (folderId) => ipcRenderer.invoke('folders:clear-password', folderId),
+  setFolderPassword: (folderId, password, currentPassword = '') => {
+    return ipcRenderer.invoke('folders:set-password', folderId, password, currentPassword);
+  },
+  clearFolderPassword: (folderId, currentPassword = '') => {
+    return ipcRenderer.invoke('folders:clear-password', folderId, currentPassword);
+  },
   unlockFolder: (folderId, password) => ipcRenderer.invoke('folders:unlock', folderId, password),
   lockFolder: (folderId) => ipcRenderer.invoke('folders:lock', folderId),
   moveFolder: (folderId, targetFolderId) => ipcRenderer.invoke('folders:move', folderId, targetFolderId),

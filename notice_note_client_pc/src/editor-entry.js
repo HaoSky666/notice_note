@@ -1,5 +1,20 @@
-import { EditorState, RangeSetBuilder, StateField } from '@codemirror/state';
-import { EditorView, Decoration, ViewPlugin, WidgetType, keymap, placeholder } from '@codemirror/view';
+import {
+  EditorSelection,
+  EditorState,
+  RangeSetBuilder,
+  StateField,
+  countColumn,
+  findColumn
+} from '@codemirror/state';
+import {
+  EditorView,
+  Decoration,
+  ViewPlugin,
+  WidgetType,
+  keymap,
+  placeholder,
+  drawSelection
+} from '@codemirror/view';
 import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirror/commands';
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
 import { syntaxHighlighting, HighlightStyle } from '@codemirror/language';
@@ -91,6 +106,43 @@ function insertMarkdownAtSelection(view, value) {
     },
     scrollIntoView: true
   });
+}
+
+function getColumnPosition(view, event) {
+  const position = view.posAtCoords({ x: event.clientX, y: event.clientY }, false);
+  if (position == null) {
+    return null;
+  }
+
+  const line = view.state.doc.lineAt(position);
+  const offset = Math.min(line.length, position - line.from);
+  return {
+    line: line.number,
+    column: countColumn(line.text, view.state.tabSize, offset)
+  };
+}
+
+function buildColumnSelection(view, anchor, head) {
+  const firstLine = Math.min(anchor.line, head.line);
+  const lastLine = Math.max(anchor.line, head.line);
+  const anchorIsLeft = anchor.column <= head.column;
+  const startColumn = Math.min(anchor.column, head.column);
+  const endColumn = Math.max(anchor.column, head.column);
+  const ranges = [];
+
+  for (let lineNumber = firstLine; lineNumber <= lastLine; lineNumber += 1) {
+    const line = view.state.doc.line(lineNumber);
+    const startOffset = findColumn(line.text, startColumn, view.state.tabSize);
+    const endOffset = findColumn(line.text, endColumn, view.state.tabSize);
+    const anchorOffset = anchorIsLeft ? startOffset : endOffset;
+    const headOffset = anchorIsLeft ? endOffset : startOffset;
+    ranges.push(EditorSelection.range(
+      line.from + anchorOffset,
+      line.from + headOffset
+    ));
+  }
+
+  return EditorSelection.create(ranges, head.line - firstLine);
 }
 
 function getIndentColumns(indentText) {
@@ -366,6 +418,21 @@ function buildLivePreviewDecorations(view, options = {}, codeBlocks = []) {
         const editingClass = isEditing ? ' cm-code-block-editing' : '';
         addLineClass(items, line, `cm-code-block-line ${positionClass}${editingClass}`);
 
+        if (isEditing) {
+          for (const range of view.state.selection.ranges) {
+            const selectedFrom = Math.max(range.from, line.from);
+            const selectedTo = Math.min(range.to, line.to);
+            if (selectedFrom < selectedTo) {
+              addDecoration(
+                items,
+                selectedFrom,
+                selectedTo,
+                Decoration.mark({ class: 'cm-code-block-selection' })
+              );
+            }
+          }
+        }
+
         if (!isEditing) {
           if (line.number === codeBlock.startLine) {
             addDecoration(
@@ -422,14 +489,19 @@ function buildLivePreviewDecorations(view, options = {}, codeBlocks = []) {
             items,
             start,
             end,
-            Decoration.replace({ widget: new ImageWidget(match[1], src) })
+            Decoration.replace({
+              widget: new ImageWidget(match[1], src, options.onOpenImage)
+            })
           );
         } else {
           addDecoration(
             items,
             line.to,
             line.to,
-            Decoration.widget({ widget: new ImageBelowWidget(match[1], src), side: 1 })
+            Decoration.widget({
+              widget: new ImageBelowWidget(match[1], src, options.onOpenImage),
+              side: 1
+            })
           );
         }
       }
@@ -615,10 +687,11 @@ class OrderedMarkerWidget extends WidgetType {
 }
 
 class ImageWidget extends WidgetType {
-  constructor(alt, src) {
+  constructor(alt, src, onOpen) {
     super();
     this.alt = alt || '图片';
     this.src = src;
+    this.onOpen = onOpen;
   }
 
   eq(other) {
@@ -632,8 +705,45 @@ class ImageWidget extends WidgetType {
     const image = document.createElement('img');
     image.src = this.src;
     image.alt = this.alt;
-    image.title = this.alt;
+    image.title = `${this.alt} · 点击放大`;
     image.loading = 'lazy';
+    image.tabIndex = 0;
+    image.setAttribute('role', 'button');
+    image.setAttribute('aria-label', `放大图片：${this.alt}`);
+    let suppressNextClick = false;
+    let lastPressOpenedAt = Number.NEGATIVE_INFINITY;
+    const openOnPress = (event) => {
+      if (event.button !== 0) {
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      suppressNextClick = true;
+      const now = performance.now();
+      if (now - lastPressOpenedAt > 100) {
+        lastPressOpenedAt = now;
+        this.onOpen?.(image);
+      }
+    };
+    image.addEventListener('pointerdown', openOnPress);
+    image.addEventListener('mousedown', openOnPress);
+    image.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (suppressNextClick) {
+        suppressNextClick = false;
+        return;
+      }
+      this.onOpen?.(image);
+    });
+    image.addEventListener('keydown', (event) => {
+      if (event.key !== 'Enter' && event.key !== ' ') {
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      this.onOpen?.(image);
+    });
     image.addEventListener('error', () => {
       wrapper.textContent = `${this.alt}（图片加载失败）`;
     });
@@ -642,17 +752,17 @@ class ImageWidget extends WidgetType {
     return wrapper;
   }
 
-  ignoreEvent(event) {
-    // 让 mousedown 交给编辑器的 domEventHandlers 处理（控制光标位置），其余事件交给浏览器
-    return event.type !== 'mousedown';
+  ignoreEvent() {
+    return true;
   }
 }
 
 class ImageBelowWidget extends WidgetType {
-  constructor(alt, src) {
+  constructor(alt, src, onOpen) {
     super();
     this.alt = alt || '图片';
     this.src = src;
+    this.onOpen = onOpen;
   }
 
   eq(other) {
@@ -666,8 +776,45 @@ class ImageBelowWidget extends WidgetType {
     const image = document.createElement('img');
     image.src = this.src;
     image.alt = this.alt;
-    image.title = this.alt;
+    image.title = `${this.alt} · 点击放大`;
     image.loading = 'lazy';
+    image.tabIndex = 0;
+    image.setAttribute('role', 'button');
+    image.setAttribute('aria-label', `放大图片：${this.alt}`);
+    let suppressNextClick = false;
+    let lastPressOpenedAt = Number.NEGATIVE_INFINITY;
+    const openOnPress = (event) => {
+      if (event.button !== 0) {
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      suppressNextClick = true;
+      const now = performance.now();
+      if (now - lastPressOpenedAt > 100) {
+        lastPressOpenedAt = now;
+        this.onOpen?.(image);
+      }
+    };
+    image.addEventListener('pointerdown', openOnPress);
+    image.addEventListener('mousedown', openOnPress);
+    image.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (suppressNextClick) {
+        suppressNextClick = false;
+        return;
+      }
+      this.onOpen?.(image);
+    });
+    image.addEventListener('keydown', (event) => {
+      if (event.key !== 'Enter' && event.key !== ' ') {
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      this.onOpen?.(image);
+    });
     image.addEventListener('error', () => {
       container.textContent = `${this.alt}（图片加载失败）`;
     });
@@ -1195,6 +1342,8 @@ function createLivePreviewPlugin(options) {
 
 function createNoticeNoteEditor(options) {
   let internalUpdate = false;
+  let columnDrag = null;
+  let altKeyDown = false;
   const view = new EditorView({
     parent: options.parent,
     state: EditorState.create({
@@ -1203,30 +1352,9 @@ function createNoticeNoteEditor(options) {
         history(),
         markdown({ base: markdownLanguage }),
         syntaxHighlighting(markdownHighlight),
+        EditorState.allowMultipleSelections.of(true),
+        drawSelection(),
         EditorView.domEventHandlers({
-          mousedown: (event, view) => {
-            if (event.button !== 0) {
-              return false;
-            }
-            // 命中图片本身，或图片所在行的空白区域（图片上下的边距等）
-            const wrapper = event.target?.closest?.('.cm-rendered-image')
-              || event.target?.closest?.('.cm-line')?.querySelector?.('.cm-rendered-image');
-            if (!wrapper) {
-              return false;
-            }
-            const rect = wrapper.getBoundingClientRect();
-            const clickedBottomHalf = event.clientY >= rect.top + rect.height / 2;
-            if (clickedBottomHalf) {
-              const pos = view.posAtDOM(wrapper);
-              if (pos != null && pos >= 0) {
-                const lineEnd = view.state.doc.lineAt(pos).to;
-                view.focus();
-                view.dispatch({ selection: { anchor: lineEnd } });
-              }
-            }
-            // 返回 true 以 preventDefault，阻止浏览器/编辑器默认的光标定位
-            return true;
-          },
           paste: (event, view) => {
             const imageFile = [...(event.clipboardData?.files || [])]
               .find((file) => file.type.startsWith('image/'));
@@ -1292,6 +1420,95 @@ function createNoticeNoteEditor(options) {
       ]
     })
   });
+  const updateColumnDrag = (event) => {
+    if (!columnDrag) {
+      return;
+    }
+    if (event.type.startsWith('pointer')
+      && columnDrag.pointerId !== null
+      && event.pointerId !== columnDrag.pointerId) {
+      return;
+    }
+    const head = getColumnPosition(view, event);
+    if (!head) {
+      return;
+    }
+    const selection = buildColumnSelection(view, columnDrag.anchor, head);
+    if (!view.state.selection.eq(selection)) {
+      view.dispatch({ selection, scrollIntoView: true });
+    }
+  };
+
+  const finishColumnDrag = (event) => {
+    if (event?.type === 'blur') {
+      altKeyDown = false;
+    }
+    if (!columnDrag) {
+      return;
+    }
+    if (event?.type.startsWith('pointer')
+      && event.pointerId != null
+      && columnDrag.pointerId !== null
+      && event.pointerId !== columnDrag.pointerId) {
+      return;
+    }
+    const pointerId = columnDrag.pointerId;
+    columnDrag = null;
+    if (pointerId !== null && view.dom.hasPointerCapture?.(pointerId)) {
+      view.dom.releasePointerCapture(pointerId);
+    }
+  };
+
+  const rememberAltKey = (event) => {
+    if (event.key === 'Alt') {
+      altKeyDown = event.type === 'keydown';
+    }
+  };
+
+  const startColumnDrag = (event) => {
+    if (columnDrag) {
+      if (event.button === 0) {
+        event.preventDefault();
+        event.stopPropagation();
+      }
+      return;
+    }
+    if (event.button !== 0 || !(event.altKey || altKeyDown)) {
+      return;
+    }
+    const anchor = getColumnPosition(view, event);
+    if (!anchor) {
+      return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+    view.focus();
+    columnDrag = {
+      anchor,
+      pointerId: event.pointerId ?? null
+    };
+    if (event.pointerId != null) {
+      view.dom.setPointerCapture?.(event.pointerId);
+    }
+    updateColumnDrag(event);
+  };
+
+  view.dom.addEventListener('pointerdown', startColumnDrag, true);
+  view.dom.addEventListener('mousedown', startColumnDrag, true);
+  view.dom.addEventListener('pointermove', updateColumnDrag, true);
+  view.dom.addEventListener('mousemove', updateColumnDrag, true);
+  view.dom.addEventListener('pointerup', finishColumnDrag, true);
+  view.dom.addEventListener('mouseup', finishColumnDrag, true);
+  view.dom.addEventListener('pointercancel', finishColumnDrag, true);
+  window.addEventListener('pointermove', updateColumnDrag, true);
+  window.addEventListener('mousemove', updateColumnDrag, true);
+  window.addEventListener('pointerup', finishColumnDrag, true);
+  window.addEventListener('mouseup', finishColumnDrag, true);
+  window.addEventListener('pointercancel', finishColumnDrag, true);
+  window.addEventListener('keydown', rememberAltKey, true);
+  window.addEventListener('keyup', rememberAltKey, true);
+  window.addEventListener('blur', finishColumnDrag);
 
   const contentDOM = view.contentDOM;
   contentDOM.addEventListener('paste', (event) => {
@@ -1424,6 +1641,22 @@ function createNoticeNoteEditor(options) {
       });
     },
     destroy() {
+      finishColumnDrag();
+      view.dom.removeEventListener('pointerdown', startColumnDrag, true);
+      view.dom.removeEventListener('mousedown', startColumnDrag, true);
+      view.dom.removeEventListener('pointermove', updateColumnDrag, true);
+      view.dom.removeEventListener('mousemove', updateColumnDrag, true);
+      view.dom.removeEventListener('pointerup', finishColumnDrag, true);
+      view.dom.removeEventListener('mouseup', finishColumnDrag, true);
+      view.dom.removeEventListener('pointercancel', finishColumnDrag, true);
+      window.removeEventListener('pointermove', updateColumnDrag, true);
+      window.removeEventListener('mousemove', updateColumnDrag, true);
+      window.removeEventListener('pointerup', finishColumnDrag, true);
+      window.removeEventListener('mouseup', finishColumnDrag, true);
+      window.removeEventListener('pointercancel', finishColumnDrag, true);
+      window.removeEventListener('keydown', rememberAltKey, true);
+      window.removeEventListener('keyup', rememberAltKey, true);
+      window.removeEventListener('blur', finishColumnDrag);
       view.destroy();
     }
   };
