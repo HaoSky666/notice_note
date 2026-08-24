@@ -2,6 +2,7 @@ import {
   EditorSelection,
   EditorState,
   RangeSetBuilder,
+  StateEffect,
   StateField,
   countColumn,
   findColumn
@@ -33,6 +34,94 @@ const markdownHighlight = HighlightStyle.define([
   { tag: tags.quote, color: '#5f594e' },
   { tag: tags.link, color: '#2f6b55' }
 ]);
+
+// ---- 糊住区间（{{ ... }}）：默认遮挡，点击显示明文 ----
+
+const BLUR_REGION_PATTERN = /\{\{([\s\S]*?)\}\}/g;
+const revealTick = StateEffect.define();
+
+const revealTickField = StateField.define({
+  create: () => 0,
+  update: (value, transaction) => {
+    return transaction.effects.some((effect) => effect.is(revealTick)) ? value + 1 : value;
+  }
+});
+
+function hashString(str) {
+  let hash = 5381;
+  for (let i = 0; i < str.length; i += 1) {
+    hash = ((hash << 5) + hash + str.charCodeAt(i)) >>> 0;
+  }
+  return hash.toString(36);
+}
+
+function collectBlurRegions(doc) {
+  const text = doc.toString();
+  const regions = [];
+  BLUR_REGION_PATTERN.lastIndex = 0;
+  let match;
+  while ((match = BLUR_REGION_PATTERN.exec(text)) !== null) {
+    const content = match[1];
+    if (!content.trim()) {
+      continue;
+    }
+    regions.push({
+      from: match.index,
+      to: match.index + match[0].length,
+      content,
+      hash: hashString(match[0])
+    });
+  }
+  return regions;
+}
+
+function getRegionKey(region, options) {
+  const scope = options.revealScope?.() || '';
+  return `${scope}:${region.hash}`;
+}
+
+function isRegionRevealed(region, options) {
+  return Boolean(options.revealState?.revealed?.has(getRegionKey(region, options)));
+}
+
+function toggleRegionReveal(region, options) {
+  const state = options.revealState;
+  if (!state) {
+    return;
+  }
+  const key = getRegionKey(region, options);
+  if (state.revealed.has(key)) {
+    state.revealed.delete(key);
+  } else {
+    state.revealed.set(key, true);
+  }
+  options.onRevealToggle?.();
+}
+
+// 从渲染范围中扣除未展开的糊住区间，避免行循环与区间 replace 重叠
+function subtractRanges(ranges, subtracts) {
+  const result = [];
+  for (const range of ranges) {
+    const cuts = subtracts
+      .filter((item) => item.from < range.to && item.to > range.from)
+      .map((item) => ({
+        from: Math.max(item.from, range.from),
+        to: Math.min(item.to, range.to)
+      }))
+      .sort((left, right) => left.from - right.from);
+    let cursor = range.from;
+    for (const cut of cuts) {
+      if (cut.from > cursor) {
+        result.push({ from: cursor, to: cut.from });
+      }
+      cursor = Math.max(cursor, cut.to);
+    }
+    if (cursor < range.to) {
+      result.push({ from: cursor, to: range.to });
+    }
+  }
+  return result;
+}
 
 function isRangeActive(view, from, to) {
   if (!view.hasFocus) {
@@ -398,12 +487,54 @@ function buildLivePreviewDecorations(view, options = {}, codeBlocks = []) {
   }
 
   const items = [];
-  const renderRanges = expandVisibleRangesForCodeBlocks(view.state.doc, view.visibleRanges, codeBlocks);
+  const blurRegions = collectBlurRegions(view.state.doc);
+  const hiddenRegions = blurRegions.filter((region) => !isRegionRevealed(region, options));
+  const renderRanges = subtractRanges(
+    expandVisibleRangesForCodeBlocks(view.state.doc, view.visibleRanges, codeBlocks),
+    hiddenRegions.map((region) => ({ from: region.from, to: region.to }))
+  );
+
+  // 未展开的糊住区间：整体替换为遮挡块
+  for (const region of hiddenRegions) {
+    if (!view.visibleRanges.some((range) => region.from < range.to && region.to > range.from)) {
+      continue;
+    }
+    addDecoration(
+      items,
+      region.from,
+      region.to,
+      Decoration.replace({ widget: new BlurRevealWidget(region, options) })
+    );
+  }
+
   for (const { from, to } of renderRanges) {
     let pos = from;
     while (pos <= to) {
       const line = view.state.doc.lineAt(pos);
       const text = line.text;
+
+      // 展开态区间：隐藏 {{ }} 标记符号，区间开头提供「重新隐藏」按钮
+      for (const region of blurRegions) {
+        if (!isRegionRevealed(region, options)) {
+          continue;
+        }
+        if (region.from >= line.from && region.from + 2 <= line.to) {
+          addDecoration(
+            items,
+            region.from,
+            region.from + 2,
+            Decoration.replace({ widget: new BlurLockWidget(region, options) })
+          );
+        }
+        if (region.to >= line.from + 2 && region.to <= line.to) {
+          addDecoration(
+            items,
+            region.to - 2,
+            region.to,
+            Decoration.replace({ widget: new EmptyWidget() })
+          );
+        }
+      }
 
       const codeBlock = codeBlocks.find((block) => {
         return line.number >= block.startLine && line.number <= block.endLine;
@@ -618,6 +749,112 @@ class EmptyWidget extends WidgetType {
     const span = document.createElement('span');
     span.className = 'cm-empty-markdown-widget';
     return span;
+  }
+}
+
+class BlurRevealWidget extends WidgetType {
+  constructor(region, options) {
+    super();
+    this.region = region;
+    this.options = options;
+  }
+
+  eq(other) {
+    return other.region.hash === this.region.hash && other.options === this.options;
+  }
+
+  toDOM() {
+    const { content } = this.region;
+    const isImageOnly = /^\s*(?:!\[[^\]]*\]\([^)]+\)\s*)+$/.test(content);
+    const wrapper = document.createElement('span');
+    wrapper.className = 'cm-blur-reveal';
+    wrapper.tabIndex = 0;
+    wrapper.setAttribute('role', 'button');
+    wrapper.setAttribute('aria-label', '隐藏内容，点击显示明文');
+
+    const text = document.createElement('span');
+    text.className = 'cm-blur-reveal-text';
+    text.textContent = isImageOnly ? '🖼 图片已隐藏' : content;
+    text.setAttribute('aria-hidden', 'true');
+
+    const hint = document.createElement('span');
+    hint.className = 'cm-blur-reveal-hint';
+    hint.textContent = '🔒 点击显示';
+
+    wrapper.append(text, hint);
+
+    const toggle = () => toggleRegionReveal(this.region, this.options);
+    wrapper.addEventListener('pointerdown', (event) => {
+      if (event.button !== 0) {
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+    });
+    wrapper.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      toggle();
+    });
+    wrapper.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        event.stopPropagation();
+        toggle();
+      }
+    });
+    return wrapper;
+  }
+
+  ignoreEvent() {
+    return true;
+  }
+}
+
+class BlurLockWidget extends WidgetType {
+  constructor(region, options) {
+    super();
+    this.region = region;
+    this.options = options;
+  }
+
+  eq(other) {
+    return other.region.hash === this.region.hash && other.options === this.options;
+  }
+
+  toDOM() {
+    const button = document.createElement('span');
+    button.className = 'cm-blur-lock';
+    button.textContent = '🔒';
+    button.title = '点击重新隐藏';
+    button.tabIndex = 0;
+    button.setAttribute('role', 'button');
+    button.setAttribute('aria-label', '点击重新隐藏内容');
+    button.addEventListener('pointerdown', (event) => {
+      if (event.button !== 0) {
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+    });
+    const toggle = () => toggleRegionReveal(this.region, this.options);
+    button.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      toggle();
+    });
+    button.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        event.stopPropagation();
+        toggle();
+      }
+    });
+    return button;
+  }
+
+  ignoreEvent() {
+    return true;
   }
 }
 
@@ -1330,7 +1567,10 @@ function createLivePreviewPlugin(options) {
       if (this.wasComposing || update.docChanged) {
         this.codeBlocks = collectFencedCodeBlocks(update.state.doc);
       }
-      if (this.wasComposing || update.docChanged || update.selectionSet || update.viewportChanged || update.focusChanged) {
+      const revealTicked = update.transactions.some((transaction) => {
+        return transaction.effects.some((effect) => effect.is(revealTick));
+      });
+      if (this.wasComposing || update.docChanged || update.selectionSet || update.viewportChanged || update.focusChanged || revealTicked) {
         this.decorations = buildLivePreviewDecorations(update.view, options, this.codeBlocks);
       }
       this.wasComposing = false;
@@ -1344,12 +1584,14 @@ function createNoticeNoteEditor(options) {
   let internalUpdate = false;
   let columnDrag = null;
   let altKeyDown = false;
+  const editorOptions = { ...options };
   const view = new EditorView({
-    parent: options.parent,
+    parent: editorOptions.parent,
     state: EditorState.create({
-      doc: options.initialValue || '',
+      doc: editorOptions.initialValue || '',
       extensions: [
         history(),
+        revealTickField,
         markdown({ base: markdownLanguage }),
         syntaxHighlighting(markdownHighlight),
         EditorState.allowMultipleSelections.of(true),
@@ -1358,16 +1600,16 @@ function createNoticeNoteEditor(options) {
           paste: (event, view) => {
             const imageFile = [...(event.clipboardData?.files || [])]
               .find((file) => file.type.startsWith('image/'));
-            if (imageFile && typeof options.onPasteImage === 'function') {
+            if (imageFile && typeof editorOptions.onPasteImage === 'function') {
               event.preventDefault();
-              options.onPasteImage(imageFile)
+              editorOptions.onPasteImage(imageFile)
                 .then((markdownText) => {
                   if (markdownText) {
                     insertMarkdownAtSelection(view, markdownText);
                   }
                 })
                 .catch((error) => {
-                  options.onError?.(error);
+                  editorOptions.onError?.(error);
                 });
               return true;
             }
@@ -1377,17 +1619,17 @@ function createNoticeNoteEditor(options) {
         }),
         keymap.of([
           indentWithTab,
-          { key: 'Mod-a', run: (editorView) => selectCurrentCodeBlock(editorView, options) },
+          { key: 'Mod-a', run: (editorView) => selectCurrentCodeBlock(editorView, editorOptions) },
           ...defaultKeymap,
           ...historyKeymap
         ]),
-        placeholder(options.placeholder || ''),
-        createTablePreviewField(options),
-        createLivePreviewPlugin(options),
+        placeholder(editorOptions.placeholder || ''),
+        createTablePreviewField(editorOptions),
+        createLivePreviewPlugin(editorOptions),
         EditorView.lineWrapping,
         EditorView.updateListener.of((update) => {
           if (update.docChanged && !internalUpdate) {
-            options.onChange?.(view.state.doc.toString());
+            editorOptions.onChange?.(view.state.doc.toString());
           }
         }),
         EditorView.theme({
@@ -1420,6 +1662,11 @@ function createNoticeNoteEditor(options) {
       ]
     })
   });
+
+  editorOptions.onRevealToggle = () => {
+    view.dispatch({ effects: revealTick.of(null) });
+  };
+
   const updateColumnDrag = (event) => {
     if (!columnDrag) {
       return;
@@ -1513,20 +1760,20 @@ function createNoticeNoteEditor(options) {
   const contentDOM = view.contentDOM;
   contentDOM.addEventListener('paste', (event) => {
     const htmlText = event.clipboardData?.getData('text/html') || '';
-    if (!htmlText.includes('<img') || typeof options.onPasteHtml !== 'function') {
+    if (!htmlText.includes('<img') || typeof editorOptions.onPasteHtml !== 'function') {
       return;
     }
     event.preventDefault();
     event.stopPropagation();
     const plainText = event.clipboardData?.getData('text/plain') || '';
-    options.onPasteHtml(htmlText, plainText)
+    editorOptions.onPasteHtml(htmlText, plainText)
       .then((markdownText) => {
         if (markdownText) {
           insertMarkdownAtSelection(view, markdownText);
         }
       })
       .catch((error) => {
-        options.onError?.(error);
+        editorOptions.onError?.(error);
       });
   }, true);
 

@@ -177,6 +177,7 @@ let storageInfo = null;
 let appSettings = null;
 let markdownEditor = null;
 let isRenderingEditor = false;
+const blurRevealState = { revealed: new Map() };
 let pdfLoadingTask = null;
 let pdfDocument = null;
 let pdfPreviewKey = null;
@@ -5285,6 +5286,8 @@ function createMarkdownEditor() {
     initialValue: "",
     placeholder: "点击这里记录 Markdown 笔记。",
     isPlainText: () => ["txt", "json"].includes(getActiveNote()?.fileType),
+    revealState: blurRevealState,
+    revealScope: () => getActiveNote()?.id || "",
     resolveImageSrc: resolveNoteImageSrc,
     onOpenImage: openImageLightbox,
     onOpenLink: (href) => {
