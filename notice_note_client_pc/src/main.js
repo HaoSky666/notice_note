@@ -364,14 +364,14 @@ function markInternalNoteWrite(filePath, content) {
     return;
   }
   const key = getNoteMetadataKey(filePath).toLowerCase();
-  const expiresAt = Date.now() + 2000;
+  const expiresAt = Date.now() + 5000;
   const hash = createHash('sha256').update(content).digest('hex');
   internalNoteWrites.set(key, { expiresAt, hash });
   setTimeout(() => {
     if (internalNoteWrites.get(key)?.expiresAt === expiresAt) {
       internalNoteWrites.delete(key);
     }
-  }, 2100);
+  }, 5100);
 }
 
 async function isExpectedInternalNoteWrite(filePath, key) {
@@ -384,11 +384,12 @@ async function isExpectedInternalNoteWrite(filePath, key) {
     const content = await fs.readFile(filePath);
     const hash = createHash('sha256').update(content).digest('hex');
     if (hash === expected.hash) {
-      internalNoteWrites.delete(key);
+      // 一次原子写入可能触发多次监听事件，保留标记以便全部忽略。
       return true;
     }
   } catch {
-    // 文件移动或删除时按外部变化处理。
+    // 原子替换期间目标文件可能短暂不存在，保留标记等待后续事件。
+    return true;
   }
   internalNoteWrites.delete(key);
   return false;
@@ -2702,7 +2703,18 @@ function watchPdfFiles() {
     pdfWatcher = watch(getNotesPath(), { recursive: true }, (_eventType, fileName) => {
       const relativePath = String(fileName || '').split(path.sep).join('/');
       const extension = path.extname(relativePath).toLowerCase();
-      if (relativePath.toLowerCase().startsWith(`${APP_DATA_DIR_NAME}/`)) {
+      const baseName = path.basename(relativePath).toLowerCase();
+      const normalizedRelativePath = relativePath.toLowerCase();
+      if (
+        normalizedRelativePath === APP_DATA_DIR_NAME
+        || normalizedRelativePath.startsWith(`${APP_DATA_DIR_NAME}/`)
+      ) {
+        return;
+      }
+      if (
+        baseName.startsWith('.')
+        && (baseName.endsWith('.tmp') || baseName.endsWith('.rollback'))
+      ) {
         return;
       }
       if (extension === '.pdf') {
@@ -2960,7 +2972,7 @@ async function upsertNote(_event, input) {
     await saveConfig();
   }
   scheduleReminderCheck();
-  sendNotesChanged();
+  // 当前编辑器已直接收到保存结果，文件监听会忽略这次内部写入，避免重复刷新列表。
   return targetNote;
 }
 

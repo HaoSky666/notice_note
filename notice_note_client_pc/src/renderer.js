@@ -193,6 +193,8 @@ let imageZoom = 1;
 let workspaceTabs = [];
 let activeWorkspaceTabKey = null;
 let draggedWorkspaceTabKey = null;
+let workspaceTabDragStartedAt = 0;
+let workspaceTabPointerDrag = null;
 let workspaceContentRenderVersion = 0;
 const workspaceTabViewStates = new Map();
 let filePreviewVersion = 0;
@@ -909,6 +911,9 @@ function syncSidebarToWorkspaceTab(tab) {
 }
 
 function renderWorkspaceTabs() {
+  if (draggedWorkspaceTabKey) {
+    return;
+  }
   workspaceTabsRoot.innerHTML = "";
   locateCurrentFileButton.disabled = !activeWorkspaceTabKey;
 
@@ -922,7 +927,6 @@ function renderWorkspaceTabs() {
     const item = document.createElement("div");
     item.className = `workspace-tab${tabKey === activeWorkspaceTabKey ? " is-active" : ""}`;
     item.dataset.tabKey = tabKey;
-    item.draggable = true;
 
     const mainButton = document.createElement("button");
     mainButton.className = "workspace-tab-main";
@@ -971,58 +975,117 @@ function renderWorkspaceTabs() {
     closeButton.textContent = "×";
 
     mainButton.append(icon, label);
-    mainButton.addEventListener("pointerdown", (event) => {
-      if (event.button !== 0) {
+    mainButton.addEventListener("click", () => {
+      if (Date.now() - workspaceTabDragStartedAt < 250) {
         return;
       }
-      event.preventDefault();
       activateWorkspaceTab(tab.type, tab.id).catch(console.error);
     });
-    mainButton.addEventListener("click", () => {
-      activateWorkspaceTab(tab.type, tab.id).catch(console.error);
+    mainButton.addEventListener("pointerdown", (event) => {
+      beginWorkspaceTabPointerDrag(event, item, tabKey);
     });
+    mainButton.addEventListener("pointermove", updateWorkspaceTabPointerDrag);
+    mainButton.addEventListener("pointerup", finishWorkspaceTabPointerDrag);
+    mainButton.addEventListener("pointercancel", cancelWorkspaceTabPointerDrag);
     closeButton.addEventListener("click", () => {
       closeWorkspaceTab(tabKey).catch(console.error);
-    });
-    item.addEventListener("dragstart", (event) => {
-      if (event.target.closest(".workspace-tab-close")) {
-        event.preventDefault();
-        return;
-      }
-      draggedWorkspaceTabKey = tabKey;
-      event.dataTransfer.effectAllowed = "move";
-      event.dataTransfer.setData("text/plain", tabKey);
-      requestAnimationFrame(() => item.classList.add("is-dragging"));
-    });
-    item.addEventListener("dragover", (event) => {
-      if (!draggedWorkspaceTabKey || draggedWorkspaceTabKey === tabKey) {
-        return;
-      }
-      event.preventDefault();
-      event.dataTransfer.dropEffect = "move";
-      clearWorkspaceTabDropIndicators();
-      const placeAfter =
-        event.clientX >=
-        item.getBoundingClientRect().left + item.offsetWidth / 2;
-      item.classList.add(placeAfter ? "is-drop-after" : "is-drop-before");
-    });
-    item.addEventListener("drop", (event) => {
-      if (!draggedWorkspaceTabKey || draggedWorkspaceTabKey === tabKey) {
-        return;
-      }
-      event.preventDefault();
-      const placeAfter = item.classList.contains("is-drop-after");
-      reorderWorkspaceTabs(draggedWorkspaceTabKey, tabKey, placeAfter);
-      draggedWorkspaceTabKey = null;
-    });
-    item.addEventListener("dragend", () => {
-      draggedWorkspaceTabKey = null;
-      clearWorkspaceTabDropIndicators();
     });
     item.append(mainButton, closeButton);
     workspaceTabsRoot.append(item);
   }
   renderDailyReviewBar();
+}
+
+function beginWorkspaceTabPointerDrag(event, item, tabKey) {
+  if (event.button !== 0 || workspaceTabPointerDrag) {
+    return;
+  }
+  workspaceTabPointerDrag = {
+    pointerId: event.pointerId,
+    source: event.currentTarget,
+    item,
+    tabKey,
+    startX: event.clientX,
+    startY: event.clientY,
+    targetTabKey: null,
+    placeAfter: false,
+    started: false,
+  };
+  event.currentTarget.setPointerCapture(event.pointerId);
+}
+
+function updateWorkspaceTabPointerDrag(event) {
+  const drag = workspaceTabPointerDrag;
+  if (!drag || drag.pointerId !== event.pointerId) {
+    return;
+  }
+
+  if (!drag.started) {
+    const distance = Math.hypot(
+      event.clientX - drag.startX,
+      event.clientY - drag.startY,
+    );
+    if (distance < 6) {
+      return;
+    }
+    drag.started = true;
+    draggedWorkspaceTabKey = drag.tabKey;
+    workspaceTabDragStartedAt = Date.now();
+    drag.item.classList.add("is-dragging");
+  }
+
+  event.preventDefault();
+  clearWorkspaceTabDropIndicators();
+  drag.item.classList.add("is-dragging");
+  const target = document
+    .elementFromPoint(event.clientX, event.clientY)
+    ?.closest(".workspace-tab");
+  const targetTabKey = target?.dataset.tabKey || null;
+  if (!target || !targetTabKey || targetTabKey === drag.tabKey) {
+    drag.targetTabKey = null;
+    return;
+  }
+
+  const bounds = target.getBoundingClientRect();
+  drag.targetTabKey = targetTabKey;
+  drag.placeAfter = event.clientX >= bounds.left + bounds.width / 2;
+  target.classList.add(drag.placeAfter ? "is-drop-after" : "is-drop-before");
+}
+
+function finishWorkspaceTabPointerDrag(event) {
+  const drag = workspaceTabPointerDrag;
+  if (!drag || drag.pointerId !== event.pointerId) {
+    return;
+  }
+  updateWorkspaceTabPointerDrag(event);
+  if (drag.source.hasPointerCapture(event.pointerId)) {
+    drag.source.releasePointerCapture(event.pointerId);
+  }
+  workspaceTabPointerDrag = null;
+  draggedWorkspaceTabKey = null;
+  clearWorkspaceTabDropIndicators();
+  if (!drag.started) {
+    return;
+  }
+
+  event.preventDefault();
+  workspaceTabDragStartedAt = Date.now();
+  if (drag.targetTabKey) {
+    reorderWorkspaceTabs(drag.tabKey, drag.targetTabKey, drag.placeAfter);
+  }
+}
+
+function cancelWorkspaceTabPointerDrag(event) {
+  const drag = workspaceTabPointerDrag;
+  if (!drag || drag.pointerId !== event.pointerId) {
+    return;
+  }
+  if (drag.source.hasPointerCapture(event.pointerId)) {
+    drag.source.releasePointerCapture(event.pointerId);
+  }
+  workspaceTabPointerDrag = null;
+  draggedWorkspaceTabKey = null;
+  clearWorkspaceTabDropIndicators();
 }
 
 function clearWorkspaceTabDropIndicators() {
@@ -1049,6 +1112,58 @@ function reorderWorkspaceTabs(draggedTabKey, targetTabKey, placeAfter) {
   workspaceTabs.splice(targetIndex + (placeAfter ? 1 : 0), 0, draggedTab);
   renderWorkspaceTabs();
   saveDraftsToStorage();
+}
+
+function updateWorkspaceTabLabel(tabKey, label) {
+  if (!workspaceTabsRoot) {
+    return;
+  }
+  const item = [...workspaceTabsRoot.querySelectorAll("[data-tab-key]")].find(
+    (candidate) => candidate.dataset.tabKey === tabKey,
+  );
+  if (!item) {
+    return;
+  }
+  const labelElement = item.querySelector(".workspace-tab-label");
+  if (labelElement) {
+    labelElement.textContent = label;
+  }
+  const mainButton = item.querySelector(".workspace-tab-main");
+  if (mainButton) {
+    mainButton.title = label;
+  }
+  const closeButton = item.querySelector(".workspace-tab-close");
+  if (closeButton) {
+    closeButton.setAttribute("aria-label", `关闭 ${label}`);
+  }
+}
+
+function updateNoteTitlePresentation(note) {
+  if (!note) {
+    return;
+  }
+
+  const title = note.title || "未命名笔记";
+  const listItem = [...(noteList?.querySelectorAll("[data-note-id]") || [])].find(
+    (candidate) => candidate.dataset.noteId === note.id,
+  );
+  const titleElement = listItem?.querySelector(".note-title-row > strong");
+  if (titleElement) {
+    titleElement.textContent = title;
+    titleElement.title = title;
+  }
+  updateWorkspaceTabLabel(getWorkspaceTabKey("note", note.id), title);
+}
+
+function updateNoteSavedPresentation(note) {
+  updateNoteTitlePresentation(note);
+  const listItem = [...(noteList?.querySelectorAll("[data-note-id]") || [])].find(
+    (candidate) => candidate.dataset.noteId === note?.id,
+  );
+  const modifiedValue = listItem?.querySelectorAll(".note-meta-value")[1];
+  if (modifiedValue && note.updatedAt) {
+    modifiedValue.textContent = formatListDateTime(note.updatedAt);
+  }
 }
 
 function saveDraftsToStorage() {
@@ -2133,23 +2248,11 @@ function renderNoteList() {
     folderMeta.className = "folder-meta";
     folderMeta.append(counts, actions);
     item.append(dragHandle, icon, name, folderMeta);
-    let pointerOpenHandled = false;
     const openFolder = () => {
       openFolderWithAccessCheck(folder.id).catch(console.error);
     };
-    item.addEventListener("pointerdown", (event) => {
-      if (
-        event.button !== 0
-        || event.target.closest(".folder-action-btn, .note-drag-handle")
-      ) {
-        return;
-      }
-      pointerOpenHandled = true;
-      openFolder();
-    });
-    item.addEventListener("click", () => {
-      if (pointerOpenHandled) {
-        pointerOpenHandled = false;
+    item.addEventListener("click", (event) => {
+      if (event.target.closest(".folder-action-btn, .note-drag-handle")) {
         return;
       }
       openFolder();
@@ -2297,21 +2400,9 @@ function renderNoteList() {
       item.append(reminderMeta, createDailyReviewLastTime(note));
     }
 
-    let pointerOpenHandled = false;
     const openNote = () => selectNote(note.id).catch(console.error);
-    item.addEventListener("pointerdown", (event) => {
-      if (
-        event.button !== 0
-        || event.target.closest(".daily-review-toggle, .note-drag-handle")
-      ) {
-        return;
-      }
-      pointerOpenHandled = true;
-      openNote();
-    });
-    item.addEventListener("click", () => {
-      if (pointerOpenHandled) {
-        pointerOpenHandled = false;
+    item.addEventListener("click", (event) => {
+      if (event.target.closest(".daily-review-toggle, .note-drag-handle")) {
         return;
       }
       openNote();
@@ -2332,22 +2423,10 @@ function renderNoteList() {
     item.type = "button";
     item.dataset.fileId = file.id;
     if (file.canOpen) {
-      let pointerOpenHandled = false;
       const openResource = () =>
         selectResourceFile(file.id).catch(console.error);
-      item.addEventListener("pointerdown", (event) => {
-        if (
-          event.button !== 0
-          || event.target.closest(".daily-review-toggle")
-        ) {
-          return;
-        }
-        pointerOpenHandled = true;
-        openResource();
-      });
-      item.addEventListener("click", () => {
-        if (pointerOpenHandled) {
-          pointerOpenHandled = false;
+      item.addEventListener("click", (event) => {
+        if (event.target.closest(".daily-review-toggle")) {
           return;
         }
         openResource();
@@ -5194,10 +5273,6 @@ function mergeIncomingNotes(nextNotes) {
       };
     }),
   );
-
-  renderNoteList();
-  renderReminders();
-  renderWorkspaceTabs();
 }
 
 function createMarkdownEditor() {
@@ -5470,18 +5545,25 @@ function requestNoteSave(noteId) {
       try {
         const snapshot = JSON.parse(JSON.stringify(note));
         const savedNote = await window.noticeNote.saveNote(snapshot);
+        const shouldRefreshSidebar =
+          Boolean(getNoteSearchKeyword())
+          || JSON.stringify(snapshot.reminders) !== JSON.stringify(savedNote.reminders)
+          || snapshot.folderId !== savedNote.folderId
+          || snapshot.isReminderFile !== savedNote.isReminderFile;
         state.lastError = null;
         if (state.generation === generation && !state.dirty) {
           replaceNote(savedNote);
           removeNoteRecovery(noteId);
           state.status = "saved";
+          updateNoteSavedPresentation(savedNote);
+          if (shouldRefreshSidebar) {
+            renderNoteList();
+          }
         }
         if (activeWorkspaceTabKey === getWorkspaceTabKey("note", noteId)) {
           activeNoteId = noteId;
           renderReminders();
         }
-        renderNoteList();
-        renderWorkspaceTabs();
       } catch (error) {
         state.dirty = true;
         state.lastError = error;
@@ -5540,7 +5622,10 @@ function queueSave() {
       draft.title = titleInput.value;
       draft.content = getEditorValue();
       draft.updatedAt = new Date().toISOString();
-      renderWorkspaceTabs();
+      updateWorkspaceTabLabel(
+        getWorkspaceTabKey("draft", activeDraftId),
+        draft.title || "未命名草稿",
+      );
       saveDraftsToStorage();
     }
     return;
@@ -5871,9 +5956,8 @@ titleInput.addEventListener("input", () => {
   const note = getActiveNote();
   if (note) {
     note.title = titleInput.value;
+    updateNoteTitlePresentation(note);
   }
-  renderNoteList();
-  renderWorkspaceTabs();
   queueSave();
 });
 

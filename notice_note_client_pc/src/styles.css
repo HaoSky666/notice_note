@@ -1623,7 +1623,13 @@ border-top: 2px solid #2f6b55;
   gap: 7px;
   background: transparent;
   color: inherit;
-  cursor: pointer;
+  cursor: grab;
+  user-select: none;
+  touch-action: none;
+}
+
+.workspace-tab-main:active {
+  cursor: grabbing;
 }
 
 .workspace-tab-icon {
