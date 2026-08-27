@@ -2853,6 +2853,11 @@ border-top: 2px solid #2f6b55;
   color: #8a651f;
 }
 
+.save-status.is-dirty {
+  color: #c05621;
+  font-weight: 500;
+}
+
 .save-status.is-error {
   color: #b42318;
   font-weight: 600;

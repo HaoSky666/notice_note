@@ -410,6 +410,28 @@
         </footer>
       </div>
     </dialog>
+    <dialog id="unsavedNoteDialog" class="reminder-dialog draft-save-dialog unsaved-note-dialog" aria-labelledby="unsavedNoteDialogTitle">
+      <div class="reminder-manager-card draft-save-card unsaved-note-card">
+        <header class="reminder-manager-heading">
+          <div class="reminder-manager-icon draft-icon-box unsaved-icon-box" aria-hidden="true">
+            ⚠️
+          </div>
+          <div class="reminder-manager-heading-copy">
+            <h2 id="unsavedNoteDialogTitle">未保存的修改</h2>
+            <p id="unsavedNoteDialogDesc">当前笔记包含未保存的修改，是否在关闭前保存？</p>
+          </div>
+          <button id="cancelUnsavedNoteDialogCloseButton" class="reminder-manager-close" type="button" title="关闭" aria-label="关闭">×</button>
+        </header>
+
+        <footer class="draft-save-footer">
+          <button id="discardUnsavedNoteButton" class="secondary-button danger-button" type="button">不保存 (丢弃)</button>
+          <div class="draft-save-footer-right">
+            <button id="cancelUnsavedNoteButton" class="secondary-button" type="button">取消</button>
+            <button id="confirmSaveUnsavedNoteButton" class="primary-button" type="button">保存</button>
+          </div>
+        </footer>
+      </div>
+    </dialog>
     <div id="imageLightbox" class="image-lightbox" role="dialog" aria-modal="true" aria-label="图片预览" hidden>
       <div class="image-lightbox-zoom-controls" aria-label="图片缩放">
         <button id="zoomOutImageLightboxButton" class="image-lightbox-control" type="button" title="缩小" aria-label="缩小图片">−</button>

@@ -127,6 +127,18 @@ const draftFileTypeSelect = document.querySelector("#draftFileTypeSelect");
 const discardDraftButton = document.querySelector("#discardDraftButton");
 const cancelDraftButton = document.querySelector("#cancelDraftButton");
 const confirmSaveDraftButton = document.querySelector("#confirmSaveDraftButton");
+const unsavedNoteDialog = document.querySelector("#unsavedNoteDialog");
+const unsavedNoteDialogTitle = document.querySelector("#unsavedNoteDialogTitle");
+const unsavedNoteDialogDesc = document.querySelector("#unsavedNoteDialogDesc");
+const cancelUnsavedNoteDialogCloseButton = document.querySelector(
+  "#cancelUnsavedNoteDialogCloseButton",
+);
+const discardUnsavedNoteButton = document.querySelector("#discardUnsavedNoteButton");
+const cancelUnsavedNoteButton = document.querySelector("#cancelUnsavedNoteButton");
+const confirmSaveUnsavedNoteButton = document.querySelector(
+  "#confirmSaveUnsavedNoteButton",
+);
+const noteSavedBaselines = new Map();
 const wordOutline = document.querySelector("#wordOutline");
 const wordOutlineList = document.querySelector("#wordOutlineList");
 const wordOutlineToggle = document.querySelector("#wordOutlineToggle");
@@ -959,14 +971,20 @@ function renderWorkspaceTabs() {
           ? "草稿"
           : resource.typeLabel;
 
+    const isNoteDirty =
+      tab.type === "note" && Boolean(noteSaveStates.get(tab.id)?.dirty);
     const label = document.createElement("span");
     label.className = "workspace-tab-label";
-    label.textContent =
+    const tabTitle =
       tab.type === "note"
         ? resource.title || "未命名笔记"
         : tab.type === "draft"
           ? resource.title || "未命名草稿"
           : resource.name;
+    label.textContent = isNoteDirty ? `${tabTitle} •` : tabTitle;
+    if (isNoteDirty) {
+      item.classList.add("is-dirty");
+    }
 
     const closeButton = document.createElement("button");
     closeButton.className = "workspace-tab-close";
@@ -1153,7 +1171,17 @@ function updateNoteTitlePresentation(note) {
     titleElement.textContent = title;
     titleElement.title = title;
   }
-  updateWorkspaceTabLabel(getWorkspaceTabKey("note", note.id), title);
+  const isDirty = Boolean(noteSaveStates.get(note.id)?.dirty);
+  updateWorkspaceTabLabel(
+    getWorkspaceTabKey("note", note.id),
+    isDirty ? `${title} •` : title,
+  );
+  const tabItem = [...(workspaceTabsRoot?.querySelectorAll(".workspace-tab") || [])].find(
+    (candidate) => candidate.dataset.tabKey === getWorkspaceTabKey("note", note.id),
+  );
+  if (tabItem) {
+    tabItem.classList.toggle("is-dirty", isDirty);
+  }
 }
 
 function updateNoteSavedPresentation(note) {
@@ -1530,7 +1558,6 @@ async function activateWorkspaceTab(type, id) {
     return;
   }
 
-  const pendingSave = flushPendingSave();
   if (
     !workspaceTabs.some(
       (item) => getWorkspaceTabKey(item.type, item.id) === tabKey,
@@ -1539,7 +1566,6 @@ async function activateWorkspaceTab(type, id) {
     workspaceTabs.push(tab);
   }
   showWorkspaceTab(tab, { deferContent: true });
-  pendingSave.catch(console.error);
 }
 
 async function closeWorkspaceTab(tabKey) {
@@ -1569,12 +1595,45 @@ async function closeWorkspaceTab(tabKey) {
         draftsMap.delete(tab.id);
       }
     }
+  } else if (tab.type === "note") {
+    const note = notes.find((item) => item.id === tab.id);
+    if (note) {
+      if (activeNoteId === note.id) {
+        note.title = titleInput.value;
+        note.content = getEditorValue();
+      }
+      const saveState = noteSaveStates.get(note.id);
+      if (saveState?.dirty) {
+        const choice = await promptUnsavedNoteClose(note);
+        if (choice === "cancel") {
+          return;
+        } else if (choice === "save") {
+          try {
+            await requestNoteSave(note.id);
+          } catch (error) {
+            alert(`保存失败：${getSaveErrorMessage(error)}`);
+            return;
+          }
+        } else if (choice === "discard") {
+          const baseline = noteSavedBaselines.get(note.id);
+          if (baseline) {
+            note.title = baseline.title;
+            note.content = baseline.content;
+            if (baseline.reminders) {
+              note.reminders = JSON.parse(JSON.stringify(baseline.reminders));
+            }
+          }
+          saveState.dirty = false;
+          saveState.lastError = null;
+          saveState.status = "idle";
+          removeNoteRecovery(note.id);
+          updateNoteSavedPresentation(note);
+        }
+      }
+    }
   }
 
   const isActive = tabKey === activeWorkspaceTabKey;
-  if (isActive) {
-    await flushPendingSave();
-  }
   workspaceTabs.splice(index, 1);
 
   if (!isActive) {
@@ -1602,17 +1661,20 @@ async function closeWorkspaceTab(tabKey) {
 }
 
 async function closeOtherWorkspaceTabs(tabKey) {
-  const tab = workspaceTabs.find(
+  const keepTab = workspaceTabs.find(
     (item) => getWorkspaceTabKey(item.type, item.id) === tabKey,
   );
-  if (!tab) {
+  if (!keepTab) {
     return;
   }
 
-  await flushPendingSave();
-
   for (const item of [...workspaceTabs]) {
-    if (getWorkspaceTabKey(item.type, item.id) !== tabKey && item.type === "draft") {
+    const itemKey = getWorkspaceTabKey(item.type, item.id);
+    if (itemKey === tabKey) {
+      continue;
+    }
+
+    if (item.type === "draft") {
       const draft = draftsMap.get(item.id);
       if (draft) {
         const hasContent = Boolean(
@@ -1621,44 +1683,107 @@ async function closeOtherWorkspaceTabs(tabKey) {
         );
         if (hasContent) {
           showWorkspaceTab(item);
-          openDraftSaveDialog(item.id, getWorkspaceTabKey("draft", item.id));
+          openDraftSaveDialog(item.id, itemKey);
           return;
         } else {
           draftsMap.delete(item.id);
         }
       }
+    } else if (item.type === "note") {
+      const note = notes.find((n) => n.id === item.id);
+      const saveState = note ? noteSaveStates.get(note.id) : null;
+      if (note && saveState?.dirty) {
+        showWorkspaceTab(item);
+        const choice = await promptUnsavedNoteClose(note);
+        if (choice === "cancel") {
+          return;
+        } else if (choice === "save") {
+          try {
+            await requestNoteSave(note.id);
+          } catch (error) {
+            alert(`保存失败：${getSaveErrorMessage(error)}`);
+            return;
+          }
+        } else if (choice === "discard") {
+          const baseline = noteSavedBaselines.get(note.id);
+          if (baseline) {
+            note.title = baseline.title;
+            note.content = baseline.content;
+            if (baseline.reminders) {
+              note.reminders = JSON.parse(JSON.stringify(baseline.reminders));
+            }
+          }
+          saveState.dirty = false;
+          saveState.lastError = null;
+          saveState.status = "idle";
+          removeNoteRecovery(note.id);
+          updateNoteSavedPresentation(note);
+        }
+      }
     }
   }
 
-  workspaceTabs = [tab];
+  workspaceTabs = [keepTab];
   if (tabKey === activeWorkspaceTabKey) {
     renderWorkspaceTabs();
   } else {
-    showWorkspaceTab(tab);
+    showWorkspaceTab(keepTab);
   }
   for (const key of workspaceTabViewStates.keys()) {
     if (key !== tabKey) {
       workspaceTabViewStates.delete(key);
     }
   }
+  saveDraftsToStorage();
 }
 
 async function closeAllWorkspaceTabs() {
-  await flushPendingSave();
-  for (const tab of [...workspaceTabs]) {
-    if (tab.type === "draft") {
-      const draft = draftsMap.get(tab.id);
+  for (const item of [...workspaceTabs]) {
+    const itemKey = getWorkspaceTabKey(item.type, item.id);
+    if (item.type === "draft") {
+      const draft = draftsMap.get(item.id);
       if (draft) {
         const hasContent = Boolean(
           (draft.title && draft.title.trim()) ||
             (draft.content && draft.content.trim()),
         );
         if (hasContent) {
-          showWorkspaceTab(tab);
-          openDraftSaveDialog(tab.id, getWorkspaceTabKey("draft", tab.id));
+          showWorkspaceTab(item);
+          openDraftSaveDialog(item.id, itemKey);
           return;
         } else {
-          draftsMap.delete(tab.id);
+          draftsMap.delete(item.id);
+        }
+      }
+    } else if (item.type === "note") {
+      const note = notes.find((n) => n.id === item.id);
+      const saveState = note ? noteSaveStates.get(note.id) : null;
+      if (note && saveState?.dirty) {
+        showWorkspaceTab(item);
+        const choice = await promptUnsavedNoteClose(note);
+        if (choice === "cancel") {
+          return;
+        } else if (choice === "save") {
+          try {
+            await requestNoteSave(note.id);
+          } catch (error) {
+            alert(`保存失败：${getSaveErrorMessage(error)}`);
+            return;
+          }
+        } else if (choice === "discard") {
+          const baseline = noteSavedBaselines.get(note.id);
+          if (baseline) {
+            note.title = baseline.title;
+            note.content = baseline.content;
+            if (baseline.reminders) {
+              note.reminders = JSON.parse(JSON.stringify(baseline.reminders));
+            }
+          }
+          saveState.dirty = false;
+          saveState.lastError = null;
+          saveState.status = "idle";
+          removeNoteRecovery(note.id);
+          updateNoteSavedPresentation(note);
         }
       }
     }
@@ -1672,6 +1797,7 @@ async function closeAllWorkspaceTabs() {
   activePdfId = null;
   activeResourceId = null;
   renderEditor();
+  saveDraftsToStorage();
 }
 
 function reconcileWorkspaceTabs() {
@@ -5227,8 +5353,33 @@ function isEditingActiveNote() {
 }
 
 function mergeIncomingNotes(nextNotes) {
+  for (const n of nextNotes) {
+    const saveState = noteSaveStates.get(n.id);
+    if (!saveState?.dirty && !saveState?.inflight) {
+      noteSavedBaselines.set(n.id, {
+        title: n.title,
+        content: n.content,
+        reminders: JSON.parse(JSON.stringify(n.reminders || [])),
+      });
+    }
+  }
+
+  const mergedNotes = nextNotes.map((incomingNote) => {
+    const existing = notes.find((n) => n.id === incomingNote.id);
+    const saveState = existing ? noteSaveStates.get(existing.id) : null;
+    if (existing && (saveState?.dirty || saveState?.inflight)) {
+      return {
+        ...incomingNote,
+        title: existing.title,
+        content: existing.content,
+      };
+    }
+    return incomingNote;
+  });
+
+  notes = sortNotes(mergedNotes);
+
   if (activePdfId || activeResourceId) {
-    notes = sortNotes(nextNotes);
     if (reconcileWorkspaceTabs()) {
       return;
     }
@@ -5236,44 +5387,15 @@ function mergeIncomingNotes(nextNotes) {
     return;
   }
 
-  const activeNote = getActiveNote();
-  const activeSaveState = activeNote ? getNoteSaveState(activeNote.id) : null;
-  const shouldKeepDraft =
-    activeNote &&
-    (isEditingActiveNote()
-      || activeSaveState.dirty
-      || Boolean(activeSaveState.inflight)) &&
-    nextNotes.some((note) => note.id === activeNote.id);
-
-  if (!shouldKeepDraft) {
-    notes = sortNotes(nextNotes);
-    if (reconcileWorkspaceTabs()) {
-      return;
-    }
-    // 如果当前活跃的是草稿 Tab，不要调 renderEditor() 重置它，只刷新笔记列表
-    if (activeDraftId) {
-      renderNoteList();
-      renderWorkspaceTabs();
-      return;
-    }
-    renderEditor();
+  if (reconcileWorkspaceTabs()) {
     return;
   }
-
-  const draft = getDraftNote();
-  notes = sortNotes(
-    nextNotes.map((note) => {
-      if (note.id !== activeNote.id) {
-        return note;
-      }
-
-      return {
-        ...note,
-        title: draft.title,
-        content: draft.content,
-      };
-    }),
-  );
+  if (activeDraftId) {
+    renderNoteList();
+    renderWorkspaceTabs();
+    return;
+  }
+  renderEditor();
 }
 
 function createMarkdownEditor() {
@@ -5337,6 +5459,11 @@ function replaceNote(updatedNote) {
   } else {
     notes.unshift(updatedNote);
   }
+  noteSavedBaselines.set(updatedNote.id, {
+    title: updatedNote.title,
+    content: updatedNote.content,
+    reminders: JSON.parse(JSON.stringify(updatedNote.reminders || [])),
+  });
   notes = sortNotes(notes);
 }
 
@@ -5455,7 +5582,6 @@ function restoreNotesFromRecoveryLog() {
     state.generation += 1;
     state.status = "recovered";
     restoredTitles.push(note.title || "未命名笔记");
-    scheduleNoteSave(note.id);
   }
   writeNoteRecoveryLog();
   return restoredTitles;
@@ -5487,9 +5613,9 @@ function renderSaveStatus() {
     saveStatus.classList.add("is-error");
   } else if (state?.dirty) {
     saveStatus.textContent = state.status === "recovered"
-      ? "已恢复未保存内容，等待保存…"
-      : "等待自动保存…";
-    saveStatus.classList.add("is-saving");
+      ? "已恢复未保存内容"
+      : "未保存";
+    saveStatus.classList.add("is-dirty");
   } else if (state?.status === "saved") {
     saveStatus.textContent = "已保存";
   } else {
@@ -5497,29 +5623,20 @@ function renderSaveStatus() {
   }
 }
 
-function markNoteDirty(note, { schedule = true } = {}) {
+function markNoteDirty(note) {
   const state = getNoteSaveState(note.id);
   state.dirty = true;
   state.generation += 1;
   state.lastError = null;
   state.status = "dirty";
   persistNoteRecovery(note);
-  if (schedule) {
-    scheduleNoteSave(note.id);
-  }
+  updateNoteTitlePresentation(note);
   renderSaveStatus();
   return state;
 }
 
 function scheduleNoteSave(noteId) {
-  const state = getNoteSaveState(noteId);
-  clearTimeout(state.timer);
-  state.timer = setTimeout(() => {
-    state.timer = null;
-    requestNoteSave(noteId).catch((error) => {
-      console.error("自动保存笔记失败:", error);
-    });
-  }, 600);
+  // 自动保存已停用，保存由 Ctrl+S 或右上角保存按钮手动触发
 }
 
 function requestNoteSave(noteId) {
@@ -5597,7 +5714,7 @@ async function saveActiveNote({ manual = false } = {}) {
   const state = getNoteSaveState(note.id);
   note.title = draft.title;
   note.content = draft.content;
-  markNoteDirty(note, { schedule: false });
+  markNoteDirty(note);
   if (manual) {
     state.status = "saving";
     renderSaveStatus();
@@ -5611,8 +5728,8 @@ async function flushPendingSave() {
   for (const [noteId, state] of noteSaveStates) {
     clearTimeout(state.timer);
     state.timer = null;
-    if (state.dirty || state.inflight) {
-      pendingSaves.push(requestNoteSave(noteId));
+    if (state.inflight) {
+      pendingSaves.push(state.inflight);
     }
   }
   await Promise.all(pendingSaves);
@@ -5702,6 +5819,11 @@ async function removeReminder(reminderId) {
 
 async function createNote() {
   const note = await window.noticeNote.createNote(activeFolderId);
+  noteSavedBaselines.set(note.id, {
+    title: note.title,
+    content: note.content,
+    reminders: JSON.parse(JSON.stringify(note.reminders || [])),
+  });
   if (!notes.some((item) => item.id === note.id)) {
     notes.unshift(note);
   }
@@ -5716,7 +5838,7 @@ async function refreshNotes() {
     await flushPendingSave();
     const activeFolderPath = getFolderNamePath(activeFolderId);
     const library = await window.noticeNote.refreshLibrary();
-    notes = sortNotes(library.notes);
+    mergeIncomingNotes(library.notes);
     folders = library.folders;
     activeFolderId = resolveFolderIdByNamePath(activeFolderPath, folders);
     pdfFiles = library.pdfFiles;
@@ -5858,6 +5980,13 @@ async function boot() {
   initPdfOutlineResizer();
   createMarkdownEditor();
   notes = sortNotes(await window.noticeNote.listNotes());
+  for (const n of notes) {
+    noteSavedBaselines.set(n.id, {
+      title: n.title,
+      content: n.content,
+      reminders: JSON.parse(JSON.stringify(n.reminders || [])),
+    });
+  }
   folders = await window.noticeNote.listFolders();
   pdfFiles = await window.noticeNote.listPdfs();
   resourceFiles = await window.noticeNote.listFiles();
@@ -5875,7 +6004,7 @@ async function boot() {
   loadDraftsFromStorage();
   if (restoredTitles.length > 0) {
     setTimeout(() => {
-      alert(`已恢复 ${restoredTitles.length} 篇未保存笔记，正在重新保存。`);
+      alert(`已恢复 ${restoredTitles.length} 篇未保存笔记（未保存状态，请确认后保存）。`);
     }, 0);
   }
 
@@ -6267,12 +6396,21 @@ completeDailyReviewButton.addEventListener("click", () => {
 document.addEventListener("keydown", (event) => {
   if (
     (event.ctrlKey || event.metaKey) &&
-    event.key.toLocaleLowerCase("en-US") === "s" &&
-    activeResourceId &&
-    isFileEditingMode
+    event.key.toLocaleLowerCase("en-US") === "s"
   ) {
     event.preventDefault();
-    saveActiveFileChanges().catch(console.error);
+    if (activeResourceId && isFileEditingMode) {
+      saveActiveFileChanges().catch(console.error);
+    } else if (activeDraftId) {
+      saveActiveNote({ manual: true }).catch((error) => {
+        console.error("保存草稿失败:", error);
+      });
+    } else if (activeNoteId) {
+      saveActiveNote({ manual: true }).catch((error) => {
+        console.error("手动保存笔记失败:", error);
+        renderSaveStatus();
+      });
+    }
   } else if (
     (event.ctrlKey || event.metaKey) &&
     event.key.toLocaleLowerCase("en-US") === "f" &&
@@ -6976,6 +7114,69 @@ cancelDraftSaveDialogButton?.addEventListener("click", () => {
   draftSaveDialog.close();
   pendingCloseDraftId = null;
   pendingCloseTabKey = null;
+});
+
+let pendingUnsavedNoteResolve = null;
+
+function promptUnsavedNoteClose(note) {
+  return new Promise((resolve) => {
+    pendingUnsavedNoteResolve = resolve;
+    const title = (note?.title && note.title.trim()) || "未命名笔记";
+    if (unsavedNoteDialogDesc) {
+      unsavedNoteDialogDesc.textContent = `笔记「${title}」有未保存的修改，是否在关闭前保存？`;
+    }
+    if (unsavedNoteDialog) {
+      unsavedNoteDialog.showModal();
+    } else {
+      resolve("discard");
+    }
+  });
+}
+
+confirmSaveUnsavedNoteButton?.addEventListener("click", () => {
+  unsavedNoteDialog?.close();
+  if (pendingUnsavedNoteResolve) {
+    const cb = pendingUnsavedNoteResolve;
+    pendingUnsavedNoteResolve = null;
+    cb("save");
+  }
+});
+
+discardUnsavedNoteButton?.addEventListener("click", () => {
+  unsavedNoteDialog?.close();
+  if (pendingUnsavedNoteResolve) {
+    const cb = pendingUnsavedNoteResolve;
+    pendingUnsavedNoteResolve = null;
+    cb("discard");
+  }
+});
+
+cancelUnsavedNoteButton?.addEventListener("click", () => {
+  unsavedNoteDialog?.close();
+  if (pendingUnsavedNoteResolve) {
+    const cb = pendingUnsavedNoteResolve;
+    pendingUnsavedNoteResolve = null;
+    cb("cancel");
+  }
+});
+
+cancelUnsavedNoteDialogCloseButton?.addEventListener("click", () => {
+  unsavedNoteDialog?.close();
+  if (pendingUnsavedNoteResolve) {
+    const cb = pendingUnsavedNoteResolve;
+    pendingUnsavedNoteResolve = null;
+    cb("cancel");
+  }
+});
+
+unsavedNoteDialog?.addEventListener("cancel", (event) => {
+  event.preventDefault();
+  unsavedNoteDialog.close();
+  if (pendingUnsavedNoteResolve) {
+    const cb = pendingUnsavedNoteResolve;
+    pendingUnsavedNoteResolve = null;
+    cb("cancel");
+  }
 });
 
 applyInterfaceTheme(getInterfaceTheme());
