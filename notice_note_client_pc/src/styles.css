@@ -3435,15 +3435,6 @@ body[data-theme] .cm-rendered-link {
   pointer-events: none;
 }
 
-.cm-blur-reveal-hint {
-  display: block;
-  text-align: center;
-  font-size: 12px;
-  color: #2f6b55;
-  margin-top: 2px;
-  line-height: 1.4;
-}
-
 .cm-blur-lock {
   display: inline-block;
   padding: 0 2px;
@@ -3459,6 +3450,13 @@ body[data-theme] .cm-rendered-link {
   opacity: 1;
 }
 
+.cm-blur-concealed-line {
+  height: 0;
+  min-height: 0;
+  line-height: 0;
+  overflow: hidden;
+}
+
 body[data-theme] .cm-blur-reveal {
   background: color-mix(in srgb, var(--theme-accent) 10%, transparent);
   border-color: color-mix(in srgb, var(--theme-accent) 45%, transparent);
@@ -3466,10 +3464,6 @@ body[data-theme] .cm-blur-reveal {
 
 body[data-theme] .cm-blur-reveal:hover {
   background: color-mix(in srgb, var(--theme-accent) 18%, transparent);
-}
-
-body[data-theme] .cm-blur-reveal-hint {
-  color: var(--theme-accent);
 }
 
 .cm-live-preview-bold {

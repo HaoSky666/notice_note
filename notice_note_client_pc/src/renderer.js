@@ -1520,11 +1520,24 @@ function renderWorkspaceTabContent(tab) {
   }
 }
 
+function clearBlurRevealScope(scope) {
+  if (!scope) {
+    return;
+  }
+  const prefix = `${scope}:`;
+  for (const key of [...blurRevealState.revealed.keys()]) {
+    if (String(key).startsWith(prefix)) {
+      blurRevealState.revealed.delete(key);
+    }
+  }
+}
+
 function showWorkspaceTab(tab, { deferContent = false } = {}) {
   closeViewerSearch();
   const tabKey = getWorkspaceTabKey(tab.type, tab.id);
   if (activeWorkspaceTabKey !== tabKey) {
     saveActiveWorkspaceTabViewState();
+    clearBlurRevealScope(tab.id);
   }
   activeWorkspaceTabKey = tabKey;
   const renderVersion = ++workspaceContentRenderVersion;

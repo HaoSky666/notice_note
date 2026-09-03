@@ -494,17 +494,56 @@ function buildLivePreviewDecorations(view, options = {}, codeBlocks = []) {
     hiddenRegions.map((region) => ({ from: region.from, to: region.to }))
   );
 
-  // 未展开的糊住区间：整体替换为遮挡块
+  // 未展开的糊住区间：整体替换为遮挡块。
+  // 注意：行内 replace 装饰不允许跨行（CodeMirror 会直接抛错导致全部装饰失效），
+  // 因此单行区间整体替换；多行区间拆成逐行替换，被完全吞掉的中间行整行隐藏。
   for (const region of hiddenRegions) {
-    if (!view.visibleRanges.some((range) => region.from < range.to && region.to > range.from)) {
+    const firstLine = view.state.doc.lineAt(region.from);
+    const lastLine = view.state.doc.lineAt(Math.max(region.from, region.to - 1));
+    const overlapsVisible = (from, to) =>
+      view.visibleRanges.some((range) => from < range.to && to > range.from);
+
+    if (firstLine.number === lastLine.number) {
+      if (overlapsVisible(region.from, region.to)) {
+        addDecoration(
+          items,
+          region.from,
+          region.to,
+          Decoration.replace({ widget: new BlurRevealWidget(region, options) })
+        );
+      }
       continue;
     }
-    addDecoration(
-      items,
-      region.from,
-      region.to,
-      Decoration.replace({ widget: new BlurRevealWidget(region, options) })
-    );
+
+    if (overlapsVisible(region.from, Math.min(firstLine.to, region.to))) {
+      addDecoration(
+        items,
+        region.from,
+        firstLine.to,
+        Decoration.replace({ widget: new BlurRevealWidget(region, options) })
+      );
+    }
+    for (let lineNumber = firstLine.number + 1; lineNumber <= lastLine.number; lineNumber += 1) {
+      const line = view.state.doc.line(lineNumber);
+      const segFrom = Math.max(line.from, region.from);
+      const segTo = Math.min(line.to, region.to);
+      if (segTo > segFrom && overlapsVisible(segFrom, segTo)) {
+        addDecoration(
+          items,
+          segFrom,
+          segTo,
+          Decoration.replace({ widget: new EmptyWidget() })
+        );
+      }
+      if (segFrom === line.from && segTo >= line.to) {
+        addDecoration(
+          items,
+          line.from,
+          line.from,
+          Decoration.line({ class: 'cm-blur-concealed-line' })
+        );
+      }
+    }
   }
 
   for (const { from, to } of renderRanges) {
@@ -777,11 +816,7 @@ class BlurRevealWidget extends WidgetType {
     text.textContent = isImageOnly ? '🖼 图片已隐藏' : content;
     text.setAttribute('aria-hidden', 'true');
 
-    const hint = document.createElement('span');
-    hint.className = 'cm-blur-reveal-hint';
-    hint.textContent = '🔒 点击显示';
-
-    wrapper.append(text, hint);
+    wrapper.append(text);
 
     const toggle = () => toggleRegionReveal(this.region, this.options);
     wrapper.addEventListener('pointerdown', (event) => {
