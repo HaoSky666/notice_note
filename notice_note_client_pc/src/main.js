@@ -8,14 +8,11 @@ const {
   Menu,
   Tray,
   clipboard,
-  shell,
-  net: electronNet
+  shell
 } = require('electron');
 const path = require('node:path');
 const { createReadStream, createWriteStream, watch, constants: fsConstants } = require('node:fs');
 const fs = require('node:fs/promises');
-const dns = require('node:dns/promises');
-const nodeNet = require('node:net');
 const { finished } = require('node:stream/promises');
 const {
   createHash,
@@ -29,15 +26,52 @@ const matter = require('gray-matter');
 const mammoth = require('mammoth');
 const WordExtractor = require('word-extractor');
 const ExcelJS = require('exceljs');
+const {
+  pathExists,
+  atomicWriteFile,
+  atomicWriteJson,
+  readJsonWithBackup
+} = require('./lib/fs-utils');
+const {
+  DAILY_REMINDER_TIMES,
+  getLatestDateTime,
+  toLocalDateKey,
+  getReminderSlotDate,
+  getReminderFiredSlots
+} = require('./lib/date-utils');
+const {
+  createEmptyNote,
+  getNoteFileExtension,
+  normalizeNote,
+  normalizeLoadedNote
+} = require('./lib/note-normalize');
+const {
+  serializeSpreadsheetCell,
+  getSpreadsheetMergeMap,
+  escapeHtml
+} = require('./lib/spreadsheet-utils');
+const {
+  MAX_REMOTE_IMAGE_BYTES,
+  isPathInside,
+  downloadRemoteImage,
+  getMimeType
+} = require('./lib/remote-image');
+const {
+  sanitizeFileName,
+  sanitizeNoteFilename,
+  sanitizeFolderName
+} = require('./lib/sanitize');
+const registerNotesIpc = require('./ipc/notes');
+const registerFoldersIpc = require('./ipc/folders');
+const registerFilesIpc = require('./ipc/files');
+const registerImagesIpc = require('./ipc/images');
+const registerStorageIpc = require('./ipc/storage');
+const registerLibraryIpc = require('./ipc/library');
 
 const NOTES_DIR_NAME = 'notes';
 const OLD_NOTE_FILE_NAME = 'notes.json';
 const CONFIG_FILE_NAME = 'config.json';
 const REMINDER_CHECK_INTERVAL = 30 * 1000;
-const MAX_REMOTE_IMAGE_BYTES = 20 * 1024 * 1024;
-const REMOTE_IMAGE_TIMEOUT = 15 * 1000;
-const MAX_REMOTE_IMAGE_REDIRECTS = 5;
-const DAILY_REMINDER_TIMES = ['09:30', '15:00'];
 const IMAGE_ASSET_DIR_NAME = 'notice_note_images';
 const APP_DATA_DIR_NAME = '.notice-note';
 const NOTE_METADATA_FILE_NAME = 'metadata.json';
@@ -75,117 +109,6 @@ let dailyReviewHistory = {};
 let dailyReviewHandledDate = null;
 let dailyReviewDeferred = { date: null, entryKey: null };
 const unlockedFolderIds = new Set();
-
-async function pathExists(filePath) {
-  try {
-    await fs.access(filePath);
-    return true;
-  } catch (error) {
-    if (error.code === 'ENOENT') {
-      return false;
-    }
-    throw error;
-  }
-}
-
-async function replaceFileSafely(tempPath, targetPath) {
-  try {
-    await fs.rename(tempPath, targetPath);
-    return;
-  } catch (error) {
-    if (!['EEXIST', 'EPERM', 'EACCES'].includes(error.code) || !await pathExists(targetPath)) {
-      throw error;
-    }
-  }
-
-  const rollbackPath = path.join(
-    path.dirname(targetPath),
-    `.${path.basename(targetPath)}.${randomUUID()}.rollback`
-  );
-  await fs.rename(targetPath, rollbackPath);
-  try {
-    await fs.rename(tempPath, targetPath);
-    await fs.rm(rollbackPath, { force: true });
-  } catch (error) {
-    try {
-      if (!await pathExists(targetPath)) {
-        await fs.rename(rollbackPath, targetPath);
-      }
-    } catch (rollbackError) {
-      console.error('恢复原文件失败:', targetPath, rollbackError);
-    }
-    throw error;
-  }
-}
-
-async function atomicWriteFile(targetPath, data, options = {}) {
-  const targetDir = path.dirname(targetPath);
-  const tempPath = path.join(targetDir, `.${path.basename(targetPath)}.${randomUUID()}.tmp`);
-  const backupPath = `${targetPath}.bak`;
-  await fs.mkdir(targetDir, { recursive: true });
-
-  let handle;
-  try {
-    handle = await fs.open(tempPath, 'wx', 0o600);
-    await handle.writeFile(data, options.encoding ? { encoding: options.encoding } : undefined);
-    await handle.sync();
-    await handle.close();
-    handle = null;
-
-    if (options.keepBackup && await pathExists(targetPath)) {
-      const backupTempPath = path.join(
-        targetDir,
-        `.${path.basename(targetPath)}.${randomUUID()}.backup.tmp`
-      );
-      try {
-        await fs.copyFile(targetPath, backupTempPath, fsConstants.COPYFILE_EXCL);
-        await replaceFileSafely(backupTempPath, backupPath);
-      } finally {
-        await fs.rm(backupTempPath, { force: true });
-      }
-    }
-
-    await replaceFileSafely(tempPath, targetPath);
-  } finally {
-    if (handle) {
-      await handle.close().catch(() => {});
-    }
-    await fs.rm(tempPath, { force: true }).catch(() => {});
-  }
-}
-
-async function atomicWriteJson(targetPath, value) {
-  await atomicWriteFile(targetPath, JSON.stringify(value, null, 2), {
-    encoding: 'utf8',
-    keepBackup: true
-  });
-}
-
-async function readJsonWithBackup(targetPath, fallbackValue) {
-  const backupPath = `${targetPath}.bak`;
-  let primaryError = null;
-
-  try {
-    return JSON.parse(await fs.readFile(targetPath, 'utf8'));
-  } catch (error) {
-    primaryError = error;
-  }
-
-  try {
-    const backupRaw = await fs.readFile(backupPath, 'utf8');
-    const parsed = JSON.parse(backupRaw);
-    await atomicWriteFile(targetPath, backupRaw, { encoding: 'utf8' });
-    console.warn('已从备份恢复损坏或缺失的 JSON 文件:', targetPath);
-    return parsed;
-  } catch (backupError) {
-    if (primaryError?.code === 'ENOENT' && backupError.code === 'ENOENT') {
-      return fallbackValue;
-    }
-    throw new Error(`无法读取 ${path.basename(targetPath)}，主文件和备份均不可用`, {
-      cause: primaryError
-    });
-  }
-}
 
 if (process.platform === 'win32') {
   app.setAppUserModelId('com.notice-note.app');
@@ -526,31 +449,6 @@ async function backupLegacyMarkdown(filePath, content) {
   }
 }
 
-function sanitizeFileName(fileName) {
-  return String(fileName || 'image')
-    .replace(/[<>:"/\\|?*\x00-\x1F]/g, '_')
-    .replace(/\s+/g, ' ')
-    .trim()
-    || 'image';
-}
-
-function sanitizeNoteFilename(title) {
-  let name = String(title || '未命名笔记')
-    .replace(/[<>:"/\\|?*\x00-\x1F]/g, '_')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .replace(/\.+$/, '');
-  return name || '未命名笔记';
-}
-
-function sanitizeFolderName(name) {
-  return String(name || '新建文件夹')
-    .replace(/[<>:"/\\|?*\x00-\x1F]/g, '_')
-    .replace(/\s+/g, ' ')
-    .trim()
-    || '新建文件夹';
-}
-
 function getFolderPath(folderId) {
   if (!folderId) return getNotesPath();
   const folder = folders.find(f => f.id === folderId);
@@ -830,191 +728,6 @@ function getAppSettings() {
     dailyReviewEnabled,
     dailyReviewTitle: selectedNote?.title || selectedFile?.name || null
   };
-}
-
-function isPathInside(parentPath, targetPath) {
-  const relativePath = path.relative(parentPath, targetPath);
-  return relativePath === '' || (!relativePath.startsWith('..') && !path.isAbsolute(relativePath));
-}
-
-function isPrivateIpv4(address) {
-  const parts = address.split('.').map(Number);
-  if (parts.length !== 4 || parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) {
-    return true;
-  }
-  const [first, second] = parts;
-  return first === 0
-    || first === 10
-    || first === 127
-    || (first === 100 && second >= 64 && second <= 127)
-    || (first === 169 && second === 254)
-    || (first === 172 && second >= 16 && second <= 31)
-    || (first === 192 && second === 168)
-    || (first === 198 && [18, 19].includes(second))
-    || first >= 224;
-}
-
-function isPrivateIpAddress(address) {
-  const normalizedAddress = String(address || '').toLowerCase().split('%')[0];
-  if (nodeNet.isIPv4(normalizedAddress)) {
-    return isPrivateIpv4(normalizedAddress);
-  }
-  if (!nodeNet.isIPv6(normalizedAddress)) {
-    return true;
-  }
-
-  const mappedIpv4 = /^::ffff:(\d+(?:\.\d+){3})$/.exec(normalizedAddress);
-  if (mappedIpv4) {
-    return isPrivateIpv4(mappedIpv4[1]);
-  }
-  const mappedHex = /^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/.exec(normalizedAddress);
-  if (mappedHex) {
-    const value = (Number.parseInt(mappedHex[1], 16) << 16) | Number.parseInt(mappedHex[2], 16);
-    return isPrivateIpv4([
-      (value >>> 24) & 255,
-      (value >>> 16) & 255,
-      (value >>> 8) & 255,
-      value & 255
-    ].join('.'));
-  }
-
-  return normalizedAddress === '::'
-    || normalizedAddress === '::1'
-    || normalizedAddress.startsWith('fc')
-    || normalizedAddress.startsWith('fd')
-    || /^fe[89ab]/.test(normalizedAddress)
-    || normalizedAddress.startsWith('ff');
-}
-
-async function validateRemoteImageUrl(value) {
-  const remoteUrl = new URL(String(value || ''));
-  if (!['http:', 'https:'].includes(remoteUrl.protocol)) {
-    throw new Error('仅支持 HTTP 或 HTTPS 图片地址');
-  }
-  if (remoteUrl.username || remoteUrl.password) {
-    throw new Error('图片地址不能包含登录凭据');
-  }
-
-  const hostname = remoteUrl.hostname.replace(/^\[|\]$/g, '').replace(/\.$/, '').toLowerCase();
-  if (!hostname || hostname === 'localhost' || hostname.endsWith('.localhost')) {
-    throw new Error('不能访问本机或私有网络图片');
-  }
-
-  const ipType = nodeNet.isIP(hostname);
-  const addresses = ipType
-    ? [{ address: hostname }]
-    : await dns.lookup(hostname, { all: true, verbatim: true });
-  if (addresses.length === 0 || addresses.some((item) => isPrivateIpAddress(item.address))) {
-    throw new Error('不能访问本机或私有网络图片');
-  }
-  return remoteUrl;
-}
-
-async function readResponseWithLimit(response, byteLimit) {
-  const contentLength = Number(response.headers.get('content-length'));
-  if (Number.isFinite(contentLength) && contentLength > byteLimit) {
-    throw new Error('远程图片不能超过 20MB');
-  }
-  if (!response.body) {
-    throw new Error('远程图片响应为空');
-  }
-
-  const reader = response.body.getReader();
-  const chunks = [];
-  let totalBytes = 0;
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      totalBytes += value.byteLength;
-      if (totalBytes > byteLimit) {
-        await reader.cancel();
-        throw new Error('远程图片不能超过 20MB');
-      }
-      chunks.push(Buffer.from(value));
-    }
-  } finally {
-    reader.releaseLock();
-  }
-  return Buffer.concat(chunks, totalBytes);
-}
-
-async function downloadRemoteImage(value) {
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), REMOTE_IMAGE_TIMEOUT);
-  try {
-    let currentUrl = await validateRemoteImageUrl(value);
-    for (let redirectCount = 0; redirectCount <= MAX_REMOTE_IMAGE_REDIRECTS; redirectCount += 1) {
-      const response = await electronNet.fetch(currentUrl.href, {
-        redirect: 'manual',
-        signal: controller.signal,
-        headers: { 'User-Agent': 'Mozilla/5.0' }
-      });
-      if ([301, 302, 303, 307, 308].includes(response.status)) {
-        if (redirectCount === MAX_REMOTE_IMAGE_REDIRECTS) {
-          throw new Error('远程图片重定向次数过多');
-        }
-        const location = response.headers.get('location');
-        if (!location) {
-          throw new Error('远程图片重定向地址无效');
-        }
-        await response.body?.cancel();
-        currentUrl = await validateRemoteImageUrl(new URL(location, currentUrl).href);
-        continue;
-      }
-      if (!response.ok) {
-        throw new Error(`下载远程图片失败（HTTP ${response.status}）`);
-      }
-
-      const contentType = (response.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
-      const allowedRemoteImageTypes = new Set([
-        'image/png',
-        'image/jpeg',
-        'image/gif',
-        'image/bmp',
-        'image/webp'
-      ]);
-      if (!allowedRemoteImageTypes.has(contentType)) {
-        throw new Error('远程地址返回的图片类型不受支持');
-      }
-      return {
-        buffer: await readResponseWithLimit(response, MAX_REMOTE_IMAGE_BYTES),
-        contentType
-      };
-    }
-  } catch (error) {
-    if (error.name === 'AbortError') {
-      throw new Error('下载远程图片超时');
-    }
-    throw error;
-  } finally {
-    clearTimeout(timeoutId);
-  }
-  throw new Error('下载远程图片失败');
-}
-
-function getMimeType(filePath) {
-  const extension = path.extname(filePath).toLowerCase();
-  const mimeTypes = {
-    '.html': 'text/html; charset=utf-8',
-    '.css': 'text/css; charset=utf-8',
-    '.js': 'application/javascript; charset=utf-8',
-    '.json': 'application/json; charset=utf-8',
-    '.svg': 'image/svg+xml',
-    '.png': 'image/png',
-    '.jpg': 'image/jpeg',
-    '.jpeg': 'image/jpeg',
-    '.webp': 'image/webp',
-    '.bmp': 'image/bmp',
-    '.ico': 'image/x-icon',
-    '.gif': 'image/gif',
-    '.pdf': 'application/pdf',
-    '.doc': 'application/msword',
-    '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-    '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-    '.zip': 'application/zip'
-  };
-  return mimeTypes[extension] || 'application/octet-stream';
 }
 
 function getFolderNameById(folderId) {
@@ -1364,100 +1077,8 @@ async function lockFolder(_event, folderId) {
   sendPdfFilesChanged();
 }
 
-function createEmptyNote() {
-  const now = new Date().toISOString();
-  return {
-    id: randomUUID(),
-    title: '未命名笔记',
-    content: '',
-    fileType: 'md',
-    reminders: [],
-    createdAt: now,
-    updatedAt: now
-  };
-}
-
-function normalizeNoteFileType(fileType) {
-  return ['txt', 'json'].includes(fileType) ? fileType : 'md';
-}
-
-function getNoteFileExtension(fileType) {
-  return fileType === 'txt' ? '.txt' : fileType === 'json' ? '.json' : '.md';
-}
-
-function isValidDateTime(value) {
-  return typeof value === 'string' && Number.isFinite(Date.parse(value));
-}
-
-function getLatestDateTime(...values) {
-  const validValues = values.filter(isValidDateTime);
-  if (validValues.length === 0) {
-    return null;
-  }
-  return validValues.reduce((latest, value) => {
-    return Date.parse(value) > Date.parse(latest) ? value : latest;
-  });
-}
-
-function padDatePart(value) {
-  return String(value).padStart(2, '0');
-}
-
-function toLocalDateKey(date) {
-  return [
-    date.getFullYear(),
-    padDatePart(date.getMonth() + 1),
-    padDatePart(date.getDate())
-  ].join('-');
-}
-
-function getReminderDate(reminder) {
-  if (typeof reminder.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(reminder.date)) {
-    return reminder.date;
-  }
-
-  const date = new Date(reminder.time);
-  return Number.isNaN(date.getTime()) ? null : toLocalDateKey(date);
-}
-
-function getReminderSlotDate(reminderDate, slot) {
-  return new Date(`${reminderDate}T${slot}:00`);
-}
-
-function getReminderFiredSlots(reminder) {
-  if (Array.isArray(reminder.firedSlots)) {
-    return reminder.firedSlots.filter((slot) => DAILY_REMINDER_TIMES.includes(slot));
-  }
-
-  return reminder.done ? [...DAILY_REMINDER_TIMES] : [];
-}
-
 function sortNotesByCreatedAt() {
   notes.sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
-}
-
-function normalizeLoadedNote(input) {
-  const now = new Date().toISOString();
-  const createdAt = isValidDateTime(input.createdAt)
-    ? input.createdAt
-    : (isValidDateTime(input.updatedAt) ? input.updatedAt : now);
-  const updatedAt = isValidDateTime(input.updatedAt) ? input.updatedAt : createdAt;
-
-  return {
-    id: input.id || randomUUID(),
-    title: String(input.title || '未命名笔记').trim() || '未命名笔记',
-    content: String(input.content || ''),
-    fileType: normalizeNoteFileType(input.fileType),
-    reminders: Array.isArray(input.reminders)
-      ? input.reminders
-        .filter((item) => item && (item.date || item.time))
-        .map(normalizeReminder)
-        .filter((item) => item.date)
-      : [],
-    folderId: input.folderId || null,
-    createdAt,
-    updatedAt
-  };
 }
 
 async function loadFolders() {
@@ -2043,123 +1664,6 @@ function sendPdfFilesChanged() {
   }
 }
 
-function formatSpreadsheetValue(value) {
-  if (value === null || value === undefined) {
-    return '';
-  }
-  if (value instanceof Date) {
-    return value.toLocaleString('zh-CN');
-  }
-  if (typeof value === 'object') {
-    if ('result' in value) {
-      return formatSpreadsheetValue(value.result);
-    }
-    if (Array.isArray(value.richText)) {
-      return value.richText.map((item) => item.text || '').join('');
-    }
-    return value.text || value.hyperlink || JSON.stringify(value);
-  }
-  return String(value);
-}
-
-function getSpreadsheetColor(color) {
-  const argb = color?.argb;
-  if (typeof argb !== 'string' || !/^[0-9a-f]{8}$/i.test(argb)) {
-    return null;
-  }
-  return `#${argb.slice(2)}`;
-}
-
-function serializeSpreadsheetBorder(border) {
-  if (!border?.style) {
-    return null;
-  }
-  return {
-    style: border.style,
-    color: getSpreadsheetColor(border.color)
-  };
-}
-
-function serializeSpreadsheetCell(cell) {
-  const patternFillColors = {
-    gray125: '#e7e7e7',
-    lightGray: '#e2e2e2',
-    mediumGray: '#b7b7b7',
-    darkGray: '#7f7f7f'
-  };
-  const fillColor = cell.fill?.type === 'pattern'
-    ? cell.fill.pattern === 'solid'
-      ? getSpreadsheetColor(cell.fill.fgColor)
-      : patternFillColors[cell.fill.pattern] || null
-    : null;
-  return {
-    value: cell.text || formatSpreadsheetValue(cell.value),
-    style: {
-      fontName: cell.font?.name || null,
-      fontSize: Number(cell.font?.size) || null,
-      bold: Boolean(cell.font?.bold),
-      italic: Boolean(cell.font?.italic),
-      underline: Boolean(cell.font?.underline),
-      strike: Boolean(cell.font?.strike),
-      fontColor: getSpreadsheetColor(cell.font?.color),
-      fillColor,
-      horizontal: cell.alignment?.horizontal || null,
-      vertical: cell.alignment?.vertical || null,
-      wrapText: Boolean(cell.alignment?.wrapText),
-      borders: {
-        top: serializeSpreadsheetBorder(cell.border?.top),
-        right: serializeSpreadsheetBorder(cell.border?.right),
-        bottom: serializeSpreadsheetBorder(cell.border?.bottom),
-        left: serializeSpreadsheetBorder(cell.border?.left)
-      }
-    }
-  };
-}
-
-function parseSpreadsheetCellAddress(address) {
-  const match = /^\$?([A-Z]+)\$?(\d+)$/i.exec(address);
-  if (!match) {
-    return null;
-  }
-  const column = [...match[1].toUpperCase()].reduce((value, letter) => {
-    return value * 26 + letter.charCodeAt(0) - 64;
-  }, 0);
-  return { row: Number(match[2]), column };
-}
-
-function getSpreadsheetMergeMap(worksheet, rowCount, columnCount) {
-  const mergeMap = new Map();
-  for (const range of worksheet.model.merges || []) {
-    const [startAddress, endAddress = startAddress] = range.split(':');
-    const start = parseSpreadsheetCellAddress(startAddress);
-    const end = parseSpreadsheetCellAddress(endAddress);
-    if (!start || !end || start.row > rowCount || start.column > columnCount) {
-      continue;
-    }
-
-    const endRow = Math.min(end.row, rowCount);
-    const endColumn = Math.min(end.column, columnCount);
-    for (let row = start.row; row <= endRow; row++) {
-      for (let column = start.column; column <= endColumn; column++) {
-        const key = `${row}:${column}`;
-        mergeMap.set(key, row === start.row && column === start.column
-          ? { rowSpan: endRow - start.row + 1, columnSpan: endColumn - start.column + 1 }
-          : { skip: true });
-      }
-    }
-  }
-  return mergeMap;
-}
-
-function escapeHtml(str) {
-  return String(str || '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
-}
-
 async function previewResourceFile(fileId) {
   const file = resourceFiles.find((item) => item.id === fileId);
   if (!file || !file.canOpen) {
@@ -2680,38 +2184,6 @@ function sendReminderFired(payload) {
   mainWindow.webContents.send('reminder:fired', payload);
 }
 
-function normalizeReminder(reminder) {
-  const date = getReminderDate(reminder);
-  const firedSlots = getReminderFiredSlots(reminder);
-  return {
-    id: reminder.id || randomUUID(),
-    date,
-    time: reminder.time || (date ? `${date}T09:30:00.000` : null),
-    done: firedSlots.length >= DAILY_REMINDER_TIMES.length,
-    firedAt: reminder.firedAt || null,
-    firedSlots
-  };
-}
-
-function normalizeNote(input) {
-  const now = new Date().toISOString();
-  return {
-    id: input.id || randomUUID(),
-    title: String(input.title || '未命名笔记').trim() || '未命名笔记',
-    content: String(input.content || ''),
-    fileType: normalizeNoteFileType(input.fileType),
-    reminders: Array.isArray(input.reminders)
-      ? input.reminders
-        .filter((item) => item && (item.date || item.time))
-        .map(normalizeReminder)
-        .filter((item) => item.date)
-      : [],
-    folderId: input.folderId || null,
-    createdAt: isValidDateTime(input.createdAt) ? input.createdAt : now,
-    updatedAt: now
-  };
-}
-
 function sendNotesChanged() {
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send('notes:changed', getVisibleNotes());
@@ -3221,270 +2693,89 @@ app.whenReady().then(async () => {
   await settleExpiredReminders();
   // 自动清理无法看见渲染进程中的未落盘草稿，停用后避免误删草稿图片。
 
-  ipcMain.handle('notes:list', () => getVisibleNotes());
-  ipcMain.handle('library:refresh', async () => {
-    await loadNotes();
-    scheduleReminderCheck();
-    return {
-      notes: getVisibleNotes(),
-      folders: getVisibleFolders(),
-      pdfFiles: getVisiblePdfFiles(),
-      resourceFiles: getVisibleResourceFiles()
-    };
-  });
-  ipcMain.handle('pdfs:list', () => getVisiblePdfFiles());
-  ipcMain.handle('files:list', () => getVisibleResourceFiles());
-  ipcMain.handle('files:preview', (_event, fileId) => previewResourceFile(fileId));
-  ipcMain.handle('files:save-word', () => {
-    throw new Error('为避免损坏原文档，应用内 Word 编辑已停用，请使用外部应用编辑');
-  });
-  ipcMain.handle('files:save-spreadsheet', () => {
-    throw new Error('为避免损坏工作表、公式或格式，应用内 Excel 编辑已停用，请使用外部应用编辑');
-  });
-  ipcMain.handle('files:delete', deleteResourceFile);
-  ipcMain.handle('files:move', moveResourceFile);
-  ipcMain.handle('pdfs:refresh', async () => {
-    await loadPdfFiles();
-    if (updateDailyReviewSelection()) {
-      await saveConfig();
-    }
-    return getVisiblePdfFiles();
-  });
-  ipcMain.handle('pdfs:read', async (_event, pdfId) => {
-    const pdf = pdfFiles.find((item) => item.id === pdfId);
-    if (!pdf) {
-      throw new Error('PDF 文件不存在');
-    }
-    assertFolderAccessible(pdf.folderId);
-
-    const buffer = await fs.readFile(pdf.path);
-    return buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength);
-  });
-  ipcMain.handle('notes:save', async (event, input) => createClientNote(await upsertNote(event, input)));
-  ipcMain.handle('notes:delete', async (event, noteId) => {
-    await deleteNote(event, noteId);
-    return getVisibleNotes();
-  });
-  ipcMain.handle('notes:create', async (_event, folderId) => {
-    const normalizedFolderId = folderId || null;
-    assertFolderTargetAccessible(normalizedFolderId);
-    const note = createEmptyNote();
-    note.folderId = normalizedFolderId;
-    await saveNote(note);
-    notes.unshift(note);
-    sortNotesByCreatedAt();
-    sendNotesChanged();
-    return createClientNote(note);
-  });
-  ipcMain.handle('notes:move', async (_event, noteId, folderId) => {
-    const note = notes.find(n => n.id === noteId);
-    if (!note) throw new Error('笔记不存在');
-    assertFolderAccessible(note.folderId);
-    const normalizedFolderId = folderId || null;
-    assertFolderTargetAccessible(normalizedFolderId);
-    if ((note.folderId || null) === normalizedFolderId) {
-      return createClientNote(note);
-    }
-
-    const oldPath = noteFileMap.get(noteId);
-    let newPath = null;
-    if (oldPath) {
-      const targetDir = getFolderPath(normalizedFolderId);
-      await fs.mkdir(targetDir, { recursive: true });
-      const baseName = sanitizeNoteFilename(note.title);
-      const extension = getNoteFileExtension(note.fileType);
-      newPath = await getUniqueFilePath(targetDir, baseName, extension);
-      await fs.rename(oldPath, newPath);
-      noteFileMap.set(noteId, newPath);
-      moveNoteMetadata(oldPath, newPath);
-    }
-
-    const movedNote = {
-      ...note,
-      folderId: normalizedFolderId,
-      updatedAt: new Date().toISOString()
-    };
-    try {
-      await saveNote(movedNote);
-    } catch (error) {
-      if (oldPath && newPath) {
-        try {
-          await fs.rename(newPath, oldPath);
-          noteFileMap.set(noteId, oldPath);
-          moveNoteMetadata(newPath, oldPath);
-        } catch (rollbackError) {
-          console.error('回滚移动笔记失败:', rollbackError);
-        }
-      }
-      throw error;
-    }
-    Object.assign(note, movedNote);
-    sendNotesChanged();
-    return createClientNote(note);
-  });
-  ipcMain.handle('folders:list', () => getVisibleFolders());
-  ipcMain.handle('folders:create', createFolder);
-  ipcMain.handle('folders:rename', renameFolder);
-  ipcMain.handle('folders:delete', deleteFolder);
-  ipcMain.handle('folders:set-password', setFolderPassword);
-  ipcMain.handle('folders:clear-password', clearFolderPassword);
-  ipcMain.handle('folders:unlock', unlockFolder);
-  ipcMain.handle('folders:lock', lockFolder);
-  ipcMain.handle('folders:move', async (_event, folderId, targetFolderId) => {
-    const folder = folders.find(f => f.id === folderId);
-    if (!folder) throw new Error('文件夹不存在');
-    assertFolderAccessible(folderId);
-
-    const normalizedTargetFolderId = targetFolderId || null;
-    assertFolderTargetAccessible(normalizedTargetFolderId);
-    let target = normalizedTargetFolderId
-      ? folders.find((item) => item.id === normalizedTargetFolderId)
-      : null;
-    while (target) {
-      if (target.id === folderId) {
-        throw new Error('不能将文件夹移动到自身或其子文件夹');
-      }
-      target = target.parentId ? folders.find((item) => item.id === target.parentId) : null;
-    }
-    if ((folder.parentId || null) === normalizedTargetFolderId) {
-      return folder;
-    }
-
-    const oldPath = getFolderPath(folderId);
-    const targetDir = getFolderPath(normalizedTargetFolderId);
-    const newPath = path.join(targetDir, folder.name);
-
-    try {
-      await fs.access(newPath);
-      throw new Error('目标目录已存在同名文件夹');
-    } catch (error) {
-      if (error.code !== 'ENOENT') throw error;
-    }
-
-    const previousParentId = folder.parentId;
-    const previousNoteMetadata = structuredClone(noteMetadata);
-    const previousReminderMarks = new Set(reminderFileMarks);
-    const previousNoteFileMap = new Map(noteFileMap);
-    await fs.rename(oldPath, newPath);
-    try {
-      moveNoteMetadataTree(oldPath, newPath);
-      moveResourceReminderFileMarkTree(oldPath, newPath);
-      folder.parentId = normalizedTargetFolderId;
-      await saveNoteMetadata();
-      await saveReminderFileMarks();
-      await saveFolderMetadata();
-    } catch (error) {
-      await fs.rename(newPath, oldPath).catch((rollbackError) => {
-        console.error('回滚移动文件夹失败:', rollbackError);
-      });
-      folder.parentId = previousParentId;
-      noteMetadata = previousNoteMetadata;
-      reminderFileMarks = previousReminderMarks;
-      noteFileMap = previousNoteFileMap;
-      await Promise.allSettled([
-        saveNoteMetadata(),
-        saveReminderFileMarks(),
-        saveFolderMetadata()
-      ]);
-      throw error;
-    }
-
-    await loadNotes();
-    scheduleReminderCheck();
-    sendNotesChanged();
-    sendFoldersChanged();
-    sendPdfFilesChanged();
-    return folders.find((item) => item.id === folderId) || folder;
-  });
-  ipcMain.handle('storage:get', () => getStorageInfo());
-  ipcMain.handle('storage:choose', chooseNotesPath);
-  ipcMain.handle('storage:reset', resetNotesPath);
-  ipcMain.handle('settings:get', () => getAppSettings());
-  ipcMain.handle('settings:update', updateAppSettings);
-  ipcMain.handle('mobile:export-package', exportMobilePackage);
-  ipcMain.handle('entries:copy-path', copyLibraryEntryPath);
-  ipcMain.handle('entries:show-in-folder', showLibraryEntryInFolder);
-  ipcMain.handle('entries:open-default', openLibraryEntry);
-  ipcMain.handle('external-url:open', openExternalUrl);
-  ipcMain.handle('entries:set-reminder-file', setReminderFileMark);
-  ipcMain.handle('daily-review:handle', handleDailyReview);
-  ipcMain.handle('images:insert', insertImageForNote);
-  ipcMain.handle('images:save-pasted', async (_event, payload) => {
-    if (!payload || !payload.noteId) {
-      return null;
-    }
-
-    return saveClipboardImageForNote(payload.noteId, payload.image);
-  });
-  ipcMain.handle('images:save-from-url', async (_event, payload) => {
-    if (!payload || !payload.noteId || !payload.imageUrl) {
-      return null;
-    }
-
-    getAccessibleNote(payload.noteId);
-    const { buffer, contentType } = await downloadRemoteImage(payload.imageUrl);
-    return saveClipboardImageForNote(payload.noteId, {
-      fileName: `remote-image${getImageExtension('', contentType)}`,
-      mimeType: contentType,
-      bytes: buffer
-    });
-  });
-  ipcMain.handle('images:copy', async (_event, payload) => {
-    if (!payload || !payload.imageUrl) {
-      return false;
-    }
-    try {
-      let filePath;
-      if (payload.imageUrl.startsWith('file:')) {
-        filePath = fileURLToPath(payload.imageUrl);
-      } else {
-        return false;
-      }
-      const imageAssetRoot = path.resolve(getAppDataPath(), IMAGE_ASSET_DIR_NAME);
-      const resolvedFilePath = path.resolve(filePath);
-      if (!isPathInside(imageAssetRoot, resolvedFilePath)) {
-        const resource = resourceFiles.find((item) => path.resolve(item.path) === resolvedFilePath);
-        if (!resource || resource.kind !== 'image') {
-          return false;
-        }
-        assertFolderAccessible(resource.folderId);
-      }
-      const imageBuffer = await fs.readFile(filePath);
-      const nativeImage = require('electron').nativeImage;
-      const img = nativeImage.createFromBuffer(imageBuffer);
-      clipboard.writeImage(img);
-      return true;
-    } catch (error) {
-      console.error('复制图片失败:', error);
-      return false;
-    }
-  });
-  ipcMain.handle('images:delete', async (_event, payload) => {
-    if (!payload || !payload.imageUrl || !payload.noteId) {
-      return false;
-    }
-    try {
-      getAccessibleNote(payload.noteId);
-      if (notes.some((note) => note.id !== payload.noteId && note.content.includes(payload.imageUrl))) {
-        throw new Error('该图片仍被其他笔记引用，已保留图片文件');
-      }
-      let filePath;
-      if (payload.imageUrl.startsWith('file:')) {
-        filePath = fileURLToPath(payload.imageUrl);
-      } else {
-        return false;
-      }
-      const imageAssetRoot = path.resolve(getAppDataPath(), IMAGE_ASSET_DIR_NAME);
-      if (!isPathInside(imageAssetRoot, path.resolve(filePath))) {
-        return false;
-      }
-      await shell.trashItem(filePath);
-      return true;
-    } catch (error) {
-      console.error('删除图片失败:', error);
-      return false;
-    }
-  });
+  // IPC 传输层：handler 已按域抽取到 src/ipc/，此处组装依赖上下文并注册。
+  // ctx 中的状态使用 getter/setter，保证各模块读写的都是 main.js 的同一份变量。
+  const ipcContext = {
+    ipcMain,
+    clipboard,
+    shell,
+    nativeImage: require('electron').nativeImage,
+    fs,
+    path,
+    fileURLToPath,
+    isPathInside,
+    IMAGE_ASSET_DIR_NAME,
+    get notes() { return notes; },
+    get folders() { return folders; },
+    get pdfFiles() { return pdfFiles; },
+    get resourceFiles() { return resourceFiles; },
+    get noteFileMap() { return noteFileMap; },
+    get noteMetadata() { return noteMetadata; },
+    set noteMetadata(value) { noteMetadata = value; },
+    get reminderFileMarks() { return reminderFileMarks; },
+    set reminderFileMarks(value) { reminderFileMarks = value; },
+    getVisibleNotes,
+    getVisibleFolders,
+    getVisiblePdfFiles,
+    getVisibleResourceFiles,
+    createClientNote,
+    upsertNote,
+    deleteNote,
+    createEmptyNote,
+    saveNote,
+    sortNotesByCreatedAt,
+    sendNotesChanged,
+    getFolderPath,
+    getUniqueFilePath,
+    sanitizeNoteFilename,
+    getNoteFileExtension,
+    moveNoteMetadata,
+    moveNoteMetadataTree,
+    saveNoteMetadata,
+    assertFolderAccessible,
+    assertFolderTargetAccessible,
+    createFolder,
+    renameFolder,
+    deleteFolder,
+    setFolderPassword,
+    clearFolderPassword,
+    unlockFolder,
+    lockFolder,
+    saveFolderMetadata,
+    moveResourceReminderFileMarkTree,
+    saveReminderFileMarks,
+    sendFoldersChanged,
+    sendPdfFilesChanged,
+    loadNotes,
+    scheduleReminderCheck,
+    previewResourceFile,
+    deleteResourceFile,
+    moveResourceFile,
+    getStorageInfo,
+    chooseNotesPath,
+    resetNotesPath,
+    getAppSettings,
+    updateAppSettings,
+    exportMobilePackage,
+    copyLibraryEntryPath,
+    showLibraryEntryInFolder,
+    openLibraryEntry,
+    openExternalUrl,
+    setReminderFileMark,
+    handleDailyReview,
+    insertImageForNote,
+    saveClipboardImageForNote,
+    downloadRemoteImage,
+    getImageExtension,
+    getAccessibleNote,
+    getAppDataPath
+  };
+  registerNotesIpc(ipcContext);
+  registerFoldersIpc(ipcContext);
+  registerFilesIpc(ipcContext);
+  registerImagesIpc(ipcContext);
+  registerStorageIpc(ipcContext);
+  registerLibraryIpc(ipcContext);
 
   Menu.setApplicationMenu(null);
   createWindow();

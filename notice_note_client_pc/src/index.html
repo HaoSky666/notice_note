@@ -215,10 +215,6 @@
           </div>
           <span id="fileViewerType" class="file-viewer-type"></span>
           <div id="fileViewerActions" class="file-viewer-actions">
-            <button id="fileViewerEditButton" class="secondary-button" type="button" hidden>✏️ 编辑内容</button>
-            <button id="fileViewerSaveButton" class="primary-button" type="button" hidden>💾 保存修改</button>
-            <button id="fileViewerAddRowButton" class="secondary-button" type="button" hidden>➕ 添加行</button>
-            <button id="fileViewerAddColButton" class="secondary-button" type="button" hidden>➕ 添加列</button>
             <button id="fileViewerOpenExternalButton" class="secondary-button" type="button" title="在 Word/Excel 外部软件中编辑修改">💻 外部打开</button>
           </div>
         </div>
@@ -443,6 +439,18 @@
       </div>
     </div>
     <script src="./vendor/editor.bundle.js"></script>
-    <script src="./renderer.js"></script>
+    <!-- 渲染进程按依赖顺序加载（经典脚本共享全局词法环境，顶层 const/let 跨文件可见，不可重名） -->
+    <script src="./renderer/dom.js"></script>
+    <script src="./renderer/utils.js"></script>
+    <script src="./renderer/notifications.js"></script>
+    <script src="./renderer/state.js"></script>
+    <script src="./renderer/themes.js"></script>
+    <script src="./renderer/sidebar.js"></script>
+    <script src="./renderer/tabs.js"></script>
+    <script src="./renderer/editor.js"></script>
+    <script src="./renderer/viewers.js"></script>
+    <script src="./renderer/settings.js"></script>
+    <script src="./renderer/context-menu.js"></script>
+    <script src="./renderer/boot.js"></script>
   </body>
 </html>

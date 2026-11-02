@@ -137,17 +137,6 @@ button {
   background: #f5eee2;
 }
 
-.icon-button {
-  width: 40px;
-  height: 40px;
-  border: 0;
-  border-radius: 8px;
-  background: #2f6b55;
-  color: #fff;
-  font-size: 26px;
-  line-height: 1;
-}
-
 .sidebar-open-button {
   width: 32px;
   height: 32px;
@@ -894,10 +883,6 @@ display: none;
   box-shadow: inset 0 0 0 1px rgba(196, 168, 106, 0.28);
 }
 
-.note-item.drag-over-note {
-border-top: 2px solid #2f6b55;
-}
-
 .context-menu {
   position: fixed;
   z-index: 1001;
@@ -1342,17 +1327,6 @@ border-top: 2px solid #2f6b55;
   white-space: nowrap;
 }
 
-.pdf-badge {
-  flex: 0 0 auto;
-  border-radius: 4px;
-  padding: 2px 5px;
-  background: #b94a3f;
-  color: #fff !important;
-  font-size: 10px !important;
-  font-weight: 700;
-  line-height: 1.3 !important;
-}
-
 .file-type-badge {
   flex: 0 0 auto;
   border-radius: 4px;
@@ -1397,11 +1371,6 @@ border-top: 2px solid #2f6b55;
 .file-type-badge.spreadsheet {
   background: #e2efe7;
   color: #2e724a !important;
-}
-
-.file-type-badge.archive {
-  background: #f3ead8;
-  color: #8a6428 !important;
 }
 
 .resource-item.is-unopenable {
@@ -1910,19 +1879,6 @@ border-top: 2px solid #2f6b55;
   margin-left: auto;
 }
 
-.is-editable-cell {
-  outline: 2px dashed var(--theme-accent, #39c5bb) !important;
-  background-color: rgba(57, 197, 187, 0.08) !important;
-  cursor: text !important;
-}
-
-.is-editing-word {
-  outline: 2px dashed var(--theme-accent, #39c5bb) !important;
-  padding: 24px;
-  box-shadow: 0 0 16px rgba(57, 197, 187, 0.2) !important;
-  cursor: text !important;
-}
-
 .file-viewer-toast {
   padding: 2px 10px;
   border-radius: 6px;
@@ -2162,13 +2118,6 @@ border-top: 2px solid #2f6b55;
   margin: 12px 0 28px;
   border-bottom: 0;
   font-size: 30px;
-  text-align: center;
-}
-
-.word-preview .word-document-subtitle {
-  margin: -16px 0 32px;
-  color: #756e62;
-  font-size: 17px;
   text-align: center;
 }
 
@@ -2801,9 +2750,7 @@ border-top: 2px solid #2f6b55;
   outline: none;
 }
 
-.primary-button,
-.secondary-button,
-.text-button {
+.primary-button, .secondary-button {
   border-radius: 6px;
   border: 1px solid #dfd8cc;
   padding: 7px 14px;
@@ -2821,9 +2768,7 @@ border-top: 2px solid #2f6b55;
   color: #25231f;
 }
 
-.primary-button:disabled,
-.secondary-button:disabled,
-.text-button:disabled {
+.primary-button:disabled, .secondary-button:disabled {
   cursor: not-allowed;
   opacity: 0.45;
 }
@@ -2878,13 +2823,6 @@ border-top: 2px solid #2f6b55;
   background: #fceee8;
   border-color: #d4a99a;
   color: #8b3a28;
-}
-
-.text-button {
-  padding: 4px 8px;
-  border-color: transparent;
-  background: transparent;
-  color: #9a4b35;
 }
 
 .content-shell {
@@ -3955,67 +3893,6 @@ body[data-theme] .cm-blur-reveal:hover {
   gap: 14px;
 }
 
-.settings-theme-fieldset {
-  min-width: 0;
-  margin: 0;
-  border: 0;
-  padding: 0;
-}
-
-.settings-theme-fieldset legend {
-  margin-bottom: 10px;
-  color: #3f3931;
-  font-size: 14px;
-  font-weight: 700;
-}
-
-.settings-theme-options {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 9px;
-}
-
-.settings-theme-option {
-  min-width: 0;
-  border: 1px solid #e4d9c8;
-  border-radius: 11px;
-  padding: 9px;
-  display: grid;
-  gap: 5px;
-  background: #fffdf9;
-  cursor: pointer;
-}
-
-.settings-theme-option:has(input:checked) {
-  border-color: #79a18d;
-  box-shadow: 0 0 0 2px rgba(47, 107, 85, 0.12);
-}
-
-.settings-theme-option input {
-  position: absolute;
-  opacity: 0;
-  pointer-events: none;
-}
-
-.settings-theme-option:has(input:focus-visible) {
-  outline: 3px solid rgba(47, 107, 85, 0.18);
-  outline-offset: 2px;
-}
-
-.settings-theme-option strong {
-  overflow: hidden;
-  color: #3f3931;
-  font-size: 12px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.settings-theme-option small {
-  color: #8c8173;
-  font-size: 10px;
-  line-height: 1.4;
-}
-
 .settings-theme-preview {
   height: 42px;
   border-radius: 7px;
@@ -4196,10 +4073,6 @@ body[data-theme] .cm-blur-reveal:hover {
 }
 
 /* Theme Picker Dialog & Grid */
-.theme-picker-dialog {
-  max-width: 680px;
-  width: 90vw;
-}
 
 .theme-picker-card {
   max-height: 85vh;
@@ -5438,12 +5311,7 @@ body[data-theme] .cm-gutters {
   background: var(--theme-surface);
 }
 
-body[data-theme] .settings-card,
-body[data-theme] .settings-item,
-body[data-theme] .settings-storage-card,
-body[data-theme] .settings-theme-option,
-body[data-theme] .reminder-manager-card,
-body[data-theme] .draft-save-body {
+body[data-theme] .settings-card, body[data-theme] .settings-item, body[data-theme] .settings-storage-card, body[data-theme] .reminder-manager-card, body[data-theme] .draft-save-body {
   border-color: var(--theme-border);
   background: var(--theme-surface);
 }
@@ -5491,24 +5359,12 @@ body[data-theme] .settings-heading {
   background: linear-gradient(135deg, var(--theme-surface), var(--theme-surface-soft));
 }
 
-body[data-theme] .settings-heading h2,
-body[data-theme] .settings-item-copy strong,
-body[data-theme] .settings-storage-heading strong,
-body[data-theme] .settings-theme-fieldset legend,
-body[data-theme] .settings-theme-option strong {
+body[data-theme] .settings-heading h2, body[data-theme] .settings-item-copy strong, body[data-theme] .settings-storage-heading strong {
   color: var(--theme-text);
 }
 
-body[data-theme] .settings-heading p,
-body[data-theme] .settings-item-copy p,
-body[data-theme] .settings-storage-heading p,
-body[data-theme] .settings-theme-option small {
+body[data-theme] .settings-heading p, body[data-theme] .settings-item-copy p, body[data-theme] .settings-storage-heading p {
   color: var(--theme-muted);
-}
-
-body[data-theme] .settings-theme-option:has(input:checked) {
-  border-color: var(--theme-accent);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--theme-accent) 18%, transparent);
 }
 
 body[data-theme="nte_eloi"] .sidebar {
@@ -5881,16 +5737,4 @@ body[data-theme="nte_eloi"] .workspace-tab.is-active {
 .draft-save-footer .primary-button:hover {
   background: var(--theme-accent-hover, #245a46);
   border-color: var(--theme-accent-hover, #245a46);
-}
-
-.draft-badge-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 3px 9px;
-  border-radius: 12px;
-  background: rgba(255, 193, 7, 0.2);
-  color: #856404;
-  font-size: 12px;
-  font-weight: 600;
 }
