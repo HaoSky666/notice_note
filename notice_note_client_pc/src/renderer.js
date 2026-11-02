@@ -1900,6 +1900,7 @@ function renderBreadcrumb() {
         <li>自动回顾在周一至周五生效，“明天再看”的内容可延续到周末。</li>
         <li>仅选择已加入回顾、应用能够打开的内容。</li>
         <li>存在未完成提醒的笔记不会参与今日回顾。</li>
+        <li>提醒全部完成的当天会记作一次回顾时间，避免隔天重复推送。</li>
         <li>从未完成回顾的内容优先，其次选择上次回顾时间最早的内容。</li>
         <li>当天选择保持不变；完成回顾后记录时间，明天再看则下次优先。</li>
       </ol>
@@ -5359,12 +5360,6 @@ function openActiveFileExternal() {
   window.noticeNote.openEntryWithDefaultApp({ path: file.path }).catch(console.error);
 }
 
-function isEditingActiveNote() {
-  return (
-    document.activeElement === titleInput || Boolean(markdownEditor?.hasFocus())
-  );
-}
-
 function mergeIncomingNotes(nextNotes) {
   for (const n of nextNotes) {
     const saveState = noteSaveStates.get(n.id);
@@ -5451,10 +5446,6 @@ function createMarkdownEditor() {
 
 async function selectNote(noteId) {
   await activateWorkspaceTab("note", noteId);
-}
-
-async function selectPdf(pdfId) {
-  await activateWorkspaceTab("pdf", pdfId);
 }
 
 async function selectResourceFile(fileId) {
@@ -5646,10 +5637,6 @@ function markNoteDirty(note) {
   updateNoteTitlePresentation(note);
   renderSaveStatus();
   return state;
-}
-
-function scheduleNoteSave(noteId) {
-  // 自动保存已停用，保存由 Ctrl+S 或右上角保存按钮手动触发
 }
 
 function requestNoteSave(noteId) {
@@ -6244,6 +6231,7 @@ showReminderCalendarButton.addEventListener("click", () => {
 showDailyReviewButton.addEventListener("click", () => {
   setSidebarViewMode("reminder");
 });
+
 locateCurrentFileButton.addEventListener("click", () => {
   const tab = workspaceTabs.find((item) => {
     return getWorkspaceTabKey(item.type, item.id) === activeWorkspaceTabKey;

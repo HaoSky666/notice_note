@@ -28,8 +28,6 @@ const { pathToFileURL, fileURLToPath } = require('node:url');
 const matter = require('gray-matter');
 const mammoth = require('mammoth');
 const WordExtractor = require('word-extractor');
-const { Document, Packer, Paragraph, TextRun, HeadingLevel } = require('docx');
-const HTMLtoDOCX = require('html-to-docx');
 const ExcelJS = require('exceljs');
 
 const NOTES_DIR_NAME = 'notes';
@@ -194,6 +192,7 @@ if (process.platform === 'win32') {
 }
 
 const gotSingleInstanceLock = app.requestSingleInstanceLock();
+
 if (!gotSingleInstanceLock) {
   app.quit();
 } else {
@@ -298,10 +297,6 @@ function getOldNotesJsonPath() {
 
 function getConfigPath() {
   return path.join(app.getPath('userData'), CONFIG_FILE_NAME);
-}
-
-function getNoteAssetDir(noteId) {
-  return path.join(getAppDataPath(), IMAGE_ASSET_DIR_NAME, noteId);
 }
 
 function getImageAssetDir() {
@@ -753,6 +748,27 @@ function getDailyReviewCandidates() {
     .filter((file) => file.isReminderFile && file.canOpen && !isProtected(file.folderId))
     .map((file) => ({ key: getResourceDailyReviewKey(file.path), target: file }));
   return [...noteCandidates, ...fileCandidates];
+}
+
+function isReminderPending(note) {
+  return Array.isArray(note?.reminders) && note.reminders.some((reminder) => !reminder.done);
+}
+
+/**
+ * 提醒笔记的提醒全部结束时，记一次「最近看过」的时间锚点。
+ *
+ * 提醒与回顾是同一批内容：提醒负责「该看了」，回顾负责「再看一遍」。所以提醒刚处理完的
+ * 时刻就是一次接触，必须留下时间戳；否则它在排序里仍是「从未回顾过」，会被当成最高
+ * 优先级，第二天又被推成每日回顾。
+ *
+ * 返回是否写入了新的锚点。
+ */
+function anchorReviewAfterRemindersFinished(note, hadPendingReminder) {
+  if (!note || !hadPendingReminder || isReminderPending(note)) {
+    return false;
+  }
+  dailyReviewHistory[getNoteReminderFileKey(note.id)] = new Date().toISOString();
+  return true;
 }
 
 function updateDailyReviewSelection() {
@@ -2257,185 +2273,6 @@ async function previewResourceFile(fileId) {
   throw new Error('该文件类型不支持预览');
 }
 
-function cleanHtmlForDocx(html) {
-  let clean = String(html || '')
-    .replace(/<script[\s\S]*?<\/script>/gi, '')
-    .replace(/<style[\s\S]*?<\/style>/gi, '')
-    .replace(/<svg[\s\S]*?<\/svg>/gi, '')
-    .replace(/<button[\s\S]*?<\/button>/gi, '')
-    .replace(/<aside[\s\S]*?<\/aside>/gi, '')
-    .replace(/<nav[\s\S]*?<\/nav>/gi, '');
-
-  clean = clean.replace(/<img[^>]*>/gi, (imgTag) => {
-    if (/src=["']data:image\/(?:png|jpe?g|gif|webp);base64,/i.test(imgTag)) {
-      return imgTag;
-    }
-    return '';
-  });
-
-  clean = clean.replace(/style="[^"]*"/gi, (styleAttr) => {
-    return styleAttr.replace(/var\([^)]+\)/g, '#333333');
-  });
-
-  return clean;
-}
-
-async function saveWordFile(fileId, contentData) {
-  const file = resourceFiles.find((item) => item.id === fileId);
-  if (!file) {
-    throw new Error('文件不存在');
-  }
-  assertFolderAccessible(file.folderId);
-
-  let buffer;
-  if (contentData && typeof contentData === 'object' && contentData.html) {
-    try {
-      const cleanedHtml = cleanHtmlForDocx(contentData.html);
-      const fullHtml = `<!DOCTYPE html><html><head><meta charset="UTF-8"></head><body>${cleanedHtml}</body></html>`;
-      buffer = await HTMLtoDOCX(fullHtml, null, {
-        title: file.name,
-        orientation: 'portrait',
-        margins: { top: 1440, right: 1440, bottom: 1440, left: 1440 }
-      });
-    } catch (docxHtmlErr) {
-      console.error('HTMLtoDOCX 转换失败，执行保底算法', docxHtmlErr);
-      const paragraphsData = Array.isArray(contentData.paragraphs) ? contentData.paragraphs : [];
-      const docParagraphs = paragraphsData.map((item) => {
-        let headingLevel = undefined;
-        if (item.heading === 1) headingLevel = HeadingLevel.HEADING_1;
-        else if (item.heading === 2) headingLevel = HeadingLevel.HEADING_2;
-        else if (item.heading === 3) headingLevel = HeadingLevel.HEADING_3;
-
-        return new Paragraph({
-          heading: headingLevel,
-          children: [
-            new TextRun({
-              text: item.text || '',
-              bold: Boolean(item.bold),
-              italic: Boolean(item.italic)
-            })
-          ]
-        });
-      });
-
-      const doc = new Document({
-        sections: [
-          {
-            properties: {},
-            children: docParagraphs.length > 0 ? docParagraphs : [new Paragraph({ children: [new TextRun('Word 文档编辑内容')] })]
-          }
-        ]
-      });
-
-      buffer = await Packer.toBuffer(doc);
-    }
-  } else {
-    const paragraphsData = Array.isArray(contentData) ? contentData : [];
-    const docParagraphs = paragraphsData.map((item) => {
-      let headingLevel = undefined;
-      if (item.heading === 1) headingLevel = HeadingLevel.HEADING_1;
-      else if (item.heading === 2) headingLevel = HeadingLevel.HEADING_2;
-      else if (item.heading === 3) headingLevel = HeadingLevel.HEADING_3;
-
-      return new Paragraph({
-        heading: headingLevel,
-        children: [
-          new TextRun({
-            text: item.text || '',
-            bold: Boolean(item.bold),
-            italic: Boolean(item.italic)
-          })
-        ]
-      });
-    });
-
-    const doc = new Document({
-      sections: [
-        {
-          properties: {},
-          children: docParagraphs.length > 0 ? docParagraphs : [new Paragraph({ children: [new TextRun('')] })]
-        }
-      ]
-    });
-
-    buffer = await Packer.toBuffer(doc);
-  }
-
-  let targetPath = file.path;
-  if (file.extension === '.doc') {
-    const docxPath = file.path.replace(/\.doc$/i, '.docx');
-    await atomicWriteFile(docxPath, buffer);
-    if (file.path !== docxPath) {
-      await fs.unlink(file.path);
-    }
-    file.path = docxPath;
-    file.id = docxPath;
-    file.extension = '.docx';
-    file.name = file.name.replace(/\.doc$/i, '.docx');
-    file.typeLabel = 'WORD';
-  } else {
-    await atomicWriteFile(targetPath, buffer);
-  }
-
-  const stats = await fs.stat(file.path);
-  file.size = stats.size;
-  file.updatedAt = stats.mtime.toISOString();
-
-  sendNotesChanged();
-  return { success: true, filePath: file.path };
-}
-
-async function saveSpreadsheetFile(fileId, sheetsData) {
-  const file = resourceFiles.find((item) => item.id === fileId);
-  if (!file) {
-    throw new Error('文件不存在');
-  }
-  assertFolderAccessible(file.folderId);
-
-  const workbook = new ExcelJS.Workbook();
-  try {
-    await workbook.xlsx.readFile(file.path);
-  } catch (err) {
-    workbook.addWorksheet('Sheet1');
-  }
-
-  const inputSheets = Array.isArray(sheetsData) ? sheetsData : [];
-  inputSheets.forEach((sheetData, sIdx) => {
-    let worksheet = workbook.worksheets[sIdx];
-    if (!worksheet) {
-      worksheet = workbook.addWorksheet(sheetData.name || `Sheet${sIdx + 1}`);
-    }
-
-    if (Array.isArray(sheetData.rows)) {
-      sheetData.rows.forEach((row, rIdx) => {
-        if (Array.isArray(row.cells)) {
-          row.cells.forEach((cellData, cIdx) => {
-            if (cellData && cellData.skip) return;
-            const cell = worksheet.getCell(rIdx + 1, cIdx + 1);
-            if (cellData && cellData.value !== undefined) {
-              const val = String(cellData.value || '').trim();
-              if (val !== '' && !isNaN(Number(val))) {
-                cell.value = Number(val);
-              } else {
-                cell.value = val;
-              }
-            }
-          });
-        }
-      });
-    }
-  });
-
-  const workbookBuffer = await workbook.xlsx.writeBuffer();
-  await atomicWriteFile(file.path, Buffer.from(workbookBuffer));
-  const stats = await fs.stat(file.path);
-  file.size = stats.size;
-  file.updatedAt = stats.mtime.toISOString();
-
-  sendNotesChanged();
-  return { success: true, filePath: file.path };
-}
-
 function resolveLibraryEntryPath(entry) {
   if (!entry || typeof entry !== 'object') {
     return null;
@@ -2835,12 +2672,11 @@ function sendStorageChanged() {
 }
 
 function sendReminderFired(payload) {
+  // 提醒到达时不再主动拉起窗口，仅投递到应用内通知面板（系统通知在 fireDueReminders 中单独发出）。
   if (!mainWindow || mainWindow.isDestroyed()) {
     return;
   }
 
-  showMainWindow();
-  mainWindow.flashFrame(true);
   mainWindow.webContents.send('reminder:fired', payload);
 }
 
@@ -2887,6 +2723,7 @@ async function upsertNote(_event, input) {
   let index = notes.findIndex((item) => item.id === note.id);
   let targetNote;
   let renamedPaths = null;
+  let hadPendingReminder = false;
 
   if (index < 0 && typeof input.sourceUrl === 'string') {
     try {
@@ -2920,6 +2757,7 @@ async function upsertNote(_event, input) {
     const oldNote = notes[index];
     assertFolderAccessible(oldNote.folderId);
     assertFolderTargetAccessible(note.folderId);
+    hadPendingReminder = isReminderPending(oldNote);
     targetNote = { ...oldNote, ...note };
 
     // 如果标题改变了或文件夹改变了，需要移动/重命名文件
@@ -2968,7 +2806,9 @@ async function upsertNote(_event, input) {
     notes.unshift(targetNote);
   }
   sortNotesByCreatedAt();
-  if (updateDailyReviewSelection()) {
+  // 锚点必须在重新挑选今日回顾之前写入，否则本次挑选仍会看到旧的排序依据。
+  const anchored = anchorReviewAfterRemindersFinished(targetNote, hadPendingReminder);
+  if (anchored || updateDailyReviewSelection()) {
     await saveConfig();
   }
   scheduleReminderCheck();
@@ -3135,6 +2975,8 @@ async function markReminderSlotFired(noteId, reminderId, slot) {
     return;
   }
 
+  const hadPendingReminder = isReminderPending(note);
+
   reminder.firedSlots = getReminderFiredSlots(reminder);
   if (!reminder.firedSlots.includes(slot)) {
     reminder.firedSlots.push(slot);
@@ -3143,9 +2985,76 @@ async function markReminderSlotFired(noteId, reminderId, slot) {
   reminder.firedAt = new Date().toISOString();
   note.updatedAt = reminder.firedAt;
   await saveNote(note);
+
+  if (anchorReviewAfterRemindersFinished(note, hadPendingReminder)) {
+    await saveConfig();
+  }
+}
+
+function getReminderAnchorIso(reminder) {
+  const parsed = new Date(reminder.time || `${reminder.date}T00:00:00`);
+  return Number.isNaN(parsed.getTime()) ? new Date().toISOString() : parsed.toISOString();
+}
+
+/**
+ * 结算已经过期的提醒。
+ *
+ * 提醒只会在「提醒日期 == 今天」时被处理，所以如果提醒当天应用没有运行，那一次的时段就
+ * 永远不会触发，reminder.done 会一直停在 false：提醒列表里永远显示「待提醒」，而且这篇
+ * 提醒笔记再也没法进入回顾池。
+ *
+ * 这里把过期提醒一次性结算为已完成，并以它自己的提醒时间作为「最近看过」锚点——用提醒
+ * 当天而非「现在」，这样错过的那条内容不会被无意义地往后推。
+ */
+async function settleExpiredReminders() {
+  const today = toLocalDateKey(new Date());
+  const settleTargets = [];
+
+  for (const note of notes) {
+    const expired = note.reminders.filter((reminder) => {
+      return !reminder.done && reminder.date && reminder.date < today;
+    });
+    if (expired.length === 0) {
+      continue;
+    }
+
+    let anchor = null;
+    for (const reminder of expired) {
+      reminder.firedSlots = [...DAILY_REMINDER_TIMES];
+      reminder.done = true;
+      reminder.firedAt = reminder.firedAt || new Date().toISOString();
+      const reminderAnchor = getReminderAnchorIso(reminder);
+      if (!anchor || reminderAnchor > anchor) {
+        anchor = reminderAnchor;
+      }
+    }
+    settleTargets.push({ note, anchor });
+  }
+
+  if (settleTargets.length === 0) {
+    return false;
+  }
+
+  for (const { note, anchor } of settleTargets) {
+    if (!isReminderPending(note) && anchor) {
+      const key = getNoteReminderFileKey(note.id);
+      if (anchor > String(dailyReviewHistory[key] || '')) {
+        dailyReviewHistory[key] = anchor;
+      }
+    }
+    note.updatedAt = new Date().toISOString();
+    await saveNote(note);
+  }
+
+  updateDailyReviewSelection();
+  await saveConfig();
+  sendNotesChanged();
+  return true;
 }
 
 async function fireDueReminders() {
+  await settleExpiredReminders();
+
   const dueItems = getPendingReminders();
 
   for (const { note, reminder, slot } of dueItems) {
@@ -3302,97 +3211,14 @@ async function migrateImageAssetDir() {
   }
 }
 
-async function collectReferencedImagePaths() {
-  const assetDirRoot = path.join(getAppDataPath(), IMAGE_ASSET_DIR_NAME);
-  const assetDirUrl = pathToFileURL(assetDirRoot).href.toLowerCase();
-  const referencedPaths = new Set();
-
-  async function scanNoteFiles(dirPath) {
-    const entries = await fs.readdir(dirPath, { withFileTypes: true });
-    for (const entry of entries) {
-      const fullPath = path.join(dirPath, entry.name);
-      if (entry.isDirectory() && !isInternalDirectory(entry.name)) {
-        await scanNoteFiles(fullPath);
-      } else if (entry.isFile() && ['.md', '.txt'].includes(path.extname(entry.name).toLowerCase())) {
-        try {
-          const raw = await fs.readFile(fullPath, 'utf8');
-          const imageRegex = /!\[[^\]]*\]\(([^)]+)\)/g;
-          for (const match of raw.matchAll(imageRegex)) {
-            const imageUrl = match[1].trim();
-            if (imageUrl.toLowerCase().startsWith(assetDirUrl)) {
-              try {
-                const filePath = fileURLToPath(imageUrl);
-                referencedPaths.add(path.resolve(filePath));
-              } catch {
-                // ignore invalid URLs
-              }
-            }
-          }
-        } catch {
-          // ignore read errors
-        }
-      }
-    }
-  }
-
-  await scanNoteFiles(getNotesPath());
-  return referencedPaths;
-}
-
-async function cleanupUnusedImages() {
-  const assetDirRoot = path.join(getAppDataPath(), IMAGE_ASSET_DIR_NAME);
-  try {
-    await fs.access(assetDirRoot);
-  } catch {
-    return;
-  }
-
-  const referencedPaths = await collectReferencedImagePaths();
-  let deletedCount = 0;
-
-  async function scanAndDelete(dirPath) {
-    const entries = await fs.readdir(dirPath, { withFileTypes: true });
-    let hasFiles = false;
-    for (const entry of entries) {
-      const fullPath = path.join(dirPath, entry.name);
-      if (entry.isDirectory()) {
-        const subHasFiles = await scanAndDelete(fullPath);
-        if (subHasFiles) {
-          hasFiles = true;
-        } else {
-          try {
-            await fs.rmdir(fullPath);
-          } catch {
-            // ignore
-          }
-        }
-      } else if (entry.isFile()) {
-        if (!referencedPaths.has(path.resolve(fullPath))) {
-          try {
-            await fs.unlink(fullPath);
-            deletedCount += 1;
-          } catch {
-            // ignore
-          }
-        } else {
-          hasFiles = true;
-        }
-      }
-    }
-    return hasFiles;
-  }
-
-  await scanAndDelete(assetDirRoot);
-  if (deletedCount > 0) {
-    console.log(`已清理 ${deletedCount} 张未使用的图片`);
-  }
-}
-
 app.whenReady().then(async () => {
+
   await loadConfig();
   await saveConfig();
   await migrateImageAssetDir();
   await loadNotes();
+  // 启动时先结算过期提醒，保证渲染进程第一次拉列表时状态就是对的。
+  await settleExpiredReminders();
   // 自动清理无法看见渲染进程中的未落盘草稿，停用后避免误删草稿图片。
 
   ipcMain.handle('notes:list', () => getVisibleNotes());
