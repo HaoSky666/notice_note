@@ -51,6 +51,14 @@ function normalizeReminderList(reminders) {
     .filter((item) => item.date);
 }
 
+function normalizeReviewDate(value) {
+  return typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : null;
+}
+
+function normalizeReviewRole(value) {
+  return value === 'primary' || value === 'secondary' ? value : null;
+}
+
 function normalizeNote(input) {
   const now = new Date().toISOString();
   return {
@@ -61,7 +69,9 @@ function normalizeNote(input) {
     reminders: normalizeReminderList(input.reminders),
     folderId: input.folderId || null,
     createdAt: isValidDateTime(input.createdAt) ? input.createdAt : now,
-    updatedAt: now
+    updatedAt: now,
+    reviewDate: normalizeReviewDate(input.reviewDate),
+    reviewRole: normalizeReviewRole(input.reviewRole)
   };
 }
 
@@ -80,7 +90,9 @@ function normalizeLoadedNote(input) {
     reminders: normalizeReminderList(input.reminders),
     folderId: input.folderId || null,
     createdAt,
-    updatedAt
+    updatedAt,
+    reviewDate: normalizeReviewDate(input.reviewDate),
+    reviewRole: normalizeReviewRole(input.reviewRole)
   };
 }
 
@@ -91,5 +103,7 @@ module.exports = {
   normalizeReminder,
   normalizeReminderList,
   normalizeNote,
-  normalizeLoadedNote
+  normalizeLoadedNote,
+  normalizeReviewDate,
+  normalizeReviewRole
 };

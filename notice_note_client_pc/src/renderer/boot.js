@@ -233,6 +233,7 @@ async function boot() {
   window.noticeNote.onNotesChanged((nextNotes) => {
     mergeIncomingNotes(nextNotes);
     renderReminderNotifications();
+    refreshReviewBrowserIfActive();
   });
 
   window.noticeNote.onFoldersChanged((nextFolders) => {
@@ -436,7 +437,8 @@ showReminderCalendarButton.addEventListener("click", () => {
   setSidebarViewMode("calendar");
 });
 showDailyReviewButton.addEventListener("click", () => {
-  setSidebarViewMode("reminder");
+  // 回顾现在是主工作区的全宽浏览器；按钮负责打开/激活它
+  activateReviewBrowser();
 });
 
 locateCurrentFileButton.addEventListener("click", () => {
@@ -588,6 +590,16 @@ completeDailyReviewButton.addEventListener("click", () => {
   handleActiveDailyReview("complete").catch(console.error);
 });
 document.addEventListener("keydown", (event) => {
+  // 回顾浏览器激活时，左右键按天翻页
+  if (
+    !event.ctrlKey
+    && !event.metaKey
+    && !event.altKey
+    && (event.key === "ArrowLeft" || event.key === "ArrowRight")
+    && typeof handleReviewBrowserKeydown === "function"
+  ) {
+    handleReviewBrowserKeydown(event);
+  }
   if (
     (event.ctrlKey || event.metaKey) &&
     event.key.toLocaleLowerCase("en-US") === "s"

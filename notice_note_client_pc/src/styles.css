@@ -392,119 +392,456 @@ display: none;
   padding: 12px;
 }
 
-/* 回顾 Tab：卡片流（侧边栏窄栏单列，随宽度自适应） */
-.review-card-grid {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  gap: 10px;
-  padding-bottom: 8px;
+/* ============================================================
+   回顾浏览器（主工作区全宽页面）
+   ============================================================ */
+.review-browser {
+  flex: 1;
+  min-width: 0;
+  overflow: auto;
+  background: var(--theme-canvas, var(--nn-canvas));
 }
 
-.review-card {
+.review-browser-inner {
+  max-width: 860px;
+  margin: 0 auto;
+  padding: 20px 24px 32px;
   display: flex;
   flex-direction: column;
-  gap: 7px;
+  gap: 18px;
+}
+
+/* ---------- 月历 ---------- */
+.review-calendar {
   border: 1px solid var(--theme-border, var(--nn-line-200));
-  border-radius: 12px;
-  padding: 11px 12px 10px;
+  border-radius: 14px;
+  padding: 14px 16px 16px;
   background: var(--theme-card, var(--nn-surface-100));
   box-shadow: 0 1px 3px var(--nn-shadow-sepia);
-  text-align: left;
+}
+
+.review-calendar-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.review-calendar-title {
+  flex: 1;
+  text-align: center;
+  color: var(--theme-text, var(--nn-ink-800));
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.review-calendar-nav {
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--nn-line-200);
+  border-radius: 8px;
+  background: var(--nn-surface-100);
+  color: var(--nn-ink-600);
+  font-size: 15px;
+  line-height: 1;
   cursor: pointer;
-  transition: border-color 0.15s, box-shadow 0.15s, transform 0.15s;
 }
 
-.review-card:hover {
+.review-calendar-nav:hover {
   border-color: var(--nn-accent);
-  box-shadow: 0 4px 12px var(--nn-shadow-accent-soft);
-  transform: translateY(-1px);
+  color: var(--nn-accent);
 }
 
-.review-card:focus-visible {
-  outline: 2px solid var(--nn-accent);
-  outline-offset: 2px;
+.review-calendar-today {
+  border: 1px solid var(--nn-line-200);
+  border-radius: 8px;
+  padding: 4px 10px;
+  background: var(--nn-surface-100);
+  color: var(--nn-ink-600);
+  font-size: 11px;
+  cursor: pointer;
 }
 
-.review-card.is-daily-review {
+.review-calendar-today:hover {
   border-color: var(--nn-accent);
-  box-shadow: inset 3px 0 var(--nn-accent), 0 1px 3px var(--nn-shadow-sepia);
+  color: var(--nn-accent);
 }
 
-.review-card.is-unopenable {
+.review-calendar-week,
+.review-calendar-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 4px;
+}
+
+.review-calendar-week {
+  margin-bottom: 4px;
+}
+
+.review-calendar-week span {
+  text-align: center;
+  color: var(--nn-ink-400);
+  font-size: 10.5px;
+  line-height: 1.6;
+}
+
+.review-calendar-day {
+  position: relative;
+  height: 34px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--nn-ink-700);
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s;
+}
+
+.review-calendar-day:hover:not(:disabled) {
+  background: var(--nn-accent-soft);
+}
+
+.review-calendar-day:disabled {
+  color: var(--nn-ink-200);
   cursor: default;
+}
+
+.review-calendar-day.is-today {
+  border-color: var(--nn-line-300);
+  font-weight: 700;
+}
+
+.review-calendar-day.is-selected {
+  border-color: var(--nn-accent);
+  background: var(--nn-accent-soft);
+  color: var(--nn-accent);
+  font-weight: 700;
+}
+
+.review-calendar-day.has-files i {
+  position: absolute;
+  bottom: 4px;
+  left: 50%;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--nn-accent);
+  transform: translateX(-50%);
+}
+
+.review-calendar-day.is-selected.has-files i {
+  background: var(--nn-accent);
+}
+
+/* ---------- 当天导航 ---------- */
+.review-day {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.review-day-nav {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.review-day-arrow {
+  width: 32px;
+  height: 32px;
+  border: 1px solid var(--theme-border, var(--nn-line-200));
+  border-radius: 50%;
+  background: var(--theme-card, var(--nn-surface-100));
+  color: var(--nn-ink-700);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  transition: border-color 0.12s, color 0.12s;
+}
+
+.review-day-arrow:hover:not(:disabled) {
+  border-color: var(--nn-accent);
+  color: var(--nn-accent);
+}
+
+.review-day-arrow:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.review-day-title {
+  flex: 1;
+  color: var(--theme-text, var(--nn-ink-800));
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.review-day-counter {
+  color: var(--nn-ink-400);
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+
+/* ---------- 当天文件卡片 ---------- */
+.review-day-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.review-day-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border: 1px solid var(--theme-border, var(--nn-line-200));
+  border-radius: 12px;
+  padding: 13px 15px;
+  background: var(--theme-card, var(--nn-surface-100));
+  box-shadow: 0 1px 3px var(--nn-shadow-sepia);
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.review-day-card:hover {
+  border-color: var(--nn-accent);
+  box-shadow: 0 4px 14px var(--nn-shadow-accent-soft);
+}
+
+.review-day-card.is-primary {
+  border-left: 4px solid var(--nn-accent);
+}
+
+.review-day-card.is-daily-review {
+  box-shadow: inset 0 0 0 1px var(--nn-accent), 0 1px 3px var(--nn-shadow-sepia);
+}
+
+.review-day-card.is-unopenable {
   opacity: 0.75;
 }
 
-.review-card.is-unopenable:hover {
-  border-color: var(--theme-border, var(--nn-line-200));
-  box-shadow: 0 1px 3px var(--nn-shadow-sepia);
-  transform: none;
-}
-
-.review-card-head {
+.review-day-card-head {
   display: flex;
   align-items: center;
-  gap: 7px;
+  gap: 8px;
   min-width: 0;
 }
 
-.review-card-title {
+.review-role-tag {
+  flex: 0 0 auto;
+  border-radius: 999px;
+  padding: 1px 8px;
+  background: var(--nn-canvas-stone2);
+  color: var(--nn-ink-500);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1.5;
+}
+
+.review-role-tag.is-primary {
+  background: var(--nn-accent-soft);
+  color: var(--nn-accent);
+}
+
+.review-day-card-title {
   flex: 1;
   min-width: 0;
   overflow: hidden;
   color: var(--theme-text, var(--nn-ink-800));
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 700;
-  line-height: 1.35;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.review-card-preview {
-  display: -webkit-box;
-  overflow: hidden;
+.review-day-card-preview {
   margin: 0;
   color: var(--theme-muted, var(--nn-ink-500));
-  font-size: 11.5px;
-  line-height: 1.55;
+  font-size: 12px;
+  line-height: 1.6;
+  display: -webkit-box;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
+  overflow: hidden;
 }
 
-.review-card-badges {
+.review-day-card-meta {
   display: flex;
   align-items: center;
-  gap: 5px;
+  gap: 12px;
+  color: var(--nn-ink-400);
+  font-size: 11px;
+}
+
+.review-day-card-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 2px;
+}
+
+.review-card-action {
+  border: 1px solid var(--nn-line-200);
+  border-radius: 8px;
+  padding: 4px 10px;
+  background: var(--nn-surface-100);
+  color: var(--nn-ink-600);
+  font-size: 11.5px;
+  cursor: pointer;
+  transition: border-color 0.12s, color 0.12s, background 0.12s;
+}
+
+.review-card-action:hover {
+  border-color: var(--nn-accent);
+  color: var(--nn-accent);
+}
+
+.review-card-action.primary {
+  border-color: var(--nn-accent);
+  background: var(--nn-accent);
+  color: #ffffff;
+}
+
+.review-card-action.primary:hover {
+  background: var(--nn-accent-deep);
+  border-color: var(--nn-accent-deep);
+  color: #ffffff;
+}
+
+/* ---------- 归天下拉 ---------- */
+.review-date-dropdown {
+  position: relative;
+}
+
+.review-date-menu {
+  position: absolute;
+  bottom: calc(100% + 4px);
+  left: 0;
+  z-index: 30;
+  min-width: 120px;
+  max-height: 220px;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  border: 1px solid var(--nn-line-200);
+  border-radius: 10px;
+  padding: 5px;
+  background: var(--nn-surface-100);
+  box-shadow: 0 8px 24px var(--nn-shadow-ink-medium);
+}
+
+.review-date-menu-item {
+  border: 0;
+  border-radius: 6px;
+  padding: 5px 9px;
+  background: transparent;
+  color: var(--nn-ink-600);
+  font-size: 11.5px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.review-date-menu-item:hover {
+  background: var(--nn-accent-soft);
+  color: var(--nn-accent);
+}
+
+.review-date-menu-item.is-active {
+  background: var(--nn-accent-soft);
+  color: var(--nn-accent);
+  font-weight: 700;
+}
+
+/* ---------- 底部操作栏 ---------- */
+.review-day-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  border: 1px solid var(--theme-border, var(--nn-line-200));
+  border-radius: 12px;
+  padding: 11px 14px;
+  background: var(--theme-card, var(--nn-surface-100));
+}
+
+.review-day-actions-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
   flex-wrap: wrap;
 }
 
-.review-card-pending {
-  flex: 0 0 auto;
-  border: 1px solid var(--nn-line-300);
-  border-radius: 999px;
-  padding: 1px 7px;
-  background: var(--nn-surface-warm);
-  color: var(--nn-warn-brown);
-  font-size: 10px;
-  font-weight: 700;
-  line-height: 1.45;
-  white-space: nowrap;
+.review-day-actions-hint {
+  color: var(--nn-ink-400);
+  font-size: 11.5px;
 }
 
-.review-card-foot {
+/* ---------- 空状态 ---------- */
+.review-empty {
+  margin-top: 80px;
+  text-align: center;
+}
+
+.review-empty-title {
+  color: var(--nn-ink-600);
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.review-empty-hint {
+  margin-top: 8px;
+  color: var(--nn-ink-400);
+  font-size: 12px;
+  line-height: 1.7;
+}
+
+/* ---------- 侧边栏回顾模式（当天紧凑列表） ---------- */
+.review-side-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  color: var(--theme-muted, var(--nn-ink-400));
-  font-size: 10.5px;
-  line-height: 1.4;
+  margin-bottom: 8px;
 }
 
-.review-card-last-time {
-  flex: 0 0 auto;
-  color: var(--nn-ink-300);
-  white-space: nowrap;
+.review-side-header strong {
+  color: var(--nn-ink-700);
+  font-size: 12px;
+}
+
+.review-side-open {
+  border: 1px solid var(--nn-line-200);
+  border-radius: 8px;
+  padding: 3px 9px;
+  background: var(--nn-surface-100);
+  color: var(--nn-ink-600);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.review-side-open:hover {
+  border-color: var(--nn-accent);
+  color: var(--nn-accent);
+}
+
+.review-side-item {
+  cursor: pointer;
+}
+
+.review-side-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+  color: var(--nn-ink-400);
+  font-size: 10.5px;
+}
+
+/* 回顾 Tab 图标 */
+.workspace-tab-icon.review {
+  background: var(--nn-accent-soft);
+  color: var(--nn-accent);
 }
 
 .note-list-empty {

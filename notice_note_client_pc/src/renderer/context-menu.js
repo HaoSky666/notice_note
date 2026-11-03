@@ -225,6 +225,42 @@ function showContextMenu(x, y, entry = null) {
         }),
       );
     }
+    if (entry.type === "note") {
+      const note = notes.find((item) => item.id === entry.id);
+      if (note?.isReviewFile) {
+        const isPrimary = note.reviewRole === "primary";
+        contextMenu.append(
+          createContextMenuSeparator(),
+          createContextMenuItem("设置回顾日期…", () => {
+            promptReviewDate(note);
+          }),
+          createContextMenuItem(isPrimary ? "取消主文件" : "设为主文件", () => {
+            window.noticeNote
+              .setReviewRole({ type: "note", id: note.id }, isPrimary ? null : "primary")
+              .then(() => {
+                renderNoteList();
+                refreshReviewBrowserIfActive();
+              })
+              .catch((error) => console.error("设置主次失败:", error));
+          }),
+          createContextMenuItem(
+            note.reviewRole === "secondary" ? "取消次文件" : "设为次文件",
+            () => {
+              window.noticeNote
+                .setReviewRole(
+                  { type: "note", id: note.id },
+                  note.reviewRole === "secondary" ? null : "secondary",
+                )
+                .then(() => {
+                  renderNoteList();
+                  refreshReviewBrowserIfActive();
+                })
+                .catch((error) => console.error("设置主次失败:", error));
+            },
+          ),
+        );
+      }
+    }
     contextMenu.append(
       createContextMenuItem("打开资源管理器", () => {
         window.noticeNote.showEntryInFolder(entry).catch(console.error);

@@ -23,6 +23,7 @@ module.exports = function registerNotesIpc(ctx) {
     ctx.assertFolderTargetAccessible(normalizedFolderId);
     const note = ctx.createEmptyNote();
     note.folderId = normalizedFolderId;
+    note.isReviewFile = ctx.isReviewFolderId(normalizedFolderId);
     await ctx.saveNote(note);
     ctx.notes.unshift(note);
     ctx.sortNotesByCreatedAt();

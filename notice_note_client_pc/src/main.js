@@ -109,6 +109,7 @@ let dailyReviewSelection = { date: null, entryKey: null };
 let dailyReviewHistory = {};
 let dailyReviewHandledDate = null;
 let dailyReviewDeferred = { date: null, entryKey: null };
+let reviewDatePrefillDone = false;
 const unlockedFolderIds = new Set();
 
 if (process.platform === 'win32') {
@@ -299,6 +300,27 @@ function isReviewFolderId(folderId) {
   return false;
 }
 
+// 回顾日期：YYYY-MM-DD，缺省时按创建时间归天
+function isValidReviewDate(value) {
+  return typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value);
+}
+
+function getNoteReviewDayKey(note) {
+  if (isValidReviewDate(note?.reviewDate)) {
+    return note.reviewDate;
+  }
+  const created = note?.createdAt ? new Date(note.createdAt) : null;
+  return created && !Number.isNaN(created.getTime()) ? toLocalDateKey(created) : null;
+}
+
+function getResourceReviewDayKey(file) {
+  if (isValidReviewDate(file?.reviewDate)) {
+    return file.reviewDate;
+  }
+  const created = file?.createdAt ? new Date(file.createdAt) : null;
+  return created && !Number.isNaN(created.getTime()) ? toLocalDateKey(created) : null;
+}
+
 function markInternalNoteWrite(filePath, content) {
   if (content === undefined) {
     return;
@@ -359,6 +381,10 @@ function setNoteMetadata(filePath, note, fileId = null) {
     createdAt: note.createdAt,
     updatedAt: note.updatedAt,
     reminders: note.reminders,
+    reviewDate: typeof note.reviewDate === 'string' ? note.reviewDate : null,
+    reviewRole: note.reviewRole === 'primary' || note.reviewRole === 'secondary'
+      ? note.reviewRole
+      : null,
     fileId: fileId || noteMetadata[metadataKey]?.fileId || null
   };
 }
@@ -547,12 +573,13 @@ async function loadConfig() {
         entryKey: config.dailyReviewSelection.entryKey || null
       }
       : { date: null, entryKey: null };
-    dailyReviewHistory = config.dailyReviewHistoryVersion === 2
-      && config.dailyReviewHistory
+    // 历史可能来自旧版（note:/file: 键），先原样载入，启动时由迁移函数归一到天级键
+    dailyReviewHistory = config.dailyReviewHistory
       && typeof config.dailyReviewHistory === 'object'
       && !Array.isArray(config.dailyReviewHistory)
       ? config.dailyReviewHistory
       : {};
+    reviewDatePrefillDone = config.reviewDatePrefillDone === true;
     dailyReviewHandledDate = config.dailyReviewHandledDate || null;
     dailyReviewDeferred = config.dailyReviewDeferred
       && typeof config.dailyReviewDeferred === 'object'
@@ -578,6 +605,7 @@ async function loadConfig() {
     dailyReviewHistory = {};
     dailyReviewHandledDate = null;
     dailyReviewDeferred = { date: null, entryKey: null };
+    reviewDatePrefillDone = false;
   }
 }
 
@@ -587,9 +615,10 @@ async function saveConfig() {
     dailyReviewEnabled,
     dailyReviewSelection,
     dailyReviewHistory,
-    dailyReviewHistoryVersion: 2,
+    dailyReviewHistoryVersion: 3,
     dailyReviewHandledDate,
-    dailyReviewDeferred
+    dailyReviewDeferred,
+    reviewDatePrefillDone
   });
 }
 
@@ -597,17 +626,35 @@ function getResourceDailyReviewKey(filePath) {
   return `file:${getNoteMetadataKey(filePath)}`;
 }
 
+// 每日回顾候选：以「天」为单位。当天的文件里没有未完成提醒才参与挑选。
 function getDailyReviewCandidates() {
   const isProtected = (folderId) => Boolean(getLockedFolderForFolderId(folderId, new Set(), true));
-  const noteCandidates = notes
-    .filter((note) => note.isReviewFile
-      && !isProtected(note.folderId)
-      && !note.reminders.some((reminder) => !reminder.done))
-    .map((note) => ({ key: getNoteReminderFileKey(note.id), target: note }));
-  const fileCandidates = resourceFiles
-    .filter((file) => file.isReviewFile && file.canOpen && !isProtected(file.folderId))
-    .map((file) => ({ key: getResourceDailyReviewKey(file.path), target: file }));
-  return [...noteCandidates, ...fileCandidates];
+  const dayMap = new Map();
+
+  const ensureDay = (dayKey) => {
+    if (!dayMap.has(dayKey)) {
+      dayMap.set(dayKey, { key: `day:${dayKey}`, dayKey, notes: [], files: [] });
+    }
+    return dayMap.get(dayKey);
+  };
+
+  for (const note of notes) {
+    if (!note.isReviewFile || isProtected(note.folderId)) {
+      continue;
+    }
+    ensureDay(getNoteReviewDayKey(note)).notes.push(note);
+  }
+  for (const file of resourceFiles) {
+    if (!file.isReviewFile || !file.canOpen || isProtected(file.folderId)) {
+      continue;
+    }
+    ensureDay(getResourceReviewDayKey(file)).files.push(file);
+  }
+
+  return [...dayMap.values()]
+    .filter((day) => (day.notes.length + day.files.length) > 0)
+    .filter((day) => !day.notes.some((note) => isReminderPending(note)))
+    .sort((a, b) => a.dayKey.localeCompare(b.dayKey));
 }
 
 function isReminderPending(note) {
@@ -615,7 +662,7 @@ function isReminderPending(note) {
 }
 
 /**
- * 提醒笔记的提醒全部结束时，记一次「最近看过」的时间锚点。
+ * 提醒笔记的提醒全部结束时，把「当天」记一次「最近看过」的时间锚点。
  *
  * 提醒与回顾是同一批内容：提醒负责「该看了」，回顾负责「再看一遍」。所以提醒刚处理完的
  * 时刻就是一次接触，必须留下时间戳；否则它在排序里仍是「从未回顾过」，会被当成最高
@@ -627,18 +674,24 @@ function anchorReviewAfterRemindersFinished(note, hadPendingReminder) {
   if (!note || !hadPendingReminder || isReminderPending(note)) {
     return false;
   }
-  dailyReviewHistory[getNoteReminderFileKey(note.id)] = new Date().toISOString();
+  const dayKey = getNoteReviewDayKey(note);
+  if (!dayKey) {
+    return false;
+  }
+  dailyReviewHistory[`day:${dayKey}`] = new Date().toISOString();
   return true;
 }
 
 function updateDailyReviewSelection() {
+  const dayKeyOf = (note) => getNoteReviewDayKey(note);
+  const dayKeyOfFile = (file) => getResourceReviewDayKey(file);
   for (const note of notes) {
     note.isDailyReview = false;
-    note.dailyReviewLastReviewedAt = dailyReviewHistory[getNoteReminderFileKey(note.id)] || null;
+    note.dailyReviewLastReviewedAt = dailyReviewHistory[`day:${dayKeyOf(note)}`] || null;
   }
   for (const file of resourceFiles) {
     file.isDailyReview = false;
-    file.dailyReviewLastReviewedAt = dailyReviewHistory[getResourceDailyReviewKey(file.path)] || null;
+    file.dailyReviewLastReviewedAt = dailyReviewHistory[`day:${dayKeyOfFile(file)}`] || null;
   }
 
   const now = new Date();
@@ -678,7 +731,13 @@ function updateDailyReviewSelection() {
     || dailyReviewSelection.entryKey !== nextSelection.entryKey;
   dailyReviewSelection = nextSelection;
   if (selected) {
-    selected.target.isDailyReview = true;
+    // 当天的一整套文件都标记为今日回顾
+    for (const note of selected.notes) {
+      note.isDailyReview = true;
+    }
+    for (const file of selected.files) {
+      file.isDailyReview = true;
+    }
   }
   return changed || stateChanged;
 }
@@ -686,9 +745,11 @@ function updateDailyReviewSelection() {
 function getAppSettings() {
   const selectedNote = notes.find((note) => note.isDailyReview);
   const selectedFile = resourceFiles.find((file) => file.isDailyReview);
+  const dayTitle = selectedNote?.title || selectedFile?.name || null;
   return {
     dailyReviewEnabled,
-    dailyReviewTitle: selectedNote?.title || selectedFile?.name || null
+    dailyReviewTitle: dayTitle,
+    dailyReviewDayKey: dailyReviewSelection.entryKey || null
   };
 }
 
@@ -719,6 +780,10 @@ function createMobileNoteSummary(note) {
     reminders: note.reminders,
     isDailyReview: Boolean(note.isDailyReview),
     isReviewFile: Boolean(note.isReviewFile),
+    reviewDate: isValidReviewDate(note.reviewDate) ? note.reviewDate : null,
+    reviewRole: note.reviewRole === 'primary' || note.reviewRole === 'secondary'
+      ? note.reviewRole
+      : null,
     preview: plainContent.slice(0, 120)
   };
 }
@@ -1054,6 +1119,104 @@ async function migrateReviewFolder() {
   }
   await fs.rename(legacyPath, reviewPath);
   console.log('已迁移回顾文件夹:', LEGACY_REVIEW_FOLDER_NAME, '->', REVIEW_FOLDER_NAME);
+  return true;
+}
+
+// 一次性迁移：回顾文件按文件名日期预填 reviewDate（让历史文件按命名意图归天）。
+// 此后新文件一律按创建时间归天，需要时可在界面手工改回顾日期。
+async function prefillReviewDatesFromFilename() {
+  if (reviewDatePrefillDone) {
+    return false;
+  }
+  let changed = false;
+  for (const note of notes) {
+    if (!note.isReviewFile || note.reviewDate) {
+      continue;
+    }
+    const filePath = noteFileMap.get(note.id);
+    if (!filePath) {
+      continue;
+    }
+    const matched = /^(\d{4})[.\-](\d{1,2})[.\-](\d{1,2})/.exec(path.basename(filePath));
+    if (!matched) {
+      continue;
+    }
+    const dayKey = `${matched[1]}-${matched[2].padStart(2, '0')}-${matched[3].padStart(2, '0')}`;
+    note.reviewDate = dayKey;
+    const stats = await fs.stat(filePath).catch(() => null);
+    setNoteMetadata(filePath, note, stats ? String(stats.ino) : null);
+    changed = true;
+  }
+  reviewDatePrefillDone = true;
+  if (changed) {
+    await saveNoteMetadata();
+  }
+  await saveConfig();
+  return changed;
+}
+
+// 一次性迁移：回顾历史从「按文件」升级为「按天」（旧键 note:/file: 合并到 day:）
+async function migrateDailyReviewHistoryToDays() {
+  const hasLegacyKeys = Object.keys(dailyReviewHistory).some((key) => !key.startsWith('day:'));
+  const legacySelection = [dailyReviewSelection.entryKey, dailyReviewDeferred.entryKey]
+    .some((key) => typeof key === 'string' && key.startsWith('note:'));
+  if (!hasLegacyKeys && !legacySelection) {
+    return false;
+  }
+
+  const dayKeyOfLegacyKey = (key) => {
+    if (typeof key !== 'string') {
+      return null;
+    }
+    if (key.startsWith('note:')) {
+      const note = notes.find((item) => item.id === key.slice(5));
+      return note ? getNoteReviewDayKey(note) : null;
+    }
+    if (key.startsWith('file:')) {
+      const relativePath = key.slice(5);
+      const file = resourceFiles.find((item) => getNoteMetadataKey(item.path) === relativePath);
+      return file ? getResourceReviewDayKey(file) : null;
+    }
+    return null;
+  };
+
+  const nextHistory = {};
+  for (const [key, value] of Object.entries(dailyReviewHistory)) {
+    if (key.startsWith('day:')) {
+      nextHistory[key] = value;
+      continue;
+    }
+    const dayKey = dayKeyOfLegacyKey(key);
+    if (!dayKey) {
+      continue;
+    }
+    const dayHistoryKey = `day:${dayKey}`;
+    if (!nextHistory[dayHistoryKey] || String(value) > String(nextHistory[dayHistoryKey])) {
+      nextHistory[dayHistoryKey] = value;
+    }
+  }
+  dailyReviewHistory = nextHistory;
+
+  const migrateEntryKey = (key) => {
+    if (typeof key !== 'string' || !key) {
+      return null;
+    }
+    if (key.startsWith('day:')) {
+      return key;
+    }
+    const dayKey = dayKeyOfLegacyKey(key);
+    return dayKey ? `day:${dayKey}` : null;
+  };
+  dailyReviewSelection = {
+    date: dailyReviewSelection.date,
+    entryKey: migrateEntryKey(dailyReviewSelection.entryKey)
+  };
+  dailyReviewDeferred = {
+    date: dailyReviewDeferred.date,
+    entryKey: migrateEntryKey(dailyReviewDeferred.entryKey)
+  };
+
+  await saveConfig();
   return true;
 }
 
@@ -1506,6 +1669,13 @@ async function scanDirectory(dirPath, folderId, storedMetadataByPath, claimedMet
         };
         const normalizedNote = normalizeLoadedNote(noteData);
         normalizedNote.isReviewFile = isReviewFolderId(folderId);
+        normalizedNote.reviewDate = isValidReviewDate(storedMetadata.reviewDate)
+          ? storedMetadata.reviewDate
+          : null;
+        normalizedNote.reviewRole = storedMetadata.reviewRole === 'primary'
+          || storedMetadata.reviewRole === 'secondary'
+          ? storedMetadata.reviewRole
+          : null;
         notes.push(normalizedNote);
         noteFileMap.set(normalizedNote.id, fullPath);
         setNoteMetadata(fullPath, normalizedNote, fileId);
@@ -1808,16 +1978,23 @@ async function moveResourceFile(_event, fileId, targetFolderId) {
   return resourceFiles;
 }
 
+// 回顾操作按「天」进行：entry 为 { type: 'day', dayKey }
 function resolveDailyReviewTarget(entry) {
-  if (entry?.type === 'note') {
-    const target = notes.find((item) => item.id === entry.id);
-    return target ? { target, key: getNoteReminderFileKey(entry.id) } : null;
+  if (entry?.type !== 'day' || !isValidReviewDate(entry.dayKey)) {
+    return null;
   }
-  if (entry?.type === 'file') {
-    const target = resourceFiles.find((item) => item.id === entry.id);
-    return target ? { target, key: getResourceDailyReviewKey(target.path) } : null;
+  const dayNotes = notes.filter((note) => note.isReviewFile && getNoteReviewDayKey(note) === entry.dayKey);
+  const dayFiles = resourceFiles.filter((file) => file.isReviewFile && getResourceReviewDayKey(file) === entry.dayKey);
+  if (dayNotes.length === 0 && dayFiles.length === 0) {
+    return null;
   }
-  return null;
+  return {
+    key: `day:${entry.dayKey}`,
+    dayKey: entry.dayKey,
+    notes: dayNotes,
+    files: dayFiles,
+    folderId: (dayNotes[0] || dayFiles[0]).folderId
+  };
 }
 
 async function handleDailyReview(_event, entry, action) {
@@ -1829,9 +2006,9 @@ async function handleDailyReview(_event, entry, action) {
   if (!resolved
     || dailyReviewSelection.date !== today
     || dailyReviewSelection.entryKey !== resolved.key) {
-    throw new Error('当前文件不是今日回顾内容');
+    throw new Error('当前日期不是今日回顾内容');
   }
-  assertFolderAccessible(resolved.target.folderId);
+  assertFolderAccessible(resolved.folderId);
 
   let lastReviewedAt = dailyReviewHistory[resolved.key] || null;
   let deferredUntil = null;
@@ -1851,7 +2028,103 @@ async function handleDailyReview(_event, entry, action) {
   await saveConfig();
   sendNotesChanged();
   sendPdfFilesChanged();
-  return { action, lastReviewedAt, deferredUntil };
+  return { action, lastReviewedAt, deferredUntil, dayKey: resolved.dayKey };
+}
+
+// 设置文件的回顾日期（归天）；传 null 恢复为按创建时间归天
+async function setReviewDate(_event, entry, reviewDate) {
+  if (!entry || !['note', 'file'].includes(entry.type)) {
+    throw new Error('只能设置笔记的回顾日期');
+  }
+  if (reviewDate !== null && !isValidReviewDate(reviewDate)) {
+    throw new Error('回顾日期格式无效');
+  }
+
+  let target;
+  let filePath;
+  if (entry.type === 'note') {
+    target = notes.find((item) => item.id === entry.id);
+    filePath = target ? noteFileMap.get(target.id) : null;
+  } else {
+    target = resourceFiles.find((item) => item.id === entry.id);
+    filePath = target?.path || null;
+  }
+  if (!target || !filePath) {
+    throw new Error('文件不存在');
+  }
+  assertFolderAccessible(target.folderId);
+
+  const nextDate = reviewDate || null;
+  if (target.reviewDate === nextDate) {
+    return { reviewDate: nextDate };
+  }
+  target.reviewDate = nextDate;
+  if (entry.type === 'note') {
+    const stats = await fs.stat(filePath).catch(() => null);
+    setNoteMetadata(filePath, target, stats ? String(stats.ino) : null);
+    await saveNoteMetadata();
+  }
+  if (updateDailyReviewSelection()) {
+    await saveConfig();
+  }
+  sendNotesChanged();
+  sendPdfFilesChanged();
+  return { reviewDate: nextDate };
+}
+
+// 设置文件的主次角色；同一天只能有一个主文件（设置新主文件时旧主文件降级）
+async function setReviewRole(_event, entry, role) {
+  if (!entry || !['note', 'file'].includes(entry.type)) {
+    throw new Error('只能设置笔记的主次角色');
+  }
+  if (role !== null && role !== 'primary' && role !== 'secondary') {
+    throw new Error('主次角色无效');
+  }
+
+  let target;
+  let filePath;
+  if (entry.type === 'note') {
+    target = notes.find((item) => item.id === entry.id);
+    filePath = target ? noteFileMap.get(target.id) : null;
+  } else {
+    target = resourceFiles.find((item) => item.id === entry.id);
+    filePath = target?.path || null;
+  }
+  if (!target || !filePath) {
+    throw new Error('文件不存在');
+  }
+  assertFolderAccessible(target.folderId);
+
+  const nextRole = role || null;
+  if (target.reviewRole === nextRole) {
+    return { reviewRole: nextRole };
+  }
+  target.reviewRole = nextRole;
+
+  if (nextRole === 'primary' && entry.type === 'note') {
+    // 同一天的其它主文件降级为次文件
+    const dayKey = getNoteReviewDayKey(target);
+    for (const note of notes) {
+      if (note.id !== target.id
+        && note.reviewRole === 'primary'
+        && getNoteReviewDayKey(note) === dayKey) {
+        note.reviewRole = 'secondary';
+        const otherPath = noteFileMap.get(note.id);
+        if (otherPath) {
+          setNoteMetadata(otherPath, note, null);
+        }
+      }
+    }
+  }
+
+  if (entry.type === 'note') {
+    const stats = await fs.stat(filePath).catch(() => null);
+    setNoteMetadata(filePath, target, stats ? String(stats.ino) : null);
+    await saveNoteMetadata();
+  }
+  sendNotesChanged();
+  sendPdfFilesChanged();
+  return { reviewRole: nextRole };
 }
 
 async function copyLibraryEntryPath(_event, entry) {
@@ -2600,6 +2873,8 @@ app.whenReady().then(async () => {
   await migrateImageAssetDir();
   await migrateReviewFolder();
   await loadNotes();
+  await prefillReviewDatesFromFilename();
+  await migrateDailyReviewHistoryToDays();
   // 启动时先结算过期提醒，保证渲染进程第一次拉列表时状态就是对的。
   await settleExpiredReminders();
   // 自动清理无法看见渲染进程中的未落盘草稿，停用后避免误删草稿图片。
@@ -2616,6 +2891,7 @@ app.whenReady().then(async () => {
     fileURLToPath,
     isPathInside,
     IMAGE_ASSET_DIR_NAME,
+    isReviewFolderId,
     get notes() { return notes; },
     get folders() { return folders; },
     get pdfFiles() { return pdfFiles; },
@@ -2669,6 +2945,8 @@ app.whenReady().then(async () => {
     openLibraryEntry,
     openExternalUrl,
     handleDailyReview,
+    setReviewDate,
+    setReviewRole,
     insertImageForNote,
     saveClipboardImageForNote,
     downloadRemoteImage,

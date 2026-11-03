@@ -41,7 +41,9 @@ contextBridge.exposeInMainWorld('noticeNote', {
   showEntryInFolder: (entry) => ipcRenderer.invoke('entries:show-in-folder', entry),
   openEntryWithDefaultApp: (entry) => ipcRenderer.invoke('entries:open-default', entry),
   openExternalUrl: (url) => ipcRenderer.invoke('external-url:open', url),
-  handleDailyReview: (entry, action) => ipcRenderer.invoke('daily-review:handle', entry, action),
+  handleDailyReview: (dayKey, action) => ipcRenderer.invoke('daily-review:handle', { type: 'day', dayKey }, action),
+  setReviewDate: (entry, reviewDate) => ipcRenderer.invoke('entries:set-review-date', entry, reviewDate),
+  setReviewRole: (entry, role) => ipcRenderer.invoke('entries:set-review-role', entry, role),
   onNotesChanged: (callback) => {
     const listener = (_event, notes) => callback(notes);
     ipcRenderer.on('notes:changed', listener);

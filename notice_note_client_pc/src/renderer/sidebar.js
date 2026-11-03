@@ -474,158 +474,149 @@ function createDailyReviewLastTime(target) {
     : "上次回顾：尚未完成";
   return lastTime;
 }
-// 回顾 Tab：卡片式展示回顾文件夹中的文件
-function renderReviewCards(filteredNotes, filteredResources, searchKeyword) {
-  const grid = document.createElement("div");
-  grid.className = "review-card-grid";
-
-  const pendingCountOf = (note) =>
-    (note.reminders || []).filter((reminder) => !reminder.done).length;
-  const nextReminderOf = (note) =>
-    (note.reminders || [])
-      .filter((reminder) => !reminder.done)
-      .map((reminder) => getReminderDateKey(reminder))
-      .filter(Boolean)
-      .sort()[0] || null;
-
-  const orderedNotes = [...filteredNotes].sort((a, b) => {
-    const reviewDiff =
-      Number(Boolean(b.isDailyReview)) - Number(Boolean(a.isDailyReview));
-    if (reviewDiff !== 0) {
-      return reviewDiff;
+// 侧边栏回顾模式：当天文件紧凑列表（与主区回顾浏览器同步）
+// 翻页/日历/主次操作都在主区回顾浏览器里，这里只提供当天的快速入口。
+function renderReviewDayList(filteredNotes, filteredResources, searchKeyword) {
+  if (searchKeyword) {
+    // 搜索时展示全部回顾文件的简洁列表
+    for (const note of filteredNotes) {
+      noteList.append(
+        createReviewDayItem({
+          label: note.title || "未命名笔记",
+          meta: formatListDateTime(note.updatedAt),
+          badge: note.fileType.toUpperCase(),
+          active: note.id === activeNoteId,
+          onClick: () => selectNote(note.id).catch(console.error),
+        }),
+      );
     }
-    return Date.parse(b.updatedAt) - Date.parse(a.updatedAt);
-  });
-
-  for (const note of orderedNotes) {
-    const card = document.createElement("button");
-    card.type = "button";
-    card.className = `review-card${note.isDailyReview ? " is-daily-review" : ""}`;
-    card.dataset.noteId = note.id;
-
-    const head = document.createElement("div");
-    head.className = "review-card-head";
-
-    const title = document.createElement("strong");
-    title.className = "review-card-title";
-    title.textContent = note.title || "未命名笔记";
-    title.title = title.textContent;
-
-    const typeBadge = document.createElement("span");
-    typeBadge.className = `file-type-badge ${note.fileType}`;
-    typeBadge.textContent = note.fileType.toUpperCase();
-
-    head.append(title, typeBadge);
-
-    const preview = document.createElement("p");
-    preview.className = "review-card-preview";
-    const plainContent = String(note.content || "")
-      .replace(/!\[[^\]]*\]\([^)]+\)/g, " ")
-      .replace(/[#*`>]/g, "")
-      .replace(/\s+/g, " ")
-      .trim();
-    if (searchKeyword && !includesNoteSearchKeyword(note.title, searchKeyword)) {
-      const matched = createNoteSearchPreview(note.content, searchKeyword);
-      preview.textContent = matched || plainContent.slice(0, 90) || "（空笔记）";
-    } else {
-      preview.textContent = plainContent.slice(0, 90) || "（空笔记）";
+    for (const file of filteredResources) {
+      noteList.append(
+        createReviewDayItem({
+          label: file.name,
+          meta: `${formatFileSize(file.size)} · ${formatListDateTime(file.updatedAt)}`,
+          badge: file.typeLabel,
+          active: file.id === activeResourceId || file.id === activePdfId,
+          onClick: file.canOpen
+            ? () => selectResourceFile(file.id).catch(console.error)
+            : null,
+        }),
+      );
     }
-
-    const badges = document.createElement("div");
-    badges.className = "review-card-badges";
-    if (note.isDailyReview) {
-      const badge = document.createElement("span");
-      badge.className = "daily-review-badge";
-      badge.textContent = "今日回顾";
-      badge.title = "今天选中的每日回顾内容";
-      badges.append(badge);
+    if (filteredNotes.length + filteredResources.length === 0) {
+      const empty = document.createElement("p");
+      empty.className = "note-list-empty";
+      empty.textContent = "没有找到标题或正文匹配的回顾内容";
+      noteList.append(empty);
     }
-    if (hasTodayPendingReminder(note)) {
-      const badge = document.createElement("span");
-      badge.className = "today-reminder-badge";
-      badge.textContent = "今日提醒";
-      badge.title = "今天有提醒";
-      badges.append(badge);
-    }
-    const pending = pendingCountOf(note);
-    if (pending > 0) {
-      const badge = document.createElement("span");
-      badge.className = "review-card-pending";
-      const nextDate = nextReminderOf(note);
-      badge.textContent = nextDate ? `待提醒 ${nextDate}` : `${pending} 个提醒未完成`;
-      badge.title = nextDate ? `下一个提醒：${nextDate}` : `${pending} 个提醒未完成`;
-      badges.append(badge);
-    }
-
-    const foot = document.createElement("div");
-    foot.className = "review-card-foot";
-    const time = document.createElement("span");
-    time.textContent = `修改 ${formatListDateTime(note.updatedAt)}`;
-    foot.append(time);
-    if (note.dailyReviewLastReviewedAt) {
-      const lastTime = document.createElement("span");
-      lastTime.className = "review-card-last-time";
-      lastTime.textContent = `上次回顾 ${formatListDateTime(note.dailyReviewLastReviewedAt)}`;
-      lastTime.title = `上次回顾：${formatListDateTime(note.dailyReviewLastReviewedAt)}`;
-      foot.append(lastTime);
-    }
-
-    card.append(head, preview);
-    if (badges.childElementCount > 0) {
-      card.append(badges);
-    }
-    card.append(foot);
-    card.addEventListener("click", () => {
-      selectNote(note.id).catch(console.error);
-    });
-    grid.append(card);
+    return;
   }
 
-  for (const file of filteredResources) {
-    const card = document.createElement("button");
-    card.type = "button";
-    card.className = `review-card review-card-resource ${file.kind}${file.canOpen ? "" : " is-unopenable"}`;
-    card.dataset.fileId = file.id;
-    if (!file.canOpen) {
-      card.disabled = true;
-      card.title = "该文件类型仅支持在列表中查看";
-    }
-
-    const head = document.createElement("div");
-    head.className = "review-card-head";
-    const title = document.createElement("strong");
-    title.className = "review-card-title";
-    title.textContent = file.name;
-    title.title = file.name;
-    const typeBadge = document.createElement("span");
-    typeBadge.className = `file-type-badge ${file.kind}`;
-    typeBadge.textContent = file.typeLabel;
-    head.append(title, typeBadge);
-
-    const preview = document.createElement("p");
-    preview.className = "review-card-preview";
-    preview.textContent = `${formatFileSize(file.size)} · 修改 ${formatListDateTime(file.updatedAt)}`;
-
-    card.append(head, preview);
-    if (file.canOpen) {
-      card.addEventListener("click", () => {
-        selectResourceFile(file.id).catch(console.error);
-      });
-    }
-    grid.append(card);
+  // 非搜索：展示回顾浏览器当前查看的那一天
+  const dayMap = typeof getReviewDayMap === "function" ? getReviewDayMap() : new Map();
+  let dayKey = reviewBrowserState?.dayKey;
+  if (!dayKey || !dayMap.has(dayKey)) {
+    dayKey = [...dayMap.keys()].pop() || null;
   }
 
-  if (grid.childElementCount === 0) {
+  if (!dayKey) {
     const empty = document.createElement("p");
     empty.className = "note-list-empty";
-    empty.textContent = searchKeyword
-      ? "没有找到标题或正文匹配的回顾内容"
-      : "回顾文件夹还是空的，把文件放进 .study_notice 文件夹即可在这里看到";
+    empty.textContent = "回顾文件夹还是空的，把文件放进 .study_notice 文件夹即可在这里看到";
     noteList.append(empty);
     return;
   }
 
-  noteList.append(grid);
+  const day = dayMap.get(dayKey);
+  const header = document.createElement("div");
+  header.className = "review-side-header";
+  const title = document.createElement("strong");
+  title.textContent =
+    typeof formatReviewDayTitle === "function"
+      ? formatReviewDayTitle(dayKey)
+      : dayKey;
+  const openBtn = document.createElement("button");
+  openBtn.type = "button";
+  openBtn.className = "review-side-open";
+  openBtn.textContent = "打开回顾页";
+  openBtn.addEventListener("click", () => {
+    if (typeof activateReviewBrowser === "function") {
+      activateReviewBrowser();
+    }
+  });
+  header.append(title, openBtn);
+  noteList.append(header);
+
+  const orderedNotes = [...day.notes].sort((a, b) => {
+    const rank = (note) =>
+      note.reviewRole === "primary" ? 0 : note.reviewRole === "secondary" ? 1 : 2;
+    return rank(a) - rank(b) || Date.parse(b.updatedAt) - Date.parse(a.updatedAt);
+  });
+
+  for (const note of orderedNotes) {
+    const roleTag = note.reviewRole === "primary"
+      ? "主"
+      : note.reviewRole === "secondary"
+        ? "次"
+        : "";
+    noteList.append(
+      createReviewDayItem({
+        label: note.title || "未命名笔记",
+        meta: formatListDateTime(note.updatedAt),
+        badge: roleTag || note.fileType.toUpperCase(),
+        active: note.id === activeNoteId,
+        isDailyReview: note.isDailyReview,
+        onClick: () => selectNote(note.id).catch(console.error),
+      }),
+    );
+  }
+  for (const file of day.files) {
+    noteList.append(
+      createReviewDayItem({
+        label: file.name,
+        meta: `${formatFileSize(file.size)} · ${formatListDateTime(file.updatedAt)}`,
+        badge: file.typeLabel,
+        active: file.id === activeResourceId || file.id === activePdfId,
+        onClick: file.canOpen
+          ? () => selectResourceFile(file.id).catch(console.error)
+          : null,
+      }),
+    );
+  }
+}
+
+function createReviewDayItem({ label, meta, badge, active, isDailyReview, onClick }) {
+  const item = document.createElement("div");
+  item.className = `note-item review-side-item${active ? " active" : ""}`;
+  if (onClick) {
+    item.type = "button";
+    item.addEventListener("click", onClick);
+  } else {
+    item.title = "该文件类型仅支持在列表中查看";
+  }
+
+  const titleRow = document.createElement("div");
+  titleRow.className = "note-title-row";
+  const title = document.createElement("strong");
+  title.textContent = label;
+  title.title = label;
+  const badgeEl = document.createElement("span");
+  badgeEl.className = "file-type-badge";
+  badgeEl.textContent = badge;
+  titleRow.append(title, badgeEl);
+
+  const metaRow = document.createElement("div");
+  metaRow.className = "review-side-meta";
+  metaRow.textContent = meta;
+  if (isDailyReview) {
+    const dailyBadge = document.createElement("span");
+    dailyBadge.className = "daily-review-badge";
+    dailyBadge.textContent = "今日回顾";
+    metaRow.append(dailyBadge);
+  }
+
+  item.append(titleRow, metaRow);
+  return item;
 }
 function renderNoteList() {
   if (!noteList) {
@@ -645,7 +636,7 @@ function renderNoteList() {
   }
 
   if (sidebarViewMode === "reminder") {
-    renderReviewCards(filteredNotes, filteredResources, searchKeyword);
+    renderReviewDayList(filteredNotes, filteredResources, searchKeyword);
     return;
   }
 
