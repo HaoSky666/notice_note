@@ -74,7 +74,30 @@ function getReviewFolderId() {
   return folders.find((folder) => folder.isReviewFolder)?.id || null;
 }
 
-function ensureReviewBrowserState() {
+// 回顾操作后刷新应用设置（每日回顾选中天可能变化），再重绘浏览器
+// preferredDayKey：当前查看的天消失时优先跟随的目标天
+async function refreshAppSettingsAndRender(preferredDayKey = null) {
+  try {
+    appSettings = await window.noticeNote.getSettings();
+  } catch (error) {
+    console.error('刷新应用设置失败:', error);
+  }
+  renderReviewBrowser(preferredDayKey);
+  renderNoteList();
+}
+
+// 切换查看的某一天（月份跟随该天；用于翻页/日历点击/回到今天）
+function selectReviewDay(dayKey) {
+  reviewBrowserState.dayKey = dayKey;
+  const selected = parseDayKey(dayKey);
+  reviewBrowserState.month = new Date(selected.getFullYear(), selected.getMonth(), 1);
+  renderReviewBrowser();
+  if (sidebarViewMode === "reminder") {
+    renderNoteList();
+  }
+}
+
+function ensureReviewBrowserState(preferredDayKey = null) {
   const dayMap = getReviewDayMap();
   const dayKeys = [...dayMap.keys()];
   if (dayKeys.length === 0) {
@@ -83,17 +106,33 @@ function ensureReviewBrowserState() {
     return dayMap;
   }
   if (!reviewBrowserState.dayKey || !dayMap.has(reviewBrowserState.dayKey)) {
-    // 默认定位到今日回顾选中天，否则最近有文件的一天
+    // 当前查看的天已不存在（如文件被移走）：优先跟随偏好天，其次今日回顾选中天、
+    // 今天、最近一个较早的天，最后最早的天
+    const previousDayKey = reviewBrowserState.dayKey;
     const todayKey = toLocalDateKey(new Date());
     const pickedDay = appSettings?.dailyReviewDayKey?.startsWith("day:")
       ? appSettings.dailyReviewDayKey.slice(4)
       : null;
-    reviewBrowserState.dayKey = pickedDay && dayMap.has(pickedDay)
-      ? pickedDay
-      : (dayMap.includes(todayKey) ? todayKey : dayKeys[dayKeys.length - 1]);
+    let nextDay = null;
+    if (preferredDayKey && dayMap.has(preferredDayKey)) {
+      nextDay = preferredDayKey;
+    } else if (pickedDay && dayMap.has(pickedDay)) {
+      nextDay = pickedDay;
+    } else if (dayMap.has(todayKey)) {
+      nextDay = todayKey;
+    } else if (previousDayKey) {
+      const earlier = dayKeys.filter((key) => key < previousDayKey);
+      nextDay = earlier.length > 0 ? earlier[earlier.length - 1] : dayKeys[0];
+    } else {
+      nextDay = dayKeys[dayKeys.length - 1];
+    }
+    reviewBrowserState.dayKey = nextDay;
+    const selected = parseDayKey(nextDay);
+    reviewBrowserState.month = new Date(selected.getFullYear(), selected.getMonth(), 1);
+  } else if (!reviewBrowserState.month) {
+    const selected = parseDayKey(reviewBrowserState.dayKey);
+    reviewBrowserState.month = new Date(selected.getFullYear(), selected.getMonth(), 1);
   }
-  const selected = parseDayKey(reviewBrowserState.dayKey);
-  reviewBrowserState.month = new Date(selected.getFullYear(), selected.getMonth(), 1);
   return dayMap;
 }
 
@@ -112,9 +151,9 @@ function activateReviewBrowser() {
     .catch(console.error);
 }
 
-function renderReviewBrowser() {
-  const host = document.querySelector("#reviewBrowserInner");
-  const panel = document.querySelector("#reviewBrowser");
+function renderReviewBrowser(preferredDayKey = null) {
+  const host = reviewBrowserInner || document.querySelector("#reviewBrowserInner");
+  const panel = reviewBrowser || document.querySelector("#reviewBrowser");
   if (!host || !panel) {
     return;
   }
@@ -124,7 +163,7 @@ function renderReviewBrowser() {
   fileViewer.hidden = true;
   destroyPdfPreview();
 
-  const dayMap = ensureReviewBrowserState();
+  const dayMap = ensureReviewBrowserState(preferredDayKey);
   host.innerHTML = "";
 
   if (dayMap.size === 0) {
@@ -135,11 +174,15 @@ function renderReviewBrowser() {
       <p class="review-empty-hint">把文件放进 notes/.study_notice 文件夹，就会按创建时间出现在这里</p>
     `;
     host.append(empty);
+    renderNoteList();
+    renderWorkspaceTabs();
     return;
   }
 
   host.append(renderReviewCalendar(dayMap));
   host.append(renderReviewDayView(dayMap));
+  renderNoteList();
+  renderWorkspaceTabs();
 }
 
 // ---------- 月历 ----------
@@ -191,8 +234,10 @@ function renderReviewCalendar(dayMap) {
   todayBtn.addEventListener("click", () => {
     const todayKey = toLocalDateKey(new Date());
     if (dayMap.has(todayKey)) {
-      reviewBrowserState.dayKey = todayKey;
+      selectReviewDay(todayKey);
+      return;
     }
+    // 今天没有回顾文件：只把月历切到当前月
     const today = new Date();
     reviewBrowserState.month = new Date(today.getFullYear(), today.getMonth(), 1);
     renderReviewBrowser();
@@ -237,8 +282,7 @@ function renderReviewCalendar(dayMap) {
       cell.title = `${formatReviewDayTitle(dayKey)}（${total} 个文件）`;
       cell.append(document.createElement("i"));
       cell.addEventListener("click", () => {
-        reviewBrowserState.dayKey = dayKey;
-        renderReviewBrowser();
+        selectReviewDay(dayKey);
       });
     }
     grid.append(cell);
@@ -268,8 +312,7 @@ function renderReviewDayView(dayMap) {
   prevBtn.disabled = currentIndex <= 0;
   prevBtn.addEventListener("click", () => {
     if (currentIndex > 0) {
-      reviewBrowserState.dayKey = dayKeys[currentIndex - 1];
-      renderReviewBrowser();
+      selectReviewDay(dayKeys[currentIndex - 1]);
     }
   });
 
@@ -289,8 +332,7 @@ function renderReviewDayView(dayMap) {
   nextBtn.disabled = currentIndex >= dayKeys.length - 1;
   nextBtn.addEventListener("click", () => {
     if (currentIndex < dayKeys.length - 1) {
-      reviewBrowserState.dayKey = dayKeys[currentIndex + 1];
-      renderReviewBrowser();
+      selectReviewDay(dayKeys[currentIndex + 1]);
     }
   });
 
@@ -433,7 +475,7 @@ function createReviewRoleButton(note) {
     const nextRole = isPrimary ? null : "primary";
     window.noticeNote
       .setReviewRole({ type: "note", id: note.id }, nextRole)
-      .then(() => renderReviewBrowser())
+      .then(() => refreshAppSettingsAndRender())
       .catch((error) => console.error("设置主次失败:", error));
   });
   return button;
@@ -484,16 +526,11 @@ function createReviewDateDropdown(note) {
 
   button.addEventListener("click", (event) => {
     event.stopPropagation();
-    // 重新生成菜单（天数可能已变）
-    const fresh = createReviewDateDropdown(note);
-    wrap.replaceWith(fresh);
-    const freshMenu = fresh.querySelector(".review-date-menu");
-    const freshButton = fresh.querySelector("button");
-    if (freshMenu && freshButton) {
-      freshMenu.hidden = false;
+    menu.hidden = !menu.hidden;
+    if (!menu.hidden) {
       const close = (ev) => {
-        if (!fresh.contains(ev.target)) {
-          freshMenu.hidden = true;
+        if (!wrap.contains(ev.target)) {
+          menu.hidden = true;
           document.removeEventListener("click", close, true);
         }
       };
@@ -516,7 +553,7 @@ function formatReviewDayShort(dayKey) {
 function applyReviewDate(note, dayKey) {
   window.noticeNote
     .setReviewDate({ type: "note", id: note.id }, dayKey)
-    .then(() => renderReviewBrowser())
+    .then(() => refreshAppSettingsAndRender(dayKey))
     .catch((error) => console.error("设置回顾日期失败:", error));
 }
 
@@ -563,10 +600,17 @@ function renderReviewDayActions(day) {
     completeBtn.className = "primary-button";
     completeBtn.textContent = "完成回顾";
     completeBtn.addEventListener("click", () => {
+      completeBtn.disabled = true;
       window.noticeNote
         .handleDailyReview(reviewBrowserState.dayKey, "complete")
-        .then(() => renderReviewBrowser())
-        .catch((error) => console.error("完成回顾失败:", error));
+        .then(() => refreshAppSettingsAndRender())
+        .catch((error) => {
+          console.error("完成回顾失败:", error);
+          alert(error.message || "完成回顾失败");
+        })
+        .finally(() => {
+          completeBtn.disabled = false;
+        });
     });
 
     const deferBtn = document.createElement("button");
@@ -574,10 +618,17 @@ function renderReviewDayActions(day) {
     deferBtn.className = "secondary-button";
     deferBtn.textContent = "明天再看";
     deferBtn.addEventListener("click", () => {
+      deferBtn.disabled = true;
       window.noticeNote
         .handleDailyReview(reviewBrowserState.dayKey, "defer")
-        .then(() => renderReviewBrowser())
-        .catch((error) => console.error("推迟回顾失败:", error));
+        .then(() => refreshAppSettingsAndRender())
+        .catch((error) => {
+          console.error("推迟回顾失败:", error);
+          alert(error.message || "推迟回顾失败");
+        })
+        .finally(() => {
+          deferBtn.disabled = false;
+        });
     });
 
     left.append(completeBtn, deferBtn);
@@ -613,9 +664,10 @@ async function createReviewNoteForDay(dayKey) {
     const note = await window.noticeNote.createNote(folderId);
     await window.noticeNote.setReviewDate({ type: "note", id: note.id }, dayKey);
     await selectNote(note.id);
-    renderReviewBrowser();
+    refreshAppSettingsAndRender();
   } catch (error) {
     console.error("新建到当天失败:", error);
+    alert(error.message || "新建到当天失败");
   }
 }
 
@@ -644,8 +696,7 @@ function handleReviewBrowserKeydown(event) {
     return;
   }
   event.preventDefault();
-  reviewBrowserState.dayKey = dayKeys[nextIndex];
-  renderReviewBrowser();
+  selectReviewDay(dayKeys[nextIndex]);
 }
 
 // 数据变化后刷新（仅在回顾 tab 激活时）
