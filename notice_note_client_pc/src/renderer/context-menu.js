@@ -224,22 +224,6 @@ function showContextMenu(x, y, entry = null) {
           window.noticeNote.openEntryWithDefaultApp(entry).catch(console.error);
         }),
       );
-      const target =
-        entry.type === "note"
-          ? notes.find((item) => item.id === entry.id)
-          : resourceFiles.find((item) => item.id === entry.id);
-      if (entry.type === "note" || target?.canOpen || target?.isReminderFile) {
-        const isReminderFile = Boolean(target?.isReminderFile);
-        contextMenu.append(
-          createContextMenuItem(
-            isReminderFile ? "移出每日回顾" : "加入每日回顾",
-            () =>
-              updateDailyReviewMark(entry, target, !isReminderFile).catch(
-                console.error,
-              ),
-          ),
-        );
-      }
     }
     contextMenu.append(
       createContextMenuItem("打开资源管理器", () => {

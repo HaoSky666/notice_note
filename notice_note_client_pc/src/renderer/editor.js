@@ -980,8 +980,7 @@ function requestNoteSave(noteId) {
         const shouldRefreshSidebar =
           Boolean(getNoteSearchKeyword())
           || JSON.stringify(snapshot.reminders) !== JSON.stringify(savedNote.reminders)
-          || snapshot.folderId !== savedNote.folderId
-          || snapshot.isReminderFile !== savedNote.isReminderFile;
+          || snapshot.folderId !== savedNote.folderId;
         state.lastError = null;
         if (state.generation === generation && !state.dirty) {
           replaceNote(savedNote);

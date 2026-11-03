@@ -76,6 +76,9 @@ function getSearchFolderIds() {
   const folderIds = new Set([activeFolderId]);
   const childrenByParent = new Map();
   for (const folder of folders) {
+    if (folder.isReviewFolder) {
+      continue;
+    }
     const children = childrenByParent.get(folder.parentId) || [];
     children.push(folder.id);
     childrenByParent.set(folder.parentId, children);
@@ -98,10 +101,10 @@ function getFilteredNotes() {
     ? getSearchFolderIds()
     : null;
   const visibleNotes = sidebarViewMode === "reminder"
-    ? notes.filter((note) => note.isReminderFile)
-    : notes.filter((note) => searchFolderIds
+    ? notes.filter((note) => note.isReviewFile)
+    : notes.filter((note) => !note.isReviewFile && (searchFolderIds
       ? searchFolderIds.has(note.folderId)
-      : note.folderId === activeFolderId);
+      : note.folderId === activeFolderId));
   if (!keyword) {
     return visibleNotes;
   }
@@ -116,10 +119,10 @@ function getFilteredResources() {
     ? getSearchFolderIds()
     : null;
   const visibleResources = sidebarViewMode === "reminder"
-    ? resourceFiles.filter((file) => file.isReminderFile)
-    : resourceFiles.filter((file) => searchFolderIds
+    ? resourceFiles.filter((file) => file.isReviewFile)
+    : resourceFiles.filter((file) => !file.isReviewFile && (searchFolderIds
       ? searchFolderIds.has(file.folderId)
-      : file.folderId === activeFolderId);
+      : file.folderId === activeFolderId));
   if (!keyword) {
     return visibleResources;
   }
@@ -131,7 +134,9 @@ function getCurrentFolders() {
   if (sidebarViewMode !== "all" || getNoteSearchKeyword()) {
     return [];
   }
-  return folders.filter((folder) => folder.parentId === activeFolderId);
+  return folders.filter(
+    (folder) => folder.parentId === activeFolderId && !folder.isReviewFolder,
+  );
 }
 function getFolderNamePath(folderId, sourceFolders = folders) {
   const names = [];
@@ -168,27 +173,29 @@ function renderBreadcrumb() {
   if (sidebarViewMode === "reminder") {
     const reminderBtn = document.createElement("button");
     reminderBtn.className = "breadcrumb-item breadcrumb-root active";
-    reminderBtn.textContent = "每日回顾";
+    reminderBtn.textContent = "回顾";
+    reminderBtn.title = ".study_notice 文件夹中的回顾文件";
     const helpWrap = document.createElement("div");
     helpWrap.className = "daily-review-help-wrap";
     const helpButton = document.createElement("button");
     helpButton.className = "daily-review-help-button";
     helpButton.type = "button";
     helpButton.textContent = "?";
-    helpButton.title = "查看每日回顾规则";
-    helpButton.setAttribute("aria-label", "查看每日回顾规则");
+    helpButton.title = "查看回顾说明";
+    helpButton.setAttribute("aria-label", "查看回顾说明");
     helpButton.setAttribute("aria-expanded", "false");
     const rules = document.createElement("section");
     rules.className = "daily-review-rules";
     rules.hidden = true;
     rules.innerHTML = `
-      <strong>每日回顾规则</strong>
+      <strong>回顾说明</strong>
       <ol>
-        <li>自动回顾在周一至周五生效，“明天再看”的内容可延续到周末。</li>
-        <li>仅选择已加入回顾、应用能够打开的内容。</li>
-        <li>存在未完成提醒的笔记不会参与今日回顾。</li>
+        <li>这里展示 .study_notice 回顾文件夹中的全部文件（含子文件夹），不在「全部」中显示。</li>
+        <li>把文件放进 .study_notice 文件夹，即可加入回顾。</li>
+        <li>每日自动回顾在周一至周五生效，“明天再看”的内容可延续到周末。</li>
+        <li>仅选择回顾文件夹内、应用能够打开的内容。</li>
+        <li>存在未完成提醒的文件不会参与今日回顾。</li>
         <li>提醒全部完成的当天会记作一次回顾时间，避免隔天重复推送。</li>
-        <li>从未完成回顾的内容优先，其次选择上次回顾时间最早的内容。</li>
         <li>当天选择保持不变；完成回顾后记录时间，明天再看则下次优先。</li>
       </ol>
     `;
@@ -266,12 +273,14 @@ function renderBreadcrumb() {
 }
 function getFolderNoteCount(folderId) {
   return (
-    notes.filter((note) => note.folderId === folderId).length +
-    resourceFiles.filter((file) => file.folderId === folderId).length
+    notes.filter((note) => note.folderId === folderId && !note.isReviewFile).length +
+    resourceFiles.filter((file) => file.folderId === folderId && !file.isReviewFile).length
   );
 }
 function getChildFolderCount(folderId) {
-  return folders.filter((folder) => folder.parentId === folderId).length;
+  return folders.filter(
+    (folder) => folder.parentId === folderId && !folder.isReviewFolder,
+  ).length;
 }
 function getCalendarReminderEntries() {
   const reminderEntries = notes.flatMap((note) => {
@@ -457,40 +466,6 @@ function renderReminderCalendar() {
   }
   noteList.append(details);
 }
-async function updateDailyReviewMark(entry, target, marked) {
-  if (!target) {
-    return;
-  }
-  const result = await window.noticeNote.setReminderFileMark(entry, marked);
-  target.isReminderFile = Boolean(result?.marked);
-  renderNoteList();
-}
-function createDailyReviewToggle(entry, target) {
-  const toggle = document.createElement("span");
-  const isMarked = Boolean(target.isReminderFile);
-  toggle.className = `daily-review-toggle${isMarked ? " is-active" : ""}`;
-  toggle.role = "button";
-  toggle.tabIndex = 0;
-  toggle.textContent = isMarked ? "★" : "☆";
-  toggle.title = isMarked ? "移出每日回顾" : "加入每日回顾";
-  toggle.setAttribute("aria-label", toggle.title);
-  toggle.setAttribute("aria-pressed", String(isMarked));
-
-  const changeMark = (event) => {
-    event.preventDefault();
-    event.stopPropagation();
-    updateDailyReviewMark(entry, target, !target.isReminderFile).catch(
-      console.error,
-    );
-  };
-  toggle.addEventListener("click", changeMark);
-  toggle.addEventListener("keydown", (event) => {
-    if (event.key === "Enter" || event.key === " ") {
-      changeMark(event);
-    }
-  });
-  return toggle;
-}
 function createDailyReviewLastTime(target) {
   const lastTime = document.createElement("span");
   lastTime.className = "daily-review-last-time";
@@ -498,6 +473,159 @@ function createDailyReviewLastTime(target) {
     ? `上次回顾：${formatListDateTime(target.dailyReviewLastReviewedAt)}`
     : "上次回顾：尚未完成";
   return lastTime;
+}
+// 回顾 Tab：卡片式展示回顾文件夹中的文件
+function renderReviewCards(filteredNotes, filteredResources, searchKeyword) {
+  const grid = document.createElement("div");
+  grid.className = "review-card-grid";
+
+  const pendingCountOf = (note) =>
+    (note.reminders || []).filter((reminder) => !reminder.done).length;
+  const nextReminderOf = (note) =>
+    (note.reminders || [])
+      .filter((reminder) => !reminder.done)
+      .map((reminder) => getReminderDateKey(reminder))
+      .filter(Boolean)
+      .sort()[0] || null;
+
+  const orderedNotes = [...filteredNotes].sort((a, b) => {
+    const reviewDiff =
+      Number(Boolean(b.isDailyReview)) - Number(Boolean(a.isDailyReview));
+    if (reviewDiff !== 0) {
+      return reviewDiff;
+    }
+    return Date.parse(b.updatedAt) - Date.parse(a.updatedAt);
+  });
+
+  for (const note of orderedNotes) {
+    const card = document.createElement("button");
+    card.type = "button";
+    card.className = `review-card${note.isDailyReview ? " is-daily-review" : ""}`;
+    card.dataset.noteId = note.id;
+
+    const head = document.createElement("div");
+    head.className = "review-card-head";
+
+    const title = document.createElement("strong");
+    title.className = "review-card-title";
+    title.textContent = note.title || "未命名笔记";
+    title.title = title.textContent;
+
+    const typeBadge = document.createElement("span");
+    typeBadge.className = `file-type-badge ${note.fileType}`;
+    typeBadge.textContent = note.fileType.toUpperCase();
+
+    head.append(title, typeBadge);
+
+    const preview = document.createElement("p");
+    preview.className = "review-card-preview";
+    const plainContent = String(note.content || "")
+      .replace(/!\[[^\]]*\]\([^)]+\)/g, " ")
+      .replace(/[#*`>]/g, "")
+      .replace(/\s+/g, " ")
+      .trim();
+    if (searchKeyword && !includesNoteSearchKeyword(note.title, searchKeyword)) {
+      const matched = createNoteSearchPreview(note.content, searchKeyword);
+      preview.textContent = matched || plainContent.slice(0, 90) || "（空笔记）";
+    } else {
+      preview.textContent = plainContent.slice(0, 90) || "（空笔记）";
+    }
+
+    const badges = document.createElement("div");
+    badges.className = "review-card-badges";
+    if (note.isDailyReview) {
+      const badge = document.createElement("span");
+      badge.className = "daily-review-badge";
+      badge.textContent = "今日回顾";
+      badge.title = "今天选中的每日回顾内容";
+      badges.append(badge);
+    }
+    if (hasTodayPendingReminder(note)) {
+      const badge = document.createElement("span");
+      badge.className = "today-reminder-badge";
+      badge.textContent = "今日提醒";
+      badge.title = "今天有提醒";
+      badges.append(badge);
+    }
+    const pending = pendingCountOf(note);
+    if (pending > 0) {
+      const badge = document.createElement("span");
+      badge.className = "review-card-pending";
+      const nextDate = nextReminderOf(note);
+      badge.textContent = nextDate ? `待提醒 ${nextDate}` : `${pending} 个提醒未完成`;
+      badge.title = nextDate ? `下一个提醒：${nextDate}` : `${pending} 个提醒未完成`;
+      badges.append(badge);
+    }
+
+    const foot = document.createElement("div");
+    foot.className = "review-card-foot";
+    const time = document.createElement("span");
+    time.textContent = `修改 ${formatListDateTime(note.updatedAt)}`;
+    foot.append(time);
+    if (note.dailyReviewLastReviewedAt) {
+      const lastTime = document.createElement("span");
+      lastTime.className = "review-card-last-time";
+      lastTime.textContent = `上次回顾 ${formatListDateTime(note.dailyReviewLastReviewedAt)}`;
+      lastTime.title = `上次回顾：${formatListDateTime(note.dailyReviewLastReviewedAt)}`;
+      foot.append(lastTime);
+    }
+
+    card.append(head, preview);
+    if (badges.childElementCount > 0) {
+      card.append(badges);
+    }
+    card.append(foot);
+    card.addEventListener("click", () => {
+      selectNote(note.id).catch(console.error);
+    });
+    grid.append(card);
+  }
+
+  for (const file of filteredResources) {
+    const card = document.createElement("button");
+    card.type = "button";
+    card.className = `review-card review-card-resource ${file.kind}${file.canOpen ? "" : " is-unopenable"}`;
+    card.dataset.fileId = file.id;
+    if (!file.canOpen) {
+      card.disabled = true;
+      card.title = "该文件类型仅支持在列表中查看";
+    }
+
+    const head = document.createElement("div");
+    head.className = "review-card-head";
+    const title = document.createElement("strong");
+    title.className = "review-card-title";
+    title.textContent = file.name;
+    title.title = file.name;
+    const typeBadge = document.createElement("span");
+    typeBadge.className = `file-type-badge ${file.kind}`;
+    typeBadge.textContent = file.typeLabel;
+    head.append(title, typeBadge);
+
+    const preview = document.createElement("p");
+    preview.className = "review-card-preview";
+    preview.textContent = `${formatFileSize(file.size)} · 修改 ${formatListDateTime(file.updatedAt)}`;
+
+    card.append(head, preview);
+    if (file.canOpen) {
+      card.addEventListener("click", () => {
+        selectResourceFile(file.id).catch(console.error);
+      });
+    }
+    grid.append(card);
+  }
+
+  if (grid.childElementCount === 0) {
+    const empty = document.createElement("p");
+    empty.className = "note-list-empty";
+    empty.textContent = searchKeyword
+      ? "没有找到标题或正文匹配的回顾内容"
+      : "回顾文件夹还是空的，把文件放进 .study_notice 文件夹即可在这里看到";
+    noteList.append(empty);
+    return;
+  }
+
+  noteList.append(grid);
 }
 function renderNoteList() {
   if (!noteList) {
@@ -516,6 +644,11 @@ function renderNoteList() {
     return;
   }
 
+  if (sidebarViewMode === "reminder") {
+    renderReviewCards(filteredNotes, filteredResources, searchKeyword);
+    return;
+  }
+
   if (
     searchKeyword
     && filteredNotes.length === 0
@@ -529,22 +662,10 @@ function renderNoteList() {
   }
 
   if (
-    sidebarViewMode === "reminder" &&
-    filteredNotes.length === 0 &&
-    filteredResources.length === 0
-  ) {
-    const empty = document.createElement("p");
-    empty.className = "note-list-empty";
-    empty.textContent = "回顾清单还是空的，可点击文件右侧的 ☆ 加入";
-    noteList.append(empty);
-    return;
-  }
-
-  if (
     sidebarViewMode === "all" &&
-    currentFolders.length === 0 &&
-    filteredNotes.length === 0 &&
-    filteredResources.length === 0
+    currentFolders.length === 0
+    && filteredNotes.length === 0
+    && filteredResources.length === 0
   ) {
     const empty = document.createElement("p");
     empty.className = "note-list-empty";
@@ -724,9 +845,6 @@ function renderNoteList() {
     title.textContent = note.title || "未命名笔记";
     title.title = title.textContent;
     titleRow.append(dragHandle, title);
-    titleRow.append(
-      createDailyReviewToggle({ type: "note", id: note.id }, note),
-    );
     const badgeRow = document.createElement("div");
     badgeRow.className = "note-badge-row";
 
@@ -744,14 +862,6 @@ function renderNoteList() {
       dailyReviewBadge.textContent = "今日回顾";
       dailyReviewBadge.title = "今天选中的每日回顾内容";
       badgeRow.append(dailyReviewBadge);
-    }
-
-    if (note.isReminderFile) {
-      const reminderFileBadge = document.createElement("span");
-      reminderFileBadge.className = "reminder-file-badge";
-      reminderFileBadge.textContent = "回顾";
-      reminderFileBadge.title = "已加入每日回顾清单";
-      badgeRow.append(reminderFileBadge);
     }
 
     if (isActiveNote) {
@@ -809,20 +919,9 @@ function renderNoteList() {
     `;
     item.append(timeMeta);
 
-    if (note.isReminderFile) {
-      const pendingCount = (note.reminders || []).filter(
-        (reminder) => !reminder.done,
-      ).length;
-      const reminderMeta = document.createElement("span");
-      reminderMeta.className = `note-reminder-meta${pendingCount > 0 ? " has-pending" : ""}`;
-      reminderMeta.textContent =
-        pendingCount > 0 ? `${pendingCount} 个提醒未完成` : "可参与今日回顾";
-      item.append(reminderMeta, createDailyReviewLastTime(note));
-    }
-
     const openNote = () => selectNote(note.id).catch(console.error);
     item.addEventListener("click", (event) => {
-      if (event.target.closest(".daily-review-toggle, .note-drag-handle")) {
+      if (event.target.closest(".note-drag-handle")) {
         return;
       }
       openNote();
@@ -845,12 +944,7 @@ function renderNoteList() {
     if (file.canOpen) {
       const openResource = () =>
         selectResourceFile(file.id).catch(console.error);
-      item.addEventListener("click", (event) => {
-        if (event.target.closest(".daily-review-toggle")) {
-          return;
-        }
-        openResource();
-      });
+      item.addEventListener("click", openResource);
     } else {
       item.title = "该文件类型仅支持在列表中查看";
     }
@@ -873,11 +967,6 @@ function renderNoteList() {
     meta.textContent = `${formatFileSize(file.size)} · 修改：${formatListDateTime(file.updatedAt)}`;
 
     titleRow.append(title);
-    if (file.canOpen || file.isReminderFile) {
-      titleRow.append(
-        createDailyReviewToggle({ type: "file", id: file.id }, file),
-      );
-    }
     if (file.isDailyReview) {
       const dailyReviewBadge = document.createElement("span");
       dailyReviewBadge.className = "daily-review-badge";
@@ -885,19 +974,12 @@ function renderNoteList() {
       dailyReviewBadge.title = "今天选中的每日回顾内容";
       badgeRow.append(dailyReviewBadge);
     }
-    if (file.isReminderFile) {
-      const reminderFileBadge = document.createElement("span");
-      reminderFileBadge.className = "reminder-file-badge";
-      reminderFileBadge.textContent = "回顾";
-      reminderFileBadge.title = "已加入每日回顾清单";
-      badgeRow.append(reminderFileBadge);
-    }
     titleRow.append(badge);
     item.append(titleRow);
     if (badgeRow.childElementCount > 0) {
       item.append(badgeRow);
     }
-    if (sidebarViewMode === "reminder" || searchKeyword) {
+    if (searchKeyword) {
       const folderPath = document.createElement("div");
       folderPath.className = "reminder-file-path";
       const pathParts = getFolderNamePath(file.folderId);
@@ -907,9 +989,6 @@ function renderNoteList() {
       item.append(folderPath);
     }
     item.append(meta);
-    if (file.isReminderFile) {
-      item.append(createDailyReviewLastTime(file));
-    }
     noteList.append(item);
   }
 }

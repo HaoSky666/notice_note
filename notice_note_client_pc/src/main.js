@@ -75,10 +75,12 @@ const REMINDER_CHECK_INTERVAL = 30 * 1000;
 const IMAGE_ASSET_DIR_NAME = 'notice_note_images';
 const APP_DATA_DIR_NAME = '.notice-note';
 const NOTE_METADATA_FILE_NAME = 'metadata.json';
-const REMINDER_FILE_MARKS_NAME = 'reminder-files.json';
 const FOLDER_METADATA_FILE_NAME = 'folders.json';
 const NOTE_BACKUP_DIR_NAME = 'backups';
 const OBSOLETE_MOBILE_IMAGE_CACHE_DIR_NAME = 'mobile-image-cache';
+// 回顾文件夹：该文件夹（含子文件夹）内的文件只出现在「回顾」Tab，不在「全部」显示
+const REVIEW_FOLDER_NAME = '.study_notice';
+const LEGACY_REVIEW_FOLDER_NAME = 'study_notice';
 const MOBILE_EXPORT_EXTENSION = 'notice-note-mobile';
 const MOBILE_PACKAGE_MAGIC = Buffer.from('NNMOBILE', 'ascii');
 const MOBILE_PACKAGE_VERSION = 2;
@@ -101,7 +103,6 @@ let resourceLoadPromise = null;
 let noteFileMap = new Map(); // noteId -> filePath
 let noteMetadata = {};
 let folderMetadata = {};
-let reminderFileMarks = new Set();
 let internalNoteWrites = new Map();
 let dailyReviewEnabled = true;
 let dailyReviewSelection = { date: null, entryKey: null };
@@ -269,12 +270,33 @@ async function removeObsoleteMobileImageCache() {
   });
 }
 
-function getReminderFileMarksPath() {
-  return path.join(getAppDataPath(), REMINDER_FILE_MARKS_NAME);
-}
-
 function getNoteMetadataKey(filePath) {
   return path.relative(getNotesPath(), filePath).split(path.sep).join('/');
+}
+
+// 每日回顾历史的键（与文件是否标记无关，仅用于记录回顾时间）
+function getNoteReminderFileKey(noteId) {
+  return `note:${noteId}`;
+}
+
+function isReviewFolderName(name) {
+  return name === REVIEW_FOLDER_NAME;
+}
+
+// 文件夹自身或任意祖先为回顾文件夹时，其内容属于回顾文件
+function isReviewFolderId(folderId) {
+  let current = folderId
+    ? folders.find((folder) => folder.id === folderId)
+    : null;
+  while (current) {
+    if (current.isReviewFolder) {
+      return true;
+    }
+    current = current.parentId
+      ? folders.find((folder) => folder.id === current.parentId)
+      : null;
+  }
+  return false;
 }
 
 function markInternalNoteWrite(filePath, content) {
@@ -327,66 +349,6 @@ async function loadNoteMetadata() {
 
 async function saveNoteMetadata() {
   await atomicWriteJson(getNoteMetadataPath(), noteMetadata);
-}
-
-async function loadReminderFileMarks() {
-  const parsed = await readJsonWithBackup(getReminderFileMarksPath(), []);
-  if (!Array.isArray(parsed)) {
-    throw new Error('提醒文件标记格式无效');
-  }
-  reminderFileMarks = new Set(parsed.filter((item) => typeof item === 'string'));
-}
-
-async function saveReminderFileMarks() {
-  await atomicWriteJson(getReminderFileMarksPath(), [...reminderFileMarks].sort());
-}
-
-function getNoteReminderFileKey(noteId) {
-  return `note:${noteId}`;
-}
-
-function getResourceReminderFileKey(filePath) {
-  return `path:${getNoteMetadataKey(filePath)}`;
-}
-
-function moveResourceReminderFileMark(oldPath, newPath) {
-  const oldKey = getResourceReminderFileKey(oldPath);
-  if (!reminderFileMarks.delete(oldKey)) {
-    return;
-  }
-  reminderFileMarks.add(getResourceReminderFileKey(newPath));
-}
-
-function moveResourceReminderFileMarkTree(oldPath, newPath) {
-  const oldPrefix = `${getResourceReminderFileKey(oldPath).replace(/\/$/, '')}/`;
-  const newPrefix = `${getResourceReminderFileKey(newPath).replace(/\/$/, '')}/`;
-  for (const key of [...reminderFileMarks]) {
-    if (key.startsWith(oldPrefix)) {
-      reminderFileMarks.delete(key);
-      reminderFileMarks.add(`${newPrefix}${key.slice(oldPrefix.length)}`);
-    }
-  }
-}
-
-function deleteResourceReminderFileMarkTree(folderPath) {
-  const prefix = `${getResourceReminderFileKey(folderPath).replace(/\/$/, '')}/`;
-  for (const key of [...reminderFileMarks]) {
-    if (key.startsWith(prefix)) {
-      reminderFileMarks.delete(key);
-    }
-  }
-}
-
-async function removeStaleReminderFileMarks() {
-  const validKeys = new Set([
-    ...notes.map((note) => getNoteReminderFileKey(note.id)),
-    ...resourceFiles.map((file) => getResourceReminderFileKey(file.path))
-  ]);
-  const nextMarks = new Set([...reminderFileMarks].filter((key) => validKeys.has(key)));
-  if (nextMarks.size !== reminderFileMarks.size) {
-    reminderFileMarks = nextMarks;
-    await saveReminderFileMarks();
-  }
 }
 
 function setNoteMetadata(filePath, note, fileId = null) {
@@ -638,12 +600,12 @@ function getResourceDailyReviewKey(filePath) {
 function getDailyReviewCandidates() {
   const isProtected = (folderId) => Boolean(getLockedFolderForFolderId(folderId, new Set(), true));
   const noteCandidates = notes
-    .filter((note) => note.isReminderFile
+    .filter((note) => note.isReviewFile
       && !isProtected(note.folderId)
       && !note.reminders.some((reminder) => !reminder.done))
     .map((note) => ({ key: getNoteReminderFileKey(note.id), target: note }));
   const fileCandidates = resourceFiles
-    .filter((file) => file.isReminderFile && file.canOpen && !isProtected(file.folderId))
+    .filter((file) => file.isReviewFile && file.canOpen && !isProtected(file.folderId))
     .map((file) => ({ key: getResourceDailyReviewKey(file.path), target: file }));
   return [...noteCandidates, ...fileCandidates];
 }
@@ -756,7 +718,7 @@ function createMobileNoteSummary(note) {
     updatedAt: note.updatedAt,
     reminders: note.reminders,
     isDailyReview: Boolean(note.isDailyReview),
-    isReminderFile: Boolean(note.isReminderFile),
+    isReviewFile: Boolean(note.isReviewFile),
     preview: plainContent.slice(0, 120)
   };
 }
@@ -1081,13 +1043,26 @@ function sortNotesByCreatedAt() {
   notes.sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
 }
 
+// 一次性迁移：旧回顾文件夹 study_notice 改名为 .study_notice。
+// 文件夹 ID 与笔记 ID 按 inode 匹配，改名后下次扫描会自动重新关联。
+async function migrateReviewFolder() {
+  const notesDir = getNotesPath();
+  const legacyPath = path.join(notesDir, LEGACY_REVIEW_FOLDER_NAME);
+  const reviewPath = path.join(notesDir, REVIEW_FOLDER_NAME);
+  if (!await pathExists(legacyPath) || await pathExists(reviewPath)) {
+    return false;
+  }
+  await fs.rename(legacyPath, reviewPath);
+  console.log('已迁移回顾文件夹:', LEGACY_REVIEW_FOLDER_NAME, '->', REVIEW_FOLDER_NAME);
+  return true;
+}
+
 async function loadFolders() {
   const notesDir = getNotesPath();
   await fs.mkdir(notesDir, { recursive: true });
   const previousFolders = folders;
   folders = [];
   await loadFolderMetadata();
-
   try {
     await scanFolderDirectory(notesDir, null);
     await saveFolderMetadata();
@@ -1133,6 +1108,7 @@ async function scanFolderDirectory(dirPath, parentId) {
       parentId,
       createdAt: data.createdAt || new Date().toISOString(),
       fileId,
+      isReviewFolder: isReviewFolderName(entry.name),
       passwordSalt: typeof data.passwordSalt === 'string' ? data.passwordSalt : '',
       passwordHash: typeof data.passwordHash === 'string' ? data.passwordHash : ''
     };
@@ -1194,15 +1170,12 @@ async function renameFolder(_event, folderId, newName) {
   const newPath = path.join(getNotesPath(), ...getFolderPathParts(folder).slice(0, -1), newFolderName);
 
   const previousNoteMetadata = structuredClone(noteMetadata);
-  const previousReminderMarks = new Set(reminderFileMarks);
   const previousNoteFileMap = new Map(noteFileMap);
   await fs.rename(oldPath, newPath);
   try {
     moveNoteMetadataTree(oldPath, newPath);
-    moveResourceReminderFileMarkTree(oldPath, newPath);
     folder.name = newFolderName;
     await saveNoteMetadata();
-    await saveReminderFileMarks();
     await saveFolderMetadata();
   } catch (error) {
     await fs.rename(newPath, oldPath).catch((rollbackError) => {
@@ -1210,11 +1183,9 @@ async function renameFolder(_event, folderId, newName) {
     });
     folder.name = path.basename(oldPath);
     noteMetadata = previousNoteMetadata;
-    reminderFileMarks = previousReminderMarks;
     noteFileMap = previousNoteFileMap;
     await Promise.allSettled([
       saveNoteMetadata(),
-      saveReminderFileMarks(),
       saveFolderMetadata()
     ]);
     throw error;
@@ -1249,10 +1220,7 @@ async function deleteFolder(_event, folderId) {
   const notesToDelete = notes.filter((note) => deletedFolderIds.has(note.folderId));
   for (const note of notesToDelete) {
     noteFileMap.delete(note.id);
-    reminderFileMarks.delete(getNoteReminderFileKey(note.id));
   }
-  deleteResourceReminderFileMarkTree(folderPath);
-  await saveReminderFileMarks();
   notes = notes.filter((note) => !deletedFolderIds.has(note.folderId));
   folders = folders.filter((item) => !deletedFolderIds.has(item.id));
   await saveFolderMetadata();
@@ -1300,6 +1268,7 @@ function sanitizeFolderForClient(folder, unlockedSet = unlockedFolderIds) {
     name: folder.name,
     parentId: folder.parentId || null,
     createdAt: folder.createdAt,
+    isReviewFolder: Boolean(folder.isReviewFolder),
     isProtected: isFolderProtected(folder),
     isUnlocked: unlockedSet.has(folder.id)
   };
@@ -1421,7 +1390,6 @@ async function performLoadNotes() {
   const notesDir = getNotesPath();
   let shouldCreateInitialFile = false;
   await loadNoteMetadata();
-  await loadReminderFileMarks();
 
   // 检查是否有旧的 notes.json 需要迁移（默认路径和自定义路径）
   const oldJsonPaths = [
@@ -1452,7 +1420,6 @@ async function performLoadNotes() {
     // 递归扫描目录
     await scanDirectory(notesDir, null, storedMetadataByPath, new Set());
     await saveNoteMetadata();
-    await removeStaleReminderFileMarks();
   } catch (error) {
     const rootMissing = error.code === 'ENOENT' && !await pathExists(notesDir);
     if (!rootMissing) {
@@ -1538,7 +1505,7 @@ async function scanDirectory(dirPath, folderId, storedMetadataByPath, claimedMet
           )
         };
         const normalizedNote = normalizeLoadedNote(noteData);
-        normalizedNote.isReminderFile = reminderFileMarks.has(getNoteReminderFileKey(normalizedNote.id));
+        normalizedNote.isReviewFile = isReviewFolderId(folderId);
         notes.push(normalizedNote);
         noteFileMap.set(normalizedNote.id, fullPath);
         setNoteMetadata(fullPath, normalizedNote, fileId);
@@ -1612,7 +1579,7 @@ async function scanResourceDirectory(dirPath, folderId) {
           size: stats.size,
           createdAt: stats.birthtime.toISOString(),
           updatedAt: stats.mtime.toISOString(),
-          isReminderFile: reminderFileMarks.has(getResourceReminderFileKey(fullPath))
+          isReviewFile: isReviewFolderId(folderId)
         });
       } catch (error) {
         console.error(`读取资源文件失败: ${entry.name}`, error);
@@ -1806,8 +1773,6 @@ async function deleteResourceFile(_event, fileId) {
   assertFolderAccessible(file.folderId);
 
   await shell.trashItem(file.path);
-  reminderFileMarks.delete(getResourceReminderFileKey(file.path));
-  await saveReminderFileMarks();
   await loadPdfFiles();
   if (updateDailyReviewSelection()) {
     await saveConfig();
@@ -1834,60 +1799,13 @@ async function moveResourceFile(_event, fileId, targetFolderId) {
   const extension = path.extname(file.name);
   const baseName = path.basename(file.name, extension);
   const targetPath = await getUniqueFilePath(targetDir, baseName, extension);
-  const previousReminderMarks = new Set(reminderFileMarks);
   await fs.rename(file.path, targetPath);
-  try {
-    moveResourceReminderFileMark(file.path, targetPath);
-    await saveReminderFileMarks();
-  } catch (error) {
-    await fs.rename(targetPath, file.path).catch((rollbackError) => {
-      console.error('回滚移动资料文件失败:', rollbackError);
-    });
-    reminderFileMarks = previousReminderMarks;
-    await saveReminderFileMarks().catch(() => {});
-    throw error;
-  }
   await loadPdfFiles();
   if (updateDailyReviewSelection()) {
     await saveConfig();
   }
   sendPdfFilesChanged();
   return resourceFiles;
-}
-
-async function setReminderFileMark(_event, entry, marked) {
-  if (!entry || !['note', 'file'].includes(entry.type)) {
-    throw new Error('只能标记文件');
-  }
-
-  let target;
-  let key;
-  if (entry.type === 'note') {
-    target = notes.find((item) => item.id === entry.id);
-    key = getNoteReminderFileKey(entry.id);
-  } else {
-    target = resourceFiles.find((item) => item.id === entry.id);
-    key = target ? getResourceReminderFileKey(target.path) : null;
-  }
-
-  if (!target || !key) {
-    throw new Error('文件不存在');
-  }
-  assertFolderAccessible(target.folderId);
-
-  if (marked) {
-    reminderFileMarks.add(key);
-  } else {
-    reminderFileMarks.delete(key);
-  }
-  target.isReminderFile = Boolean(marked);
-  await saveReminderFileMarks();
-  if (updateDailyReviewSelection()) {
-    await saveConfig();
-  }
-  sendNotesChanged();
-  sendPdfFilesChanged();
-  return { marked: target.isReminderFile };
 }
 
 function resolveDailyReviewTarget(entry) {
@@ -2211,10 +2129,6 @@ async function upsertNote(_event, input) {
           if (existingId !== note.id) {
             noteFileMap.delete(existingId);
             noteFileMap.set(note.id, sourcePath);
-            const existingReminderKey = getNoteReminderFileKey(existingId);
-            if (reminderFileMarks.delete(existingReminderKey)) {
-              reminderFileMarks.add(getNoteReminderFileKey(note.id));
-            }
           }
         } else {
           noteFileMap.set(note.id, sourcePath);
@@ -2255,7 +2169,7 @@ async function upsertNote(_event, input) {
     targetNote = note;
   }
 
-  targetNote.isReminderFile = reminderFileMarks.has(getNoteReminderFileKey(targetNote.id));
+  targetNote.isReviewFile = isReviewFolderId(targetNote.folderId);
 
   try {
     await saveNote(targetNote);
@@ -2305,8 +2219,6 @@ async function deleteNote(_event, noteId) {
   }
 
   notes = notes.filter((note) => note.id !== noteId);
-  reminderFileMarks.delete(getNoteReminderFileKey(noteId));
-  await saveReminderFileMarks();
 
   if (notes.length === 0) {
     const note = createEmptyNote();
@@ -2336,7 +2248,6 @@ async function useNotesPath(nextPath) {
     noteFileMap,
     noteMetadata,
     folderMetadata,
-    reminderFileMarks,
     dailyReviewSelection,
     dailyReviewHistory,
     dailyReviewHandledDate,
@@ -2357,7 +2268,6 @@ async function useNotesPath(nextPath) {
     noteFileMap = previousState.noteFileMap;
     noteMetadata = previousState.noteMetadata;
     folderMetadata = previousState.folderMetadata;
-    reminderFileMarks = previousState.reminderFileMarks;
     dailyReviewSelection = previousState.dailyReviewSelection;
     dailyReviewHistory = previousState.dailyReviewHistory;
     dailyReviewHandledDate = previousState.dailyReviewHandledDate;
@@ -2688,6 +2598,7 @@ app.whenReady().then(async () => {
   await loadConfig();
   await saveConfig();
   await migrateImageAssetDir();
+  await migrateReviewFolder();
   await loadNotes();
   // 启动时先结算过期提醒，保证渲染进程第一次拉列表时状态就是对的。
   await settleExpiredReminders();
@@ -2712,8 +2623,6 @@ app.whenReady().then(async () => {
     get noteFileMap() { return noteFileMap; },
     get noteMetadata() { return noteMetadata; },
     set noteMetadata(value) { noteMetadata = value; },
-    get reminderFileMarks() { return reminderFileMarks; },
-    set reminderFileMarks(value) { reminderFileMarks = value; },
     getVisibleNotes,
     getVisibleFolders,
     getVisiblePdfFiles,
@@ -2742,8 +2651,6 @@ app.whenReady().then(async () => {
     unlockFolder,
     lockFolder,
     saveFolderMetadata,
-    moveResourceReminderFileMarkTree,
-    saveReminderFileMarks,
     sendFoldersChanged,
     sendPdfFilesChanged,
     loadNotes,
@@ -2761,7 +2668,6 @@ app.whenReady().then(async () => {
     showLibraryEntryInFolder,
     openLibraryEntry,
     openExternalUrl,
-    setReminderFileMark,
     handleDailyReview,
     insertImageForNote,
     saveClipboardImageForNote,

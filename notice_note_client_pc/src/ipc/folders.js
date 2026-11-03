@@ -43,15 +43,12 @@ module.exports = function registerFoldersIpc(ctx) {
 
     const previousParentId = folder.parentId;
     const previousNoteMetadata = structuredClone(ctx.noteMetadata);
-    const previousReminderMarks = new Set(ctx.reminderFileMarks);
     const previousNoteFileMap = new Map(ctx.noteFileMap);
     await fs.rename(oldPath, newPath);
     try {
       ctx.moveNoteMetadataTree(oldPath, newPath);
-      ctx.moveResourceReminderFileMarkTree(oldPath, newPath);
       folder.parentId = normalizedTargetFolderId;
       await ctx.saveNoteMetadata();
-      await ctx.saveReminderFileMarks();
       await ctx.saveFolderMetadata();
     } catch (error) {
       await fs.rename(newPath, oldPath).catch((rollbackError) => {
@@ -59,11 +56,9 @@ module.exports = function registerFoldersIpc(ctx) {
       });
       folder.parentId = previousParentId;
       ctx.noteMetadata = previousNoteMetadata;
-      ctx.reminderFileMarks = previousReminderMarks;
       ctx.noteFileMap = previousNoteFileMap;
       await Promise.allSettled([
         ctx.saveNoteMetadata(),
-        ctx.saveReminderFileMarks(),
         ctx.saveFolderMetadata()
       ]);
       throw error;

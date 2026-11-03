@@ -41,7 +41,6 @@ contextBridge.exposeInMainWorld('noticeNote', {
   showEntryInFolder: (entry) => ipcRenderer.invoke('entries:show-in-folder', entry),
   openEntryWithDefaultApp: (entry) => ipcRenderer.invoke('entries:open-default', entry),
   openExternalUrl: (url) => ipcRenderer.invoke('external-url:open', url),
-  setReminderFileMark: (entry, marked) => ipcRenderer.invoke('entries:set-reminder-file', entry, marked),
   handleDailyReview: (entry, action) => ipcRenderer.invoke('daily-review:handle', entry, action),
   onNotesChanged: (callback) => {
     const listener = (_event, notes) => callback(notes);

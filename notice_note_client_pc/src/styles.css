@@ -392,6 +392,121 @@ display: none;
   padding: 12px;
 }
 
+/* 回顾 Tab：卡片流（侧边栏窄栏单列，随宽度自适应） */
+.review-card-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 10px;
+  padding-bottom: 8px;
+}
+
+.review-card {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  border: 1px solid var(--theme-border, var(--nn-line-200));
+  border-radius: 12px;
+  padding: 11px 12px 10px;
+  background: var(--theme-card, var(--nn-surface-100));
+  box-shadow: 0 1px 3px var(--nn-shadow-sepia);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.15s, box-shadow 0.15s, transform 0.15s;
+}
+
+.review-card:hover {
+  border-color: var(--nn-accent);
+  box-shadow: 0 4px 12px var(--nn-shadow-accent-soft);
+  transform: translateY(-1px);
+}
+
+.review-card:focus-visible {
+  outline: 2px solid var(--nn-accent);
+  outline-offset: 2px;
+}
+
+.review-card.is-daily-review {
+  border-color: var(--nn-accent);
+  box-shadow: inset 3px 0 var(--nn-accent), 0 1px 3px var(--nn-shadow-sepia);
+}
+
+.review-card.is-unopenable {
+  cursor: default;
+  opacity: 0.75;
+}
+
+.review-card.is-unopenable:hover {
+  border-color: var(--theme-border, var(--nn-line-200));
+  box-shadow: 0 1px 3px var(--nn-shadow-sepia);
+  transform: none;
+}
+
+.review-card-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+
+.review-card-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--theme-text, var(--nn-ink-800));
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.review-card-preview {
+  display: -webkit-box;
+  overflow: hidden;
+  margin: 0;
+  color: var(--theme-muted, var(--nn-ink-500));
+  font-size: 11.5px;
+  line-height: 1.55;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.review-card-badges {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex-wrap: wrap;
+}
+
+.review-card-pending {
+  flex: 0 0 auto;
+  border: 1px solid var(--nn-line-300);
+  border-radius: 999px;
+  padding: 1px 7px;
+  background: var(--nn-surface-warm);
+  color: var(--nn-warn-brown);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1.45;
+  white-space: nowrap;
+}
+
+.review-card-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--theme-muted, var(--nn-ink-400));
+  font-size: 10.5px;
+  line-height: 1.4;
+}
+
+.review-card-last-time {
+  flex: 0 0 auto;
+  color: var(--nn-ink-300);
+  white-space: nowrap;
+}
+
 .note-list-empty {
   margin: 36px 12px;
   color: var(--nn-ink-375);
@@ -1304,38 +1419,6 @@ display: none;
   line-height: 1.3;
 }
 
-.daily-review-toggle {
-  flex: 0 0 auto;
-  width: 24px;
-  height: 24px;
-  border-radius: 6px;
-  display: grid;
-  place-items: center;
-  color: var(--nn-ink-250) !important;
-  font-size: 17px !important;
-  line-height: 1 !important;
-  opacity: 0.35;
-  cursor: pointer;
-  transition: background 0.15s, color 0.15s, opacity 0.15s;
-}
-
-.note-item:hover .daily-review-toggle,
-.daily-review-toggle:focus-visible,
-.daily-review-toggle.is-active {
-  opacity: 1;
-}
-
-.daily-review-toggle:hover,
-.daily-review-toggle:focus-visible {
-  outline: none;
-  background: var(--nn-accent-soft);
-  color: var(--nn-accent) !important;
-}
-
-.daily-review-toggle.is-active {
-  color: var(--nn-accent) !important;
-}
-
 .note-badge-row {
   min-width: 0;
   margin-top: 6px;
@@ -1438,19 +1521,6 @@ display: none;
   font-size: 10px !important;
   font-weight: 700;
   line-height: 1.45 !important;
-  white-space: nowrap;
-}
-
-.reminder-file-badge {
-  flex: 0 0 auto;
-  border: 1px solid #dfae68;
-  border-radius: 999px;
-  padding: 1px 6px;
-  background: #fff6df;
-  color: #9a5d12;
-  font-size: 10px;
-  font-weight: 700;
-  line-height: 1.45;
   white-space: nowrap;
 }
 
@@ -5417,18 +5487,10 @@ body[data-theme] .daily-review-bar-copy span {
 body[data-theme] .daily-review-badge,
 body[data-theme] .daily-review-current span,
 body[data-theme] .daily-review-current strong,
-body[data-theme] .daily-review-toggle.is-active,
-body[data-theme] .daily-review-toggle:hover,
-body[data-theme] .daily-review-toggle:focus-visible,
 body[data-theme] .word-preview a,
 body[data-theme] .spreadsheet-sheet-tabs button.is-active,
 body[data-theme] .spreadsheet-preview-sheet h2 {
   color: var(--theme-accent) !important;
-}
-
-body[data-theme] .daily-review-toggle:hover,
-body[data-theme] .daily-review-toggle:focus-visible {
-  background: var(--theme-accent-soft);
 }
 
 body[data-theme] .cm-editor,
