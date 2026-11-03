@@ -170,24 +170,31 @@ function renderReviewBrowser(preferredDayKey = null) {
   const dayMap = ensureReviewBrowserState(preferredDayKey);
   host.innerHTML = "";
 
-  // 即使没有任何回顾文件，也渲染月历 + 当天视图（空白日可新建到当天）
-  host.append(renderReviewCalendar(dayMap));
+  // 月历在侧边栏（回顾模式导航）；主工作区只放当天的内容
+  // 即使没有任何回顾文件，也渲染当天视图（空白日可新建到当天）
   host.append(renderReviewDayView(dayMap));
   renderNoteList();
   renderWorkspaceTabs();
 }
 
 // ---------- 月历 ----------
-function renderReviewCalendar(dayMap) {
+// 侧边栏月历（回顾模式导航）：紧凑 7 列，有文件的日带圆点，空白日也可点
+function renderReviewSidebarCalendar(dayMap) {
+  // 侧边栏可能在浏览器未打开时就进入回顾模式（如启动后直接点「回顾」按钮
+  // 之外的路径），此处兜底初始化状态，避免 month 为 null 时渲染崩溃
+  if (!reviewBrowserState.month || !reviewBrowserState.dayKey) {
+    ensureReviewBrowserState();
+  }
+
   const wrap = document.createElement("section");
-  wrap.className = "review-calendar";
+  wrap.className = "review-side-calendar";
 
   const header = document.createElement("div");
-  header.className = "review-calendar-header";
+  header.className = "review-side-calendar-header";
 
   const prevBtn = document.createElement("button");
   prevBtn.type = "button";
-  prevBtn.className = "review-calendar-nav";
+  prevBtn.className = "review-side-calendar-nav";
   prevBtn.textContent = "‹";
   prevBtn.title = "上个月";
   prevBtn.setAttribute("aria-label", "上个月");
@@ -197,16 +204,16 @@ function renderReviewCalendar(dayMap) {
       reviewBrowserState.month.getMonth() - 1,
       1,
     );
-    renderReviewBrowser();
+    renderNoteList();
   });
 
   const monthLabel = document.createElement("strong");
-  monthLabel.className = "review-calendar-title";
+  monthLabel.className = "review-side-calendar-title";
   monthLabel.textContent = `${reviewBrowserState.month.getFullYear()}年${reviewBrowserState.month.getMonth() + 1}月`;
 
   const nextBtn = document.createElement("button");
   nextBtn.type = "button";
-  nextBtn.className = "review-calendar-nav";
+  nextBtn.className = "review-side-calendar-nav";
   nextBtn.textContent = "›";
   nextBtn.title = "下个月";
   nextBtn.setAttribute("aria-label", "下个月");
@@ -216,13 +223,14 @@ function renderReviewCalendar(dayMap) {
       reviewBrowserState.month.getMonth() + 1,
       1,
     );
-    renderReviewBrowser();
+    renderNoteList();
   });
 
   const todayBtn = document.createElement("button");
   todayBtn.type = "button";
-  todayBtn.className = "review-calendar-today";
-  todayBtn.textContent = "回到今天";
+  todayBtn.className = "review-side-calendar-today";
+  todayBtn.textContent = "今天";
+  todayBtn.title = "回到今天";
   todayBtn.addEventListener("click", () => {
     const todayKey = toLocalDateKey(new Date());
     if (dayMap.has(todayKey)) {
@@ -232,13 +240,13 @@ function renderReviewCalendar(dayMap) {
     // 今天没有回顾文件：只把月历切到当前月
     const today = new Date();
     reviewBrowserState.month = new Date(today.getFullYear(), today.getMonth(), 1);
-    renderReviewBrowser();
+    renderNoteList();
   });
 
   header.append(prevBtn, monthLabel, nextBtn, todayBtn);
 
   const weekRow = document.createElement("div");
-  weekRow.className = "review-calendar-week";
+  weekRow.className = "review-side-calendar-week";
   for (const label of ["一", "二", "三", "四", "五", "六", "日"]) {
     const cell = document.createElement("span");
     cell.textContent = label;
@@ -246,7 +254,7 @@ function renderReviewCalendar(dayMap) {
   }
 
   const grid = document.createElement("div");
-  grid.className = "review-calendar-grid";
+  grid.className = "review-side-calendar-grid";
 
   const year = reviewBrowserState.month.getFullYear();
   const month = reviewBrowserState.month.getMonth();
@@ -264,7 +272,7 @@ function renderReviewCalendar(dayMap) {
     const hasFiles = dayMap.has(dayKey);
     const cell = document.createElement("button");
     cell.type = "button";
-    cell.className = `review-calendar-day${hasFiles ? " has-files" : " is-blank"}${dayKey === reviewBrowserState.dayKey ? " is-selected" : ""}${dayKey === todayKey ? " is-today" : ""}`;
+    cell.className = `review-side-calendar-day${hasFiles ? " has-files" : " is-blank"}${dayKey === reviewBrowserState.dayKey ? " is-selected" : ""}${dayKey === todayKey ? " is-today" : ""}`;
     cell.dataset.dayKey = dayKey;
     cell.textContent = String(day);
     if (hasFiles) {

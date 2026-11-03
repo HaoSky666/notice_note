@@ -411,127 +411,124 @@ display: none;
   gap: 18px;
 }
 
-/* ---------- 月历 ---------- */
-.review-calendar {
+/* ---------- 侧边栏月历（回顾模式导航） ---------- */
+.review-side-calendar {
   border: 1px solid var(--theme-border, var(--nn-line-200));
-  border-radius: 14px;
-  padding: 14px 16px 16px;
+  border-radius: 12px;
+  padding: 10px 10px 12px;
   background: var(--theme-card, var(--nn-surface-100));
   box-shadow: 0 1px 3px var(--nn-shadow-sepia);
 }
 
-.review-calendar-header {
+.review-side-calendar-header {
   display: flex;
   align-items: center;
-  gap: 8px;
-  margin-bottom: 10px;
+  gap: 4px;
+  margin-bottom: 8px;
 }
 
-.review-calendar-title {
+.review-side-calendar-title {
   flex: 1;
   text-align: center;
   color: var(--theme-text, var(--nn-ink-800));
-  font-size: 14px;
+  font-size: 12.5px;
   font-weight: 700;
 }
 
-.review-calendar-nav {
-  width: 28px;
-  height: 28px;
+.review-side-calendar-nav {
+  width: 24px;
+  height: 24px;
   border: 1px solid var(--nn-line-200);
-  border-radius: 8px;
+  border-radius: 7px;
   background: var(--nn-surface-100);
   color: var(--nn-ink-600);
-  font-size: 15px;
+  font-size: 14px;
   line-height: 1;
   cursor: pointer;
 }
 
-.review-calendar-nav:hover {
+.review-side-calendar-nav:hover {
   border-color: var(--nn-accent);
   color: var(--nn-accent);
 }
 
-.review-calendar-today {
+.review-side-calendar-today {
   border: 1px solid var(--nn-line-200);
-  border-radius: 8px;
-  padding: 4px 10px;
+  border-radius: 7px;
+  padding: 3px 8px;
   background: var(--nn-surface-100);
   color: var(--nn-ink-600);
-  font-size: 11px;
+  font-size: 10.5px;
   cursor: pointer;
 }
 
-.review-calendar-today:hover {
+.review-side-calendar-today:hover {
   border-color: var(--nn-accent);
   color: var(--nn-accent);
 }
 
-.review-calendar-week,
-.review-calendar-grid {
+.review-side-calendar-week,
+.review-side-calendar-grid {
   display: grid;
-  grid-template-columns: repeat(7, 1fr);
-  gap: 4px;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 2px;
 }
 
-.review-calendar-week {
-  margin-bottom: 4px;
+.review-side-calendar-week {
+  margin-bottom: 2px;
 }
 
-.review-calendar-week span {
+.review-side-calendar-week span {
   text-align: center;
   color: var(--nn-ink-400);
-  font-size: 10.5px;
+  font-size: 10px;
   line-height: 1.6;
 }
 
-.review-calendar-day {
+.review-side-calendar-day {
   position: relative;
-  height: 34px;
+  height: 28px;
+  padding: 0;
   border: 1px solid transparent;
-  border-radius: 8px;
+  border-radius: 7px;
   background: transparent;
   color: var(--nn-ink-700);
-  font-size: 12px;
+  font-size: 11px;
   cursor: pointer;
   transition: background 0.12s, border-color 0.12s;
 }
 
-.review-calendar-day:hover {
+.review-side-calendar-day:hover {
   background: var(--nn-accent-soft);
 }
 
 /* 空白日（当天没有回顾文件）：可点击新建，视觉上更淡 */
-.review-calendar-day.is-blank {
+.review-side-calendar-day.is-blank {
   color: var(--nn-ink-250);
   font-weight: 400;
 }
 
-.review-calendar-day.is-today {
+.review-side-calendar-day.is-today {
   border-color: var(--nn-line-300);
   font-weight: 700;
 }
 
-.review-calendar-day.is-selected {
+.review-side-calendar-day.is-selected {
   border-color: var(--nn-accent);
   background: var(--nn-accent-soft);
   color: var(--nn-accent);
   font-weight: 700;
 }
 
-.review-calendar-day.has-files i {
+.review-side-calendar-day.has-files i {
   position: absolute;
-  bottom: 4px;
+  bottom: 3px;
   left: 50%;
-  width: 4px;
-  height: 4px;
+  width: 3px;
+  height: 3px;
   border-radius: 50%;
   background: var(--nn-accent);
   transform: translateX(-50%);
-}
-
-.review-calendar-day.is-selected.has-files i {
-  background: var(--nn-accent);
 }
 
 /* ---------- 当天导航 ---------- */
@@ -789,35 +786,7 @@ display: none;
   text-align: center;
 }
 
-/* ---------- 侧边栏回顾模式（当天紧凑列表） ---------- */
-.review-side-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  margin-bottom: 8px;
-}
-
-.review-side-header strong {
-  color: var(--nn-ink-700);
-  font-size: 12px;
-}
-
-.review-side-open {
-  border: 1px solid var(--nn-line-200);
-  border-radius: 8px;
-  padding: 3px 9px;
-  background: var(--nn-surface-100);
-  color: var(--nn-ink-600);
-  font-size: 11px;
-  cursor: pointer;
-}
-
-.review-side-open:hover {
-  border-color: var(--nn-accent);
-  color: var(--nn-accent);
-}
-
+/* ---------- 侧边栏回顾模式（月历导航 + 搜索结果列表） ---------- */
 .review-side-item {
   cursor: pointer;
 }

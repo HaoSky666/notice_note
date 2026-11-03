@@ -476,7 +476,7 @@ function createDailyReviewLastTime(target) {
 }
 // 侧边栏回顾模式：当天文件紧凑列表（与主区回顾浏览器同步）
 // 翻页/日历/主次操作都在主区回顾浏览器里，这里只提供当天的快速入口。
-function renderReviewDayList(filteredNotes, filteredResources, searchKeyword) {
+function renderReviewSidebar(filteredNotes, filteredResources, searchKeyword) {
   if (searchKeyword) {
     // 搜索时展示全部回顾文件的简洁列表
     for (const note of filteredNotes) {
@@ -512,76 +512,10 @@ function renderReviewDayList(filteredNotes, filteredResources, searchKeyword) {
     return;
   }
 
-  // 非搜索：展示回顾浏览器当前查看的那一天（空白日也保持同步）
+  // 非搜索：侧边栏显示月历导航（当天的内容在主工作区）
   const dayMap = typeof getReviewDayMap === "function" ? getReviewDayMap() : new Map();
-  let dayKey = reviewBrowserState?.dayKey;
-  if (!dayKey) {
-    dayKey = [...dayMap.keys()].pop() || toLocalDateKey(new Date());
-  }
-
-  const day = dayMap.get(dayKey) || { dayKey, notes: [], files: [] };
-  const header = document.createElement("div");
-  header.className = "review-side-header";
-  const title = document.createElement("strong");
-  title.textContent =
-    typeof formatReviewDayTitle === "function"
-      ? formatReviewDayTitle(dayKey)
-      : dayKey;
-  const openBtn = document.createElement("button");
-  openBtn.type = "button";
-  openBtn.className = "review-side-open";
-  openBtn.textContent = "打开回顾页";
-  openBtn.addEventListener("click", () => {
-    if (typeof activateReviewBrowser === "function") {
-      activateReviewBrowser();
-    }
-  });
-  header.append(title, openBtn);
-  noteList.append(header);
-
-  if (day.notes.length + day.files.length === 0) {
-    const empty = document.createElement("p");
-    empty.className = "note-list-empty";
-    empty.textContent = "这一天还没有回顾文件，可在回顾页「新建到当天」";
-    noteList.append(empty);
-    return;
-  }
-
-  const orderedNotes = [...day.notes].sort((a, b) => {
-    const rank = (note) =>
-      note.reviewRole === "primary" ? 0 : note.reviewRole === "secondary" ? 1 : 2;
-    return rank(a) - rank(b) || Date.parse(b.updatedAt) - Date.parse(a.updatedAt);
-  });
-
-  for (const note of orderedNotes) {
-    const roleTag = note.reviewRole === "primary"
-      ? "主"
-      : note.reviewRole === "secondary"
-        ? "次"
-        : "";
-    noteList.append(
-      createReviewDayItem({
-        label: note.title || "未命名笔记",
-        meta: formatListDateTime(note.updatedAt),
-        badge: roleTag || note.fileType.toUpperCase(),
-        active: note.id === activeNoteId,
-        isDailyReview: note.isDailyReview,
-        onClick: () => selectNote(note.id).catch(console.error),
-      }),
-    );
-  }
-  for (const file of day.files) {
-    noteList.append(
-      createReviewDayItem({
-        label: file.name,
-        meta: `${formatFileSize(file.size)} · ${formatListDateTime(file.updatedAt)}`,
-        badge: file.typeLabel,
-        active: file.id === activeResourceId || file.id === activePdfId,
-        onClick: file.canOpen
-          ? () => selectResourceFile(file.id).catch(console.error)
-          : null,
-      }),
-    );
+  if (typeof renderReviewSidebarCalendar === "function") {
+    noteList.append(renderReviewSidebarCalendar(dayMap));
   }
 }
 
@@ -636,7 +570,7 @@ function renderNoteList() {
   }
 
   if (sidebarViewMode === "reminder") {
-    renderReviewDayList(filteredNotes, filteredResources, searchKeyword);
+    renderReviewSidebar(filteredNotes, filteredResources, searchKeyword);
     return;
   }
 
