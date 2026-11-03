@@ -392,25 +392,6 @@ display: none;
   padding: 12px;
 }
 
-/* ============================================================
-   回顾浏览器（主工作区全宽页面）
-   ============================================================ */
-.review-browser {
-  flex: 1;
-  min-width: 0;
-  overflow: auto;
-  background: var(--theme-canvas, var(--nn-canvas));
-}
-
-.review-browser-inner {
-  max-width: 860px;
-  margin: 0 auto;
-  padding: 20px 24px 32px;
-  display: flex;
-  flex-direction: column;
-  gap: 18px;
-}
-
 /* ---------- 侧边栏月历（回顾模式导航） ---------- */
 .review-side-calendar {
   border: 1px solid var(--theme-border, var(--nn-line-200));
@@ -531,178 +512,161 @@ display: none;
   transform: translateX(-50%);
 }
 
-/* ---------- 当天导航 ---------- */
-.review-day {
+/* ---------- 侧边栏回顾面板（月历 + 当天文件 + 当天操作） ---------- */
+.review-panel {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 8px;
 }
 
-.review-day-nav {
+.review-panel-bar {
+  border: 1px solid var(--theme-border, var(--nn-line-200));
+  border-radius: 12px;
+  padding: 8px 10px;
+  background: var(--theme-card, var(--nn-surface-100));
+  box-shadow: 0 1px 3px var(--nn-shadow-sepia);
+}
+
+.review-panel-nav {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 5px;
 }
 
-.review-day-arrow {
-  width: 32px;
-  height: 32px;
-  border: 1px solid var(--theme-border, var(--nn-line-200));
-  border-radius: 50%;
-  background: var(--theme-card, var(--nn-surface-100));
-  color: var(--nn-ink-700);
-  font-size: 16px;
+.review-panel-arrow {
+  width: 22px;
+  height: 22px;
+  flex: 0 0 auto;
+  border: 1px solid var(--nn-line-200);
+  border-radius: 7px;
+  background: var(--nn-surface-100);
+  color: var(--nn-ink-600);
+  font-size: 13px;
   line-height: 1;
   cursor: pointer;
-  transition: border-color 0.12s, color 0.12s;
 }
 
-.review-day-arrow:hover:not(:disabled) {
+.review-panel-arrow:hover:not(:disabled) {
   border-color: var(--nn-accent);
   color: var(--nn-accent);
 }
 
-.review-day-arrow:disabled {
-  opacity: 0.35;
+.review-panel-arrow:disabled {
+  color: var(--nn-ink-200);
   cursor: default;
 }
 
-.review-day-title {
-  flex: 1;
-  color: var(--theme-text, var(--nn-ink-800));
-  font-size: 16px;
-  font-weight: 700;
-}
-
-.review-day-counter {
-  color: var(--nn-ink-400);
-  font-size: 11.5px;
-  white-space: nowrap;
-}
-
-/* ---------- 当天文件卡片 ---------- */
-.review-day-cards {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.review-day-card {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  border: 1px solid var(--theme-border, var(--nn-line-200));
-  border-radius: 12px;
-  padding: 13px 15px;
-  background: var(--theme-card, var(--nn-surface-100));
-  box-shadow: 0 1px 3px var(--nn-shadow-sepia);
-  transition: border-color 0.15s, box-shadow 0.15s;
-}
-
-.review-day-card:hover {
-  border-color: var(--nn-accent);
-  box-shadow: 0 4px 14px var(--nn-shadow-accent-soft);
-}
-
-.review-day-card.is-primary {
-  border-left: 4px solid var(--nn-accent);
-}
-
-.review-day-card.is-daily-review {
-  box-shadow: inset 0 0 0 1px var(--nn-accent), 0 1px 3px var(--nn-shadow-sepia);
-}
-
-.review-day-card.is-unopenable {
-  opacity: 0.75;
-}
-
-.review-day-card-head {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-}
-
-.review-role-tag {
+.review-panel-title {
   flex: 0 0 auto;
-  border-radius: 999px;
-  padding: 1px 8px;
-  background: var(--nn-canvas-stone2);
-  color: var(--nn-ink-500);
-  font-size: 10px;
-  font-weight: 700;
-  line-height: 1.5;
-}
-
-.review-role-tag.is-primary {
-  background: var(--nn-accent-soft);
-  color: var(--nn-accent);
-}
-
-.review-day-card-title {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
   color: var(--theme-text, var(--nn-ink-800));
-  font-size: 14px;
+  font-size: 12.5px;
   font-weight: 700;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
-.review-day-card-preview {
-  margin: 0;
-  color: var(--theme-muted, var(--nn-ink-500));
-  font-size: 12px;
-  line-height: 1.6;
-  display: -webkit-box;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-  overflow: hidden;
-}
-
-.review-day-card-meta {
-  display: flex;
-  align-items: center;
-  gap: 12px;
+.review-panel-counter {
+  flex: 1 1 auto;
   color: var(--nn-ink-400);
-  font-size: 11px;
+  font-size: 10.5px;
 }
 
-.review-day-card-actions {
+.review-panel-create {
+  flex: 0 0 auto;
+  border: 1px solid var(--nn-line-200);
+  border-radius: 7px;
+  padding: 3px 9px;
+  background: var(--nn-surface-100);
+  color: var(--nn-accent);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.review-panel-create:hover {
+  border-color: var(--nn-accent);
+  background: var(--nn-accent-soft);
+}
+
+.review-panel-actions {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   flex-wrap: wrap;
-  margin-top: 2px;
+  margin-top: 7px;
 }
 
-.review-card-action {
+.review-panel-button {
   border: 1px solid var(--nn-line-200);
-  border-radius: 8px;
-  padding: 4px 10px;
+  border-radius: 7px;
+  padding: 3px 10px;
   background: var(--nn-surface-100);
   color: var(--nn-ink-600);
-  font-size: 11.5px;
+  font-size: 11px;
   cursor: pointer;
-  transition: border-color 0.12s, color 0.12s, background 0.12s;
 }
 
-.review-card-action:hover {
+.review-panel-button:hover {
   border-color: var(--nn-accent);
   color: var(--nn-accent);
 }
 
-.review-card-action.primary {
+.review-panel-button.primary {
   border-color: var(--nn-accent);
   background: var(--nn-accent);
-  color: #ffffff;
+  color: var(--nn-on-accent, #ffffff);
+  font-weight: 600;
 }
 
-.review-card-action.primary:hover {
-  background: var(--nn-accent-deep);
-  border-color: var(--nn-accent-deep);
-  color: #ffffff;
+.review-panel-button.primary:hover {
+  filter: brightness(1.08);
+}
+
+.review-panel-hint {
+  color: var(--nn-ink-400);
+  font-size: 10.5px;
+}
+
+.review-panel-files {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* 侧边栏项内的主次徽标（点击设为主文件） */
+.review-side-role {
+  border: 1px solid var(--nn-line-200);
+  border-radius: 6px;
+  padding: 0 6px;
+  background: var(--nn-surface-100);
+  color: var(--nn-ink-500);
+  font-size: 10px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.review-side-role:hover {
+  border-color: var(--nn-accent);
+  color: var(--nn-accent);
+}
+
+/* 侧边栏项内的归天控件行 */
+.review-side-item .review-date-control {
+  margin-top: 5px;
+}
+
+.review-date-reset {
+  border: 1px solid var(--nn-line-200);
+  border-radius: 6px;
+  padding: 0 5px;
+  background: var(--nn-surface-100);
+  color: var(--nn-ink-500);
+  font-size: 10.5px;
+  line-height: 1.4;
+  cursor: pointer;
+}
+
+.review-date-reset:hover {
+  border-color: var(--nn-accent);
+  color: var(--nn-accent);
 }
 
 /* ---------- 归天控件（原生日期选择器） ---------- */
@@ -747,43 +711,6 @@ display: none;
   padding: 1px 6px;
   border-radius: 6px;
   line-height: 1.3;
-}
-
-/* ---------- 底部操作栏 ---------- */
-.review-day-actions {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  flex-wrap: wrap;
-  border: 1px solid var(--theme-border, var(--nn-line-200));
-  border-radius: 12px;
-  padding: 11px 14px;
-  background: var(--theme-card, var(--nn-surface-100));
-}
-
-.review-day-actions-left {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  flex-wrap: wrap;
-}
-
-.review-day-actions-hint {
-  color: var(--nn-ink-400);
-  font-size: 11.5px;
-}
-
-/* ---------- 当天无文件提示 ---------- */
-.review-day-blank {
-  margin: 0;
-  border: 1px dashed var(--nn-line-200);
-  border-radius: 12px;
-  padding: 22px 16px;
-  color: var(--nn-ink-400);
-  font-size: 12px;
-  line-height: 1.7;
-  text-align: center;
 }
 
 /* ---------- 侧边栏回顾模式（月历导航 + 搜索结果列表） ---------- */

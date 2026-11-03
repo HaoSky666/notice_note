@@ -638,9 +638,6 @@ function renderEditor() {
   editorPanel.hidden = false;
   pdfViewer.hidden = true;
   fileViewer.hidden = true;
-  if (reviewBrowser) {
-    reviewBrowser.hidden = true;
-  }
   filePreviewVersion++;
 
   if (!activeNote) {
@@ -734,13 +731,6 @@ function mergeIncomingNotes(nextNotes) {
   }
 
   if (reconcileWorkspaceTabs()) {
-    return;
-  }
-  if (reviewBrowserActive) {
-    // 回顾浏览器激活时：刷新浏览器与侧边栏当天列表
-    refreshReviewBrowserIfActive();
-    renderNoteList();
-    renderWorkspaceTabs();
     return;
   }
   if (activeDraftId) {
@@ -1159,12 +1149,6 @@ async function refreshNotes() {
     resourceFiles = library.resourceFiles;
     renderBreadcrumb();
     if (reconcileWorkspaceTabs()) {
-      return;
-    }
-    if (reviewBrowserActive) {
-      // 回顾浏览器激活时保持浏览器，不要切回编辑器
-      refreshReviewBrowserIfActive();
-      renderNoteList();
       return;
     }
     if (activePdfId && pdfFiles.some((pdf) => pdf.id === activePdfId)) {

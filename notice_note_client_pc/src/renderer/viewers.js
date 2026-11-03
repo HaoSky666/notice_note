@@ -895,9 +895,6 @@ function renderPdf() {
   editorPanel.hidden = true;
   pdfViewer.hidden = false;
   fileViewer.hidden = true;
-  if (reviewBrowser) {
-    reviewBrowser.hidden = true;
-  }
   filePreviewVersion++;
   pdfTitle.textContent = pdf.name;
   pdfMeta.textContent = `PDF 文档 · ${formatFileSize(pdf.size)} · 创建于 ${formatListDateTime(pdf.createdAt)} · 修改于 ${formatListDateTime(pdf.updatedAt)}`;
@@ -1652,9 +1649,6 @@ function renderResourceFile() {
   editorPanel.hidden = true;
   pdfViewer.hidden = true;
   fileViewer.hidden = false;
-  if (reviewBrowser) {
-    reviewBrowser.hidden = true;
-  }
   fileViewerIcon.textContent = file.typeLabel;
   fileViewerTitle.textContent = file.name;
   fileViewerMeta.textContent = `${formatFileSize(file.size)} · 创建于 ${formatListDateTime(file.createdAt)} · 修改于 ${formatListDateTime(file.updatedAt)}`;

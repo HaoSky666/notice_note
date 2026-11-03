@@ -2060,6 +2060,21 @@ async function setReviewDate(_event, entry, reviewDate) {
   }
   target.reviewDate = nextDate;
   if (entry.type === 'note') {
+    // 主文件换天时，目标天已有的其它主文件降级为次文件（同一天只能一个主文件）
+    if (target.reviewRole === 'primary') {
+      const dayKey = getNoteReviewDayKey(target);
+      for (const note of notes) {
+        if (note.id !== target.id
+          && note.reviewRole === 'primary'
+          && getNoteReviewDayKey(note) === dayKey) {
+          note.reviewRole = 'secondary';
+          const otherPath = noteFileMap.get(note.id);
+          if (otherPath) {
+            setNoteMetadata(otherPath, note, null);
+          }
+        }
+      }
+    }
     const stats = await fs.stat(filePath).catch(() => null);
     setNoteMetadata(filePath, target, stats ? String(stats.ino) : null);
     await saveNoteMetadata();

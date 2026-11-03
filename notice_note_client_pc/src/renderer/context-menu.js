@@ -239,7 +239,6 @@ function showContextMenu(x, y, entry = null) {
               .setReviewRole({ type: "note", id: note.id }, isPrimary ? null : "primary")
               .then(() => {
                 renderNoteList();
-                refreshReviewBrowserIfActive();
               })
               .catch((error) => console.error("设置主次失败:", error));
           }),
@@ -253,7 +252,6 @@ function showContextMenu(x, y, entry = null) {
                 )
                 .then(() => {
                   renderNoteList();
-                  refreshReviewBrowserIfActive();
                 })
                 .catch((error) => console.error("设置主次失败:", error));
             },

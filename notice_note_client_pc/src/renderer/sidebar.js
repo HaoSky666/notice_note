@@ -512,14 +512,13 @@ function renderReviewSidebar(filteredNotes, filteredResources, searchKeyword) {
     return;
   }
 
-  // 非搜索：侧边栏显示月历导航（当天的内容在主工作区）
-  const dayMap = typeof getReviewDayMap === "function" ? getReviewDayMap() : new Map();
-  if (typeof renderReviewSidebarCalendar === "function") {
-    noteList.append(renderReviewSidebarCalendar(dayMap));
+  // 非搜索：侧边栏显示整个回顾面板（月历 + 当天文件 + 当天操作）
+  if (typeof renderReviewSidebarPanel === "function") {
+    noteList.append(renderReviewSidebarPanel());
   }
 }
 
-function createReviewDayItem({ label, meta, badge, active, isDailyReview, onClick }) {
+function createReviewDayItem({ label, meta, badge, active, isDailyReview, onClick, role, onRoleToggle, extra }) {
   const item = document.createElement("div");
   item.className = `note-item review-side-item${active ? " active" : ""}`;
   if (onClick) {
@@ -534,9 +533,19 @@ function createReviewDayItem({ label, meta, badge, active, isDailyReview, onClic
   const title = document.createElement("strong");
   title.textContent = label;
   title.title = label;
-  const badgeEl = document.createElement("span");
-  badgeEl.className = "file-type-badge";
+  const badgeEl = document.createElement(onRoleToggle ? "button" : "span");
+  badgeEl.className = onRoleToggle ? "file-type-badge review-side-role" : "file-type-badge";
   badgeEl.textContent = badge;
+  if (onRoleToggle) {
+    badgeEl.type = "button";
+    badgeEl.title = role === "primary"
+      ? "当天的主文件（点击取消）"
+      : "点击设为当天的主文件";
+    badgeEl.addEventListener("click", (event) => {
+      event.stopPropagation();
+      onRoleToggle();
+    });
+  }
   titleRow.append(title, badgeEl);
 
   const metaRow = document.createElement("div");
@@ -550,6 +559,9 @@ function createReviewDayItem({ label, meta, badge, active, isDailyReview, onClic
   }
 
   item.append(titleRow, metaRow);
+  if (extra) {
+    item.append(extra);
+  }
   return item;
 }
 function renderNoteList() {

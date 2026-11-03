@@ -233,7 +233,6 @@ async function boot() {
   window.noticeNote.onNotesChanged((nextNotes) => {
     mergeIncomingNotes(nextNotes);
     renderReminderNotifications();
-    refreshReviewBrowserIfActive();
   });
 
   window.noticeNote.onFoldersChanged((nextFolders) => {
@@ -591,15 +590,6 @@ completeDailyReviewButton.addEventListener("click", () => {
 });
 document.addEventListener("keydown", (event) => {
   // 回顾浏览器激活时，左右键按天翻页
-  if (
-    !event.ctrlKey
-    && !event.metaKey
-    && !event.altKey
-    && (event.key === "ArrowLeft" || event.key === "ArrowRight")
-    && typeof handleReviewBrowserKeydown === "function"
-  ) {
-    handleReviewBrowserKeydown(event);
-  }
   if (
     (event.ctrlKey || event.metaKey) &&
     event.key.toLocaleLowerCase("en-US") === "s"

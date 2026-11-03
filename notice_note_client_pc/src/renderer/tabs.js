@@ -347,7 +347,6 @@ async function handleActiveDailyReview(action) {
     resource.isDailyReview = false;
     renderNoteList();
     renderWorkspaceTabs();
-    refreshReviewBrowserIfActive();
   } catch (error) {
     alert(error.message || "更新每日回顾失败");
   } finally {
@@ -441,8 +440,6 @@ function showWorkspaceTab(tab, { deferContent = false } = {}) {
     clearBlurRevealScope(tab.id);
   }
   activeWorkspaceTabKey = tabKey;
-  // 打开文件 Tab 意味着离开回顾浏览器
-  exitReviewBrowser();
   const renderVersion = ++workspaceContentRenderVersion;
   const renderContent = () => {
     if (
@@ -707,7 +704,6 @@ async function closeAllWorkspaceTabs() {
   activeNoteId = null;
   activePdfId = null;
   activeResourceId = null;
-  exitReviewBrowser();
   activeWorkspaceTabKey = null;
   renderEditor();
   saveDraftsToStorage();
