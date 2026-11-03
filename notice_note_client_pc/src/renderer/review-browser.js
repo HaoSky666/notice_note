@@ -105,39 +105,36 @@ function selectReviewDay(dayKey) {
 function ensureReviewBrowserState(preferredDayKey = null) {
   const dayMap = getReviewDayMap();
   const dayKeys = [...dayMap.keys()];
-  if (dayKeys.length === 0) {
-    reviewBrowserState.dayKey = null;
-    reviewBrowserState.month = null;
-    return dayMap;
-  }
-  if (!reviewBrowserState.dayKey || !dayMap.has(reviewBrowserState.dayKey)) {
-    // 当前查看的天已不存在（如文件被移走）：优先跟随偏好天，其次今日回顾选中天、
-    // 今天、最近一个较早的天，最后最早的天
-    const previousDayKey = reviewBrowserState.dayKey;
-    const todayKey = toLocalDateKey(new Date());
+  const todayKey = toLocalDateKey(new Date());
+
+  if (!reviewBrowserState.dayKey) {
+    // 初始定位：今日回顾选中天 -> 今天 -> 最近有文件的一天
     const pickedDay = appSettings?.dailyReviewDayKey?.startsWith("day:")
       ? appSettings.dailyReviewDayKey.slice(4)
       : null;
     let nextDay = null;
-    if (preferredDayKey && dayMap.has(preferredDayKey)) {
-      nextDay = preferredDayKey;
-    } else if (pickedDay && dayMap.has(pickedDay)) {
+    if (pickedDay && dayMap.has(pickedDay)) {
       nextDay = pickedDay;
     } else if (dayMap.has(todayKey)) {
       nextDay = todayKey;
-    } else if (previousDayKey) {
-      const earlier = dayKeys.filter((key) => key < previousDayKey);
-      nextDay = earlier.length > 0 ? earlier[earlier.length - 1] : dayKeys[0];
-    } else {
+    } else if (dayKeys.length > 0) {
       nextDay = dayKeys[dayKeys.length - 1];
+    } else {
+      nextDay = todayKey; // 没有任何回顾文件：停靠在今天（空白日也可新建）
     }
     reviewBrowserState.dayKey = nextDay;
     const selected = parseDayKey(nextDay);
+    reviewBrowserState.month = new Date(selected.getFullYear(), selected.getMonth(), 1);
+  } else if (preferredDayKey && !dayMap.has(reviewBrowserState.dayKey) && dayMap.has(preferredDayKey)) {
+    // 显式把当天仅剩的文件搬走后，跟随文件去新的一天
+    reviewBrowserState.dayKey = preferredDayKey;
+    const selected = parseDayKey(preferredDayKey);
     reviewBrowserState.month = new Date(selected.getFullYear(), selected.getMonth(), 1);
   } else if (!reviewBrowserState.month) {
     const selected = parseDayKey(reviewBrowserState.dayKey);
     reviewBrowserState.month = new Date(selected.getFullYear(), selected.getMonth(), 1);
   }
+  // 注意：空白日（当天没有回顾文件）允许停留，不强制跳转
   return dayMap;
 }
 
@@ -173,19 +170,7 @@ function renderReviewBrowser(preferredDayKey = null) {
   const dayMap = ensureReviewBrowserState(preferredDayKey);
   host.innerHTML = "";
 
-  if (dayMap.size === 0) {
-    const empty = document.createElement("div");
-    empty.className = "review-empty";
-    empty.innerHTML = `
-      <p class="review-empty-title">回顾文件夹是空的</p>
-      <p class="review-empty-hint">把文件放进 notes/.study_notice 文件夹，就会按创建时间出现在这里</p>
-    `;
-    host.append(empty);
-    renderNoteList();
-    renderWorkspaceTabs();
-    return;
-  }
-
+  // 即使没有任何回顾文件，也渲染月历 + 当天视图（空白日可新建到当天）
   host.append(renderReviewCalendar(dayMap));
   host.append(renderReviewDayView(dayMap));
   renderNoteList();
@@ -279,19 +264,20 @@ function renderReviewCalendar(dayMap) {
     const hasFiles = dayMap.has(dayKey);
     const cell = document.createElement("button");
     cell.type = "button";
-    cell.className = `review-calendar-day${hasFiles ? " has-files" : ""}${dayKey === reviewBrowserState.dayKey ? " is-selected" : ""}${dayKey === todayKey ? " is-today" : ""}`;
+    cell.className = `review-calendar-day${hasFiles ? " has-files" : " is-blank"}${dayKey === reviewBrowserState.dayKey ? " is-selected" : ""}${dayKey === todayKey ? " is-today" : ""}`;
     cell.dataset.dayKey = dayKey;
-    cell.disabled = !hasFiles;
     cell.textContent = String(day);
     if (hasFiles) {
       const count = dayMap.get(dayKey);
       const total = count.notes.length + count.files.length;
       cell.title = `${formatReviewDayTitle(dayKey)}（${total} 个文件）`;
       cell.append(document.createElement("i"));
-      cell.addEventListener("click", () => {
-        selectReviewDay(dayKey);
-      });
+    } else {
+      cell.title = `${formatReviewDayTitle(dayKey)}（还没有回顾文件，点击可新建到当天）`;
     }
+    cell.addEventListener("click", () => {
+      selectReviewDay(dayKey);
+    });
     grid.append(cell);
   }
 
@@ -302,24 +288,36 @@ function renderReviewCalendar(dayMap) {
 // ---------- 当天视图 ----------
 function renderReviewDayView(dayMap) {
   const dayKeys = [...dayMap.keys()];
-  const day = dayMap.get(reviewBrowserState.dayKey);
+  const day = dayMap.get(reviewBrowserState.dayKey) || { dayKey: reviewBrowserState.dayKey, notes: [], files: [] };
+  const isBlankDay = !dayMap.has(reviewBrowserState.dayKey);
   const section = document.createElement("section");
   section.className = "review-day";
 
-  // 日期导航
+  // 日期导航（翻页在「有文件的日期」之间移动；停在空白日时找前后最近的有文件日）
   const nav = document.createElement("div");
   nav.className = "review-day-nav";
 
   const currentIndex = dayKeys.indexOf(reviewBrowserState.dayKey);
+  const prevDayKey = currentIndex > 0
+    ? dayKeys[currentIndex - 1]
+    : (currentIndex === -1
+      ? (dayKeys.filter((key) => key < reviewBrowserState.dayKey).pop() || null)
+      : null);
+  const nextDayKey = currentIndex >= 0 && currentIndex < dayKeys.length - 1
+    ? dayKeys[currentIndex + 1]
+    : (currentIndex === -1
+      ? (dayKeys.find((key) => key > reviewBrowserState.dayKey) || null)
+      : null);
+
   const prevBtn = document.createElement("button");
   prevBtn.type = "button";
   prevBtn.className = "review-day-arrow";
   prevBtn.textContent = "‹";
-  prevBtn.title = "上一天";
-  prevBtn.disabled = currentIndex <= 0;
+  prevBtn.title = "上一个有文件的日期";
+  prevBtn.disabled = !prevDayKey;
   prevBtn.addEventListener("click", () => {
-    if (currentIndex > 0) {
-      selectReviewDay(dayKeys[currentIndex - 1]);
+    if (prevDayKey) {
+      selectReviewDay(prevDayKey);
     }
   });
 
@@ -329,17 +327,19 @@ function renderReviewDayView(dayMap) {
 
   const counter = document.createElement("span");
   counter.className = "review-day-counter";
-  counter.textContent = `第 ${currentIndex + 1} / ${dayKeys.length} 天`;
+  counter.textContent = isBlankDay
+    ? "空白日 · 无回顾文件"
+    : `第 ${currentIndex + 1} / ${dayKeys.length} 天`;
 
   const nextBtn = document.createElement("button");
   nextBtn.type = "button";
   nextBtn.className = "review-day-arrow";
   nextBtn.textContent = "›";
-  nextBtn.title = "下一天";
-  nextBtn.disabled = currentIndex >= dayKeys.length - 1;
+  nextBtn.title = "下一个有文件的日期";
+  nextBtn.disabled = !nextDayKey;
   nextBtn.addEventListener("click", () => {
-    if (currentIndex < dayKeys.length - 1) {
-      selectReviewDay(dayKeys[currentIndex + 1]);
+    if (nextDayKey) {
+      selectReviewDay(nextDayKey);
     }
   });
 
@@ -359,6 +359,14 @@ function renderReviewDayView(dayMap) {
   }
   for (const file of day.files) {
     cardList.append(renderReviewFileCard(file));
+  }
+  if (cardList.childElementCount === 0) {
+    const empty = document.createElement("p");
+    empty.className = "review-day-blank";
+    empty.textContent = dayMap.size === 0
+      ? "回顾文件夹还是空的——点右下角「+ 新建到当天」，把新笔记归到这一天"
+      : "这一天还没有回顾文件——点右下角「+ 新建到当天」新建一篇";
+    cardList.append(empty);
   }
   section.append(cardList);
 

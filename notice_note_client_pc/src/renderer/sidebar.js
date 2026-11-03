@@ -512,22 +512,14 @@ function renderReviewDayList(filteredNotes, filteredResources, searchKeyword) {
     return;
   }
 
-  // 非搜索：展示回顾浏览器当前查看的那一天
+  // 非搜索：展示回顾浏览器当前查看的那一天（空白日也保持同步）
   const dayMap = typeof getReviewDayMap === "function" ? getReviewDayMap() : new Map();
   let dayKey = reviewBrowserState?.dayKey;
-  if (!dayKey || !dayMap.has(dayKey)) {
-    dayKey = [...dayMap.keys()].pop() || null;
-  }
-
   if (!dayKey) {
-    const empty = document.createElement("p");
-    empty.className = "note-list-empty";
-    empty.textContent = "回顾文件夹还是空的，把文件放进 .study_notice 文件夹即可在这里看到";
-    noteList.append(empty);
-    return;
+    dayKey = [...dayMap.keys()].pop() || toLocalDateKey(new Date());
   }
 
-  const day = dayMap.get(dayKey);
+  const day = dayMap.get(dayKey) || { dayKey, notes: [], files: [] };
   const header = document.createElement("div");
   header.className = "review-side-header";
   const title = document.createElement("strong");
@@ -546,6 +538,14 @@ function renderReviewDayList(filteredNotes, filteredResources, searchKeyword) {
   });
   header.append(title, openBtn);
   noteList.append(header);
+
+  if (day.notes.length + day.files.length === 0) {
+    const empty = document.createElement("p");
+    empty.className = "note-list-empty";
+    empty.textContent = "这一天还没有回顾文件，可在回顾页「新建到当天」";
+    noteList.append(empty);
+    return;
+  }
 
   const orderedNotes = [...day.notes].sort((a, b) => {
     const rank = (note) =>

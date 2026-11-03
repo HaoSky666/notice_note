@@ -497,13 +497,14 @@ display: none;
   transition: background 0.12s, border-color 0.12s;
 }
 
-.review-calendar-day:hover:not(:disabled) {
+.review-calendar-day:hover {
   background: var(--nn-accent-soft);
 }
 
-.review-calendar-day:disabled {
-  color: var(--nn-ink-200);
-  cursor: default;
+/* 空白日（当天没有回顾文件）：可点击新建，视觉上更淡 */
+.review-calendar-day.is-blank {
+  color: var(--nn-ink-250);
+  font-weight: 400;
 }
 
 .review-calendar-day.is-today {
@@ -776,23 +777,16 @@ display: none;
   font-size: 11.5px;
 }
 
-/* ---------- 空状态 ---------- */
-.review-empty {
-  margin-top: 80px;
-  text-align: center;
-}
-
-.review-empty-title {
-  color: var(--nn-ink-600);
-  font-size: 15px;
-  font-weight: 700;
-}
-
-.review-empty-hint {
-  margin-top: 8px;
+/* ---------- 当天无文件提示 ---------- */
+.review-day-blank {
+  margin: 0;
+  border: 1px dashed var(--nn-line-200);
+  border-radius: 12px;
+  padding: 22px 16px;
   color: var(--nn-ink-400);
   font-size: 12px;
   line-height: 1.7;
+  text-align: center;
 }
 
 /* ---------- 侧边栏回顾模式（当天紧凑列表） ---------- */
