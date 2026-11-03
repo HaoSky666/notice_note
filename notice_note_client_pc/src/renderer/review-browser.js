@@ -414,7 +414,7 @@ function renderReviewNoteCard(note) {
   actions.append(
     createReviewOpenButton("打开", () => selectNote(note.id).catch(console.error)),
     createReviewRoleButton(note),
-    createReviewDateDropdown(note),
+    createReviewDateControl(note),
   );
 
   card.append(head, preview, meta, actions);
@@ -488,64 +488,41 @@ function createReviewRoleButton(note) {
   return button;
 }
 
-// 归天下拉：列出当月有文件的日期 + 恢复创建时间
-function createReviewDateDropdown(note) {
-  const wrap = document.createElement("div");
-  wrap.className = "review-date-dropdown";
+// 归天控件：原生日期选择器（系统日历弹窗，不占界面空间）+ 恢复创建时间按钮
+function createReviewDateControl(note) {
+  const wrap = document.createElement("span");
+  wrap.className = "review-date-control";
 
-  const button = document.createElement("button");
-  button.type = "button";
-  button.className = "review-card-action";
-  button.textContent = `归到：${formatReviewDayShort(note.reviewDate || getNoteReviewDayKey(note))} ▾`;
-  button.title = "更改这个文件归属于哪一天";
+  const label = document.createElement("span");
+  label.className = "review-date-control-label";
+  label.textContent = "归到";
 
-  const menu = document.createElement("div");
-  menu.className = "review-date-menu";
-  menu.hidden = true;
+  const input = document.createElement("input");
+  input.type = "date";
+  input.className = "review-date-input";
+  input.value = note.reviewDate || getNoteReviewDayKey(note) || "";
+  input.title = "更改这个文件归属于哪一天";
+  input.addEventListener("click", (event) => event.stopPropagation());
+  input.addEventListener("change", () => {
+    const value = input.value.trim();
+    applyReviewDate(note, value || null);
+  });
 
-  const dayMap = getReviewDayMap();
-  const month = reviewBrowserState.month;
-  const monthPrefix = `${month.getFullYear()}-${String(month.getMonth() + 1).padStart(2, "0")}`;
-  const monthDays = [...dayMap.keys()].filter((key) => key.startsWith(monthPrefix));
-  for (const dayKey of monthDays) {
-    const item = document.createElement("button");
-    item.type = "button";
-    item.className = `review-date-menu-item${dayKey === (note.reviewDate || getNoteReviewDayKey(note)) ? " is-active" : ""}`;
-    item.textContent = formatReviewDayShort(dayKey);
-    item.addEventListener("click", (event) => {
+  wrap.append(label, input);
+
+  if (note.reviewDate) {
+    const reset = document.createElement("button");
+    reset.type = "button";
+    reset.className = "review-card-action review-date-reset";
+    reset.textContent = "↺";
+    reset.title = "恢复按创建时间归天";
+    reset.addEventListener("click", (event) => {
       event.stopPropagation();
-      menu.hidden = true;
-      applyReviewDate(note, dayKey);
+      applyReviewDate(note, null);
     });
-    menu.append(item);
+    wrap.append(reset);
   }
 
-  const resetItem = document.createElement("button");
-  resetItem.type = "button";
-  resetItem.className = "review-date-menu-item";
-  resetItem.textContent = "按创建时间";
-  resetItem.addEventListener("click", (event) => {
-    event.stopPropagation();
-    menu.hidden = true;
-    applyReviewDate(note, null);
-  });
-  menu.append(resetItem);
-
-  button.addEventListener("click", (event) => {
-    event.stopPropagation();
-    menu.hidden = !menu.hidden;
-    if (!menu.hidden) {
-      const close = (ev) => {
-        if (!wrap.contains(ev.target)) {
-          menu.hidden = true;
-          document.removeEventListener("click", close, true);
-        }
-      };
-      document.addEventListener("click", close, true);
-    }
-  });
-
-  wrap.append(button, menu);
   return wrap;
 }
 
