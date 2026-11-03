@@ -43,6 +43,7 @@ function loadDraftsFromStorage() {
       if (Array.isArray(tabsArray)) {
         workspaceTabs = tabsArray.filter((tab) => {
           if (!tab || !tab.type || !tab.id) return false;
+          if (tab.type === "review") return false; // 旧版本持久化的回顾 Tab，已改为视图模式
           return getWorkspaceTabResource(tab) !== null;
         });
       }
@@ -735,8 +736,8 @@ function mergeIncomingNotes(nextNotes) {
   if (reconcileWorkspaceTabs()) {
     return;
   }
-  if (getActiveWorkspaceTab()?.type === "review") {
-    // 回顾 Tab 激活时：刷新浏览器与侧边栏当天列表
+  if (reviewBrowserActive) {
+    // 回顾浏览器激活时：刷新浏览器与侧边栏当天列表
     refreshReviewBrowserIfActive();
     renderNoteList();
     renderWorkspaceTabs();
@@ -1160,8 +1161,8 @@ async function refreshNotes() {
     if (reconcileWorkspaceTabs()) {
       return;
     }
-    if (getActiveWorkspaceTab()?.type === "review") {
-      // 回顾 Tab 激活时保持浏览器，不要切回编辑器
+    if (reviewBrowserActive) {
+      // 回顾浏览器激活时保持浏览器，不要切回编辑器
       refreshReviewBrowserIfActive();
       renderNoteList();
       return;

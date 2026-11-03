@@ -13,9 +13,6 @@ function getWorkspaceTabResource(tab) {
   if (tab.type === "file") {
     return resourceFiles.find((file) => file.id === tab.id);
   }
-  if (tab.type === "review") {
-    return { id: tab.id, title: "回顾", isReviewBrowser: true };
-  }
   return notes.find((note) => note.id === tab.id);
 }
 function findSidebarEntry(selector, datasetKey, value) {
@@ -28,13 +25,6 @@ function findSidebarEntry(selector, datasetKey, value) {
 function syncSidebarToWorkspaceTab(tab) {
   const resource = getWorkspaceTabResource(tab);
   if (!resource || !noteList) {
-    return;
-  }
-
-  if (tab.type === "review") {
-    setSidebarViewMode("reminder", false);
-    renderBreadcrumb();
-    renderNoteList();
     return;
   }
 
@@ -87,9 +77,7 @@ function renderWorkspaceTabs() {
         ? resource.title
         : tab.type === "draft"
           ? resource.title || "未命名草稿 (临时)"
-          : tab.type === "review"
-            ? "回顾浏览器"
-            : resource.path;
+          : resource.path;
 
     const icon = document.createElement("span");
     const iconType =
@@ -97,18 +85,14 @@ function renderWorkspaceTabs() {
         ? resource.fileType
         : tab.type === "draft"
           ? "draft"
-          : tab.type === "review"
-            ? "review"
-            : resource.kind;
+          : resource.kind;
     icon.className = `workspace-tab-icon ${iconType}`;
     icon.textContent =
       tab.type === "note"
         ? resource.fileType.toUpperCase()
         : tab.type === "draft"
           ? "草稿"
-          : tab.type === "review"
-            ? "📅"
-            : resource.typeLabel;
+          : resource.typeLabel;
 
     const isNoteDirty =
       tab.type === "note" && Boolean(noteSaveStates.get(tab.id)?.dirty);
@@ -119,22 +103,18 @@ function renderWorkspaceTabs() {
         ? resource.title || "未命名笔记"
         : tab.type === "draft"
           ? resource.title || "未命名草稿"
-          : tab.type === "review"
-            ? "回顾"
-            : resource.name;
+          : resource.name;
     label.textContent = isNoteDirty ? `${tabTitle} •` : tabTitle;
     if (isNoteDirty) {
       item.classList.add("is-dirty");
     }
 
-    const isReviewTab = tab.type === "review";
     const closeButton = document.createElement("button");
     closeButton.className = "workspace-tab-close";
     closeButton.type = "button";
     closeButton.title = "关闭标签";
     closeButton.setAttribute("aria-label", `关闭 ${label.textContent}`);
     closeButton.textContent = "×";
-    closeButton.hidden = isReviewTab;
 
     mainButton.append(icon, label);
     mainButton.addEventListener("click", () => {
@@ -144,9 +124,7 @@ function renderWorkspaceTabs() {
       activateWorkspaceTab(tab.type, tab.id).catch(console.error);
     });
     mainButton.addEventListener("pointerdown", (event) => {
-      if (!isReviewTab) {
-        beginWorkspaceTabPointerDrag(event, item, tabKey);
-      }
+      beginWorkspaceTabPointerDrag(event, item, tabKey);
     });
     mainButton.addEventListener("pointermove", updateWorkspaceTabPointerDrag);
     mainButton.addEventListener("pointerup", finishWorkspaceTabPointerDrag);
@@ -436,12 +414,6 @@ function renderWorkspaceTabContent(tab) {
     activeResourceId = tab.id;
     activePdfId = null;
     renderResourceFile();
-  } else if (tab.type === "review") {
-    activeDraftId = null;
-    activeNoteId = null;
-    activePdfId = null;
-    activeResourceId = null;
-    renderReviewBrowser();
   } else {
     activeDraftId = null;
     activeNoteId = tab.id;
@@ -469,6 +441,8 @@ function showWorkspaceTab(tab, { deferContent = false } = {}) {
     clearBlurRevealScope(tab.id);
   }
   activeWorkspaceTabKey = tabKey;
+  // 打开文件 Tab 意味着离开回顾浏览器
+  exitReviewBrowser();
   const renderVersion = ++workspaceContentRenderVersion;
   const renderContent = () => {
     if (
@@ -517,9 +491,6 @@ async function closeWorkspaceTab(tabKey) {
   }
 
   const tab = workspaceTabs[index];
-  if (tab.type === "review") {
-    return; // 回顾浏览器是常驻视图，不可关闭
-  }
   if (tab.type === "draft") {
     const draft = draftsMap.get(tab.id);
     if (draft) {
@@ -612,7 +583,7 @@ async function closeOtherWorkspaceTabs(tabKey) {
 
   for (const item of [...workspaceTabs]) {
     const itemKey = getWorkspaceTabKey(item.type, item.id);
-    if (itemKey === tabKey || item.type === "review") {
+    if (itemKey === tabKey) {
       continue;
     }
 
@@ -730,19 +701,15 @@ async function closeAllWorkspaceTabs() {
     }
   }
 
-  workspaceTabs = workspaceTabs.filter((tab) => tab.type === "review");
+  workspaceTabs = [];
   workspaceTabViewStates.clear();
   activeDraftId = null;
   activeNoteId = null;
   activePdfId = null;
   activeResourceId = null;
-  const reviewTab = workspaceTabs[0] || null;
-  if (reviewTab) {
-    showWorkspaceTab(reviewTab);
-  } else {
-    activeWorkspaceTabKey = null;
-    renderEditor();
-  }
+  exitReviewBrowser();
+  activeWorkspaceTabKey = null;
+  renderEditor();
   saveDraftsToStorage();
 }
 function reconcileWorkspaceTabs() {

@@ -838,12 +838,6 @@ display: none;
   font-size: 10.5px;
 }
 
-/* 回顾 Tab 图标 */
-.workspace-tab-icon.review {
-  background: var(--nn-accent-soft);
-  color: var(--nn-accent);
-}
-
 .note-list-empty {
   margin: 36px 12px;
   color: var(--nn-ink-375);

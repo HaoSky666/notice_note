@@ -1,14 +1,19 @@
-// 回顾浏览器：主工作区全宽页面
+// 回顾浏览器：主工作区全宽页面（视图模式，不占用 Tab 栏）
 // - 顶部月历（有文件的日期带圆点，点击跳转）
 // - 当天视图：主文件大卡片 + 次文件小卡片，左右键按天翻页
 // - 每张卡片可改「归天日期」和主次角色；底部为当日回顾操作
 // 注意：本文件为经典脚本，顶层 const/let 处于页面全局词法环境，跨文件共享；请勿重复声明同名标识符。
 
-const REVIEW_TAB_ID = "review";
 const reviewBrowserState = {
   month: null, // 当前显示月份（当月第一天）
   dayKey: null // 当前查看的日期
 };
+// 回顾浏览器是否处于激活状态（true 时主工作区显示浏览器而非文件 Tab）
+let reviewBrowserActive = false;
+
+function isReviewBrowserActive() {
+  return reviewBrowserActive;
+}
 
 function getNoteReviewDayKey(note) {
   if (note?.reviewDate) {
@@ -136,19 +141,21 @@ function ensureReviewBrowserState(preferredDayKey = null) {
   return dayMap;
 }
 
+// 打开/激活回顾浏览器（视图模式：不创建 Tab，直接占据主工作区）
 function activateReviewBrowser() {
-  const existing = workspaceTabs.find((tab) => tab.type === "review");
-  if (!existing) {
-    workspaceTabs.unshift({ type: "review", id: REVIEW_TAB_ID });
+  reviewBrowserActive = true;
+  // 侧边栏切换到回顾模式（当天紧凑列表）
+  setSidebarViewMode("reminder", false);
+  renderBreadcrumb();
+  renderReviewBrowser();
+}
+
+// 离开回顾浏览器（打开文件 Tab 时调用）
+function exitReviewBrowser() {
+  if (!reviewBrowserActive) {
+    return;
   }
-  activateWorkspaceTab("review", REVIEW_TAB_ID)
-    .then(() => {
-      // 侧边栏切换到回顾模式（当天紧凑列表）
-      setSidebarViewMode("reminder", false);
-      renderBreadcrumb();
-      renderNoteList();
-    })
-    .catch(console.error);
+  reviewBrowserActive = false;
 }
 
 function renderReviewBrowser(preferredDayKey = null) {
@@ -673,7 +680,7 @@ async function createReviewNoteForDay(dayKey) {
 
 // 回顾浏览器激活时，支持左右键翻页
 function handleReviewBrowserKeydown(event) {
-  if (getActiveWorkspaceTab()?.type !== "review") {
+  if (!reviewBrowserActive) {
     return;
   }
   if (
@@ -699,9 +706,9 @@ function handleReviewBrowserKeydown(event) {
   selectReviewDay(dayKeys[nextIndex]);
 }
 
-// 数据变化后刷新（仅在回顾 tab 激活时）
+// 数据变化后刷新（仅在回顾浏览器激活时）
 function refreshReviewBrowserIfActive() {
-  if (getActiveWorkspaceTab()?.type === "review") {
+  if (reviewBrowserActive) {
     renderReviewBrowser();
   }
 }
