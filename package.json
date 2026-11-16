@@ -1,18 +1,20 @@
 {
   "name": "notice-note",
   "version": "0.1.0",
-  "description": "支持 Markdown 笔记和多时间提醒的桌面应用",
+  "description": "本地优先的 Markdown 笔记工具：按内容天归档、天级复习提醒与每日回顾",
   "main": "notice_note_client_pc/src/main.js",
   "scripts": {
-    "start:pc": "chcp 65001 > nul && electron --no-deprecation .",
-    "start:app": "chcp 65001 > nul && cd notice_note_client_app && npx cap run android",
-    "sync:app": "chcp 65001 > nul && cd notice_note_client_app && npx cap sync android",
-    "open:app": "chcp 65001 > nul && cd notice_note_client_app && npx cap open android",
+    "start:pc": "electron --no-deprecation .",
+    "start:app": "cd notice_note_client_app && npx cap run android",
+    "sync:app": "cd notice_note_client_app && npx cap sync android",
+    "open:app": "cd notice_note_client_app && npx cap open android",
     "bundle:pc": "vite build --config vite.editor.config.js",
-    "build:pc": "chcp 65001 > nul && npm run bundle:pc && electron-builder --win nsis --x64",
-    "build:app": "chcp 65001 > nul && cd notice_note_client_app && npx cap sync android && cd android && .\\gradlew.bat copyDebugApkToRelease",
+    "build:pc": "npm run bundle:pc && electron-builder --win nsis --x64",
+    "build:app": "cd notice_note_client_app && npx cap sync android && cd android && .\\gradlew.bat copyDebugApkToRelease",
     "build:all": "npm run build:pc && npm run build:app",
-    "lint": "chcp 65001 > nul && node scripts/lint.js"
+    "lint": "node scripts/lint.js && eslint .",
+    "lint:syntax": "node scripts/lint.js --syntax-only",
+    "test": "node --test tests/*.test.js"
   },
   "keywords": [
     "markdown",
@@ -30,8 +32,6 @@
     },
     "files": [
       "notice_note_client_pc/**/*",
-      "notice_note_client_app/src/**/*",
-      "node_modules/**/*",
       "package.json"
     ],
     "afterPack": "scripts/after-pack.js",
@@ -60,6 +60,15 @@
     }
   },
   "dependencies": {
+    "exceljs": "^4.4.0",
+    "gray-matter": "^4.0.3",
+    "mammoth": "^1.12.0",
+    "word-extractor": "^1.0.4"
+  },
+  "overrides": {
+    "dompurify": "^3.3.4"
+  },
+  "devDependencies": {
     "@capacitor/android": "^8.4.1",
     "@capacitor/app": "^8.1.0",
     "@capacitor/cli": "^8.4.1",
@@ -70,18 +79,10 @@
     "@codemirror/state": "^6.5.2",
     "@codemirror/view": "^6.39.8",
     "@lezer/highlight": "^1.2.3",
-    "exceljs": "^4.4.0",
-    "gray-matter": "^4.0.3",
-    "mammoth": "^1.12.0",
-    "pdfjs-dist": "^6.1.200",
-    "word-extractor": "^1.0.4"
-  },
-  "overrides": {
-    "dompurify": "^3.3.4"
-  },
-  "devDependencies": {
     "electron": "^42.3.0",
     "electron-builder": "^26.0.12",
+    "eslint": "^9.39.5",
+    "pdfjs-dist": "^6.1.200",
     "vite": "^7.2.7"
   }
 }
