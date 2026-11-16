@@ -99,6 +99,20 @@ const THEME_LIST = [
     desc: "深邃龙姬与炽热血红游戏风",
     avatar: "./assets/themes/crimson.jpg",
   },
+  {
+    id: "deepseek",
+    name: "DeepSeek 浅色",
+    category: "minimal",
+    desc: "复刻 DeepSeek Harness 浅色壁纸：纯净白底与鲸鱼标识",
+    avatar: "./assets/themes/deepseek_whale.png",
+  },
+  {
+    id: "deepseek_dark",
+    name: "DeepSeek 深色",
+    category: "minimal",
+    desc: "复刻 DeepSeek Harness 深色壁纸：近黑底色与浅色鲸鱼标识",
+    avatar: "./assets/themes/deepseek_whale_dark.png",
+  },
 ];
 const INTERFACE_THEMES = new Set(THEME_LIST.map((t) => t.id));
 let activeThemeCategory = "all";

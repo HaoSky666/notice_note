@@ -8,52 +8,18 @@ const reviewBrowserState = {
   dayKey: null // 当前查看的日期
 };
 
+// 归天口径收敛到 day-index.js，日历与回顾面板共用同一份实现。
 function getNoteReviewDayKey(note) {
-  if (note?.reviewDate) {
-    return note.reviewDate;
-  }
-  const created = note?.createdAt ? new Date(note.createdAt) : null;
-  return created && !Number.isNaN(created.getTime())
-    ? toLocalDateKey(created)
-    : null;
+  return getDayKeyOfEntry(note);
 }
 
 function getFileReviewDayKey(file) {
-  if (file?.reviewDate) {
-    return file.reviewDate;
-  }
-  const created = file?.createdAt ? new Date(file.createdAt) : null;
-  return created && !Number.isNaN(created.getTime())
-    ? toLocalDateKey(created)
-    : null;
+  return getDayKeyOfEntry(file);
 }
 
-// 回顾文件按天分组（升序）
+// 回顾文件按天分组（升序），数据来自共享 dayIndex。
 function getReviewDayMap() {
-  const dayMap = new Map();
-  const ensureDay = (dayKey) => {
-    if (!dayMap.has(dayKey)) {
-      dayMap.set(dayKey, { dayKey, notes: [], files: [] });
-    }
-    return dayMap.get(dayKey);
-  };
-  for (const note of notes) {
-    if (note.isReviewFile) {
-      const dayKey = getNoteReviewDayKey(note);
-      if (dayKey) {
-        ensureDay(dayKey).notes.push(note);
-      }
-    }
-  }
-  for (const file of resourceFiles) {
-    if (file.isReviewFile) {
-      const dayKey = getFileReviewDayKey(file);
-      if (dayKey) {
-        ensureDay(dayKey).files.push(file);
-      }
-    }
-  }
-  return new Map([...dayMap.entries()].sort((a, b) => a[0].localeCompare(b[0])));
+  return toReviewDayMap(buildDayIndex({ notes, resourceFiles }));
 }
 
 function formatReviewDayTitle(dayKey) {
@@ -81,11 +47,23 @@ function getReviewFolderId() {
 }
 
 // 打开回顾（侧边栏模式：只切侧边栏，主工作区不动）
+// 每次打开都回到今天，不再跟随「今日回顾」自动选中的那一天
 function activateReviewBrowser() {
+  resetReviewBrowserToToday();
   setSidebarViewMode("reminder");
+  // 应用跨天没重启时 appSettings.dailyReviewDayKey 可能还停在昨天，
+  // 打开面板补拉一次，避免「完成回顾」主按钮挂到错的日子上。
+  refreshAppSettingsAndRender();
 }
 
-// 回顾操作后刷新应用设置（每日回顾选中天可能变化），再重绘侧边栏
+// 把回顾面板定位到今天（空白日也停住，方便直接新建）
+function resetReviewBrowserToToday() {
+  const today = new Date();
+  reviewBrowserState.dayKey = toLocalDateKey(today);
+  reviewBrowserState.month = new Date(today.getFullYear(), today.getMonth(), 1);
+}
+
+// 刷新应用设置后重绘侧边栏
 // preferredDayKey：当前查看的天消失时优先跟随的目标天
 async function refreshAppSettingsAndRender(preferredDayKey = null) {
   try {
@@ -111,27 +89,10 @@ function selectReviewDay(dayKey) {
 
 function ensureReviewBrowserState(preferredDayKey = null) {
   const dayMap = getReviewDayMap();
-  const dayKeys = [...dayMap.keys()];
-  const todayKey = toLocalDateKey(new Date());
 
   if (!reviewBrowserState.dayKey) {
-    // 初始定位：今日回顾选中天 -> 今天 -> 最近有文件的一天
-    const pickedDay = appSettings?.dailyReviewDayKey?.startsWith("day:")
-      ? appSettings.dailyReviewDayKey.slice(4)
-      : null;
-    let nextDay = null;
-    if (pickedDay && dayMap.has(pickedDay)) {
-      nextDay = pickedDay;
-    } else if (dayMap.has(todayKey)) {
-      nextDay = todayKey;
-    } else if (dayKeys.length > 0) {
-      nextDay = dayKeys[dayKeys.length - 1];
-    } else {
-      nextDay = todayKey; // 没有任何回顾文件：停靠在今天（空白日也可新建）
-    }
-    reviewBrowserState.dayKey = nextDay;
-    const selected = parseDayKey(nextDay);
-    reviewBrowserState.month = new Date(selected.getFullYear(), selected.getMonth(), 1);
+    // 兜底初始化（例如启动后直接落在回顾模式）：一律定位到今天
+    resetReviewBrowserToToday();
   } else if (preferredDayKey && !dayMap.has(reviewBrowserState.dayKey) && dayMap.has(preferredDayKey)) {
     // 显式把当天仅剩的文件搬走后，跟随文件去新的一天
     reviewBrowserState.dayKey = preferredDayKey;
@@ -198,15 +159,8 @@ function renderReviewSidebarCalendar(dayMap) {
   todayBtn.textContent = "今天";
   todayBtn.title = "回到今天";
   todayBtn.addEventListener("click", () => {
-    const todayKey = toLocalDateKey(new Date());
-    if (dayMap.has(todayKey)) {
-      selectReviewDay(todayKey);
-      return;
-    }
-    // 今天没有回顾文件：只把月历切到当前月
-    const today = new Date();
-    reviewBrowserState.month = new Date(today.getFullYear(), today.getMonth(), 1);
-    renderNoteList();
+    // 空白日也允许停留，直接选中今天
+    selectReviewDay(toLocalDateKey(new Date()));
   });
 
   header.append(prevBtn, monthLabel, nextBtn, todayBtn);
@@ -266,11 +220,70 @@ function renderReviewSidebarPanel() {
   const dayMap = getReviewDayMap();
   wrap.append(renderReviewSidebarCalendar(dayMap));
   wrap.append(renderReviewPanelDayBar(dayMap));
+  const completeBar = renderReviewPanelCompleteBar(dayMap);
+  if (completeBar) {
+    wrap.append(completeBar);
+  }
+  wrap.append(renderReviewPanelReminders());
   wrap.append(renderReviewPanelFileList(dayMap));
   return wrap;
 }
 
-// 当天头部 + 当天操作
+// 今天自动选中的那一套属于哪一天（entryKey 形如 day:2026-08-12）
+function getTodayDailyReviewDayKey() {
+  const entryKey = appSettings?.dailyReviewDayKey;
+  if (typeof entryKey !== "string" || !entryKey) {
+    return null;
+  }
+  return entryKey.startsWith("day:") ? entryKey.slice(4) : entryKey;
+}
+
+// 完成回顾入口分两级：
+// - 今天推的那一套所在日 → 主按钮「✓ 完成回顾」，语义就是完成今天这次回顾；
+// - 其他有内容的日子 → 弱化的「标记这一天已看过」，只做降权与留痕，不减未来推送次数。
+// 空白日不挂按钮：没有可回顾的内容，留个灰按钮会让人误以为系统在催。
+// 主进程已放开为「任意有内容的一天都可完成」，明天再看仍限今日选中套。
+function renderReviewPanelCompleteBar(dayMap) {
+  const day = dayMap.get(reviewBrowserState.dayKey);
+  const hasContent = Boolean(
+    day && (day.notes?.length || 0) + (day.files?.length || 0) > 0,
+  );
+  if (!hasContent) {
+    return null;
+  }
+
+  const targetDayKey = reviewBrowserState.dayKey;
+  const isTodayReviewDay = targetDayKey === getTodayDailyReviewDayKey();
+
+  const bar = document.createElement("div");
+  bar.className = "review-panel-bar review-panel-complete-bar";
+
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = `review-panel-complete-button${isTodayReviewDay ? "" : " is-secondary"}`;
+  button.textContent = isTodayReviewDay ? "✓ 完成回顾" : "标记这一天已看过";
+  button.title = isTodayReviewDay
+    ? "把今天这一套标记为已回顾，自动回顾会换到下一套"
+    : "这一套不是今天要回顾的内容；标记后它会排到自动回顾的队尾，但不会减少以后的推送次数";
+  button.addEventListener("click", async () => {
+    button.disabled = true;
+    try {
+      await window.noticeNote.handleDailyReview(targetDayKey, "complete");
+      await refreshAppSettingsAndRender();
+      window.showToast?.(
+        isTodayReviewDay ? "已标记完成回顾" : "已标记这一天看过了",
+        "success",
+      );
+    } catch (error) {
+      window.showErrorToast?.(error, "完成回顾失败");
+      button.disabled = false;
+    }
+  });
+  bar.append(button);
+  return bar;
+}
+
+// 当天头部：‹ 日期 › 第N/M天 + 新建到当天
 function renderReviewPanelDayBar(dayMap) {
   const bar = document.createElement("div");
   bar.className = "review-panel-bar";
@@ -288,7 +301,6 @@ function renderReviewPanelDayBar(dayMap) {
       ? (dayKeys.find((key) => key > reviewBrowserState.dayKey) || null)
       : null);
 
-  // 第一行：‹ 日期 › 第N/M天 + 新建到当天
   const nav = document.createElement("div");
   nav.className = "review-panel-nav";
 
@@ -338,110 +350,240 @@ function renderReviewPanelDayBar(dayMap) {
 
   nav.append(prevBtn, title, counter, nextBtn, createBtn);
 
-  // 第二行：今日回顾操作（当天是今日回顾选中天时）或提示
-  const actions = document.createElement("div");
-  actions.className = "review-panel-actions";
-  const todayKey = toLocalDateKey(new Date());
-  const pickedDayKey = appSettings?.dailyReviewDayKey?.startsWith("day:")
-    ? appSettings.dailyReviewDayKey.slice(4)
-    : null;
-  const isPickedToday = pickedDayKey === reviewBrowserState.dayKey;
-
-  if (isPickedToday) {
-    const badge = document.createElement("span");
-    badge.className = "daily-review-badge";
-    badge.textContent = "今日回顾";
-    actions.append(badge);
-
-    const completeBtn = document.createElement("button");
-    completeBtn.type = "button";
-    completeBtn.className = "review-panel-button primary";
-    completeBtn.textContent = "完成回顾";
-    completeBtn.addEventListener("click", () => {
-      completeBtn.disabled = true;
-      window.noticeNote
-        .handleDailyReview(reviewBrowserState.dayKey, "complete")
-        .then(() => refreshAppSettingsAndRender())
-        .catch((error) => {
-          console.error("完成回顾失败:", error);
-          alert(error.message || "完成回顾失败");
-        })
-        .finally(() => {
-          completeBtn.disabled = false;
-        });
-    });
-
-    const deferBtn = document.createElement("button");
-    deferBtn.type = "button";
-    deferBtn.className = "review-panel-button";
-    deferBtn.textContent = "明天再看";
-    deferBtn.addEventListener("click", () => {
-      deferBtn.disabled = true;
-      window.noticeNote
-        .handleDailyReview(reviewBrowserState.dayKey, "defer")
-        .then(() => refreshAppSettingsAndRender())
-        .catch((error) => {
-          console.error("推迟回顾失败:", error);
-          alert(error.message || "推迟回顾失败");
-        })
-        .finally(() => {
-          deferBtn.disabled = false;
-        });
-    });
-
-    actions.append(completeBtn, deferBtn);
-  } else {
-    const hint = document.createElement("span");
-    hint.className = "review-panel-hint";
-    hint.textContent = pickedDayKey
-      ? `今日回顾是 ${formatReviewDayShort(pickedDayKey)} 那一套`
-      : "今天没有自动选中的回顾日";
-    actions.append(hint);
-  }
-
-  bar.append(nav, actions);
+  bar.append(nav);
   return bar;
 }
 
-// 当天文件列表：主文件 -> 次文件 -> 未指定；每项带归天日期控件
+// ---------- 按天设置提醒 ----------
+// 提醒单位与回顾一致：给「这一天的一整套内容」排复习日，到那天由主进程推整套内容。
+function getTomorrowDateKey() {
+  const today = new Date();
+  return toLocalDateKey(new Date(
+    today.getFullYear(), today.getMonth(), today.getDate() + 1));
+}
+
+function runDayReminderAction(promise, button) {
+  button.disabled = true;
+  promise
+    .then(() => refreshAppSettingsAndRender())
+    .catch((error) => {
+      window.showErrorToast?.(error, "设置提醒失败");
+      alert(error.message || "设置提醒失败");
+    })
+    .finally(() => {
+      button.disabled = false;
+    });
+}
+
+function renderReviewPanelReminders() {
+  const box = document.createElement("div");
+  box.className = "review-panel-reminders";
+  const dayKey = reviewBrowserState.dayKey;
+  const records = (appSettings?.dayReminders || [])
+    .filter((item) => item.dayKey === dayKey)
+    .sort((a, b) => a.date.localeCompare(b.date));
+
+  const head = document.createElement("div");
+  head.className = "review-panel-reminders-head";
+
+  const label = document.createElement("span");
+  label.className = "review-panel-reminders-label";
+  label.textContent = "提醒";
+
+  const input = document.createElement("input");
+  input.type = "date";
+  input.className = "review-reminder-date-input";
+  input.value = getTomorrowDateKey();
+  input.min = toLocalDateKey(new Date());
+  input.title = "给这一整套内容选一个复习日";
+  input.addEventListener("click", (event) => event.stopPropagation());
+
+  const addBtn = document.createElement("button");
+  addBtn.type = "button";
+  addBtn.className = "review-reminder-add";
+  addBtn.textContent = "+ 提醒";
+  addBtn.title = "到那天提醒这一整天的全部内容";
+  addBtn.addEventListener("click", () => {
+    if (!input.value) {
+      return;
+    }
+    runDayReminderAction(
+      window.noticeNote.addDayReminder(dayKey, input.value),
+      addBtn
+    );
+  });
+
+  const autoBtn = document.createElement("button");
+  autoBtn.type = "button";
+  autoBtn.className = "review-reminder-auto";
+  autoBtn.textContent = "自动排期";
+  autoBtn.title = "按第 2、3、7、15、30 天各排一次（今天算第 1 天）";
+  autoBtn.addEventListener("click", () => {
+    runDayReminderAction(
+      window.noticeNote.autoScheduleDayReminders(dayKey),
+      autoBtn
+    );
+  });
+
+  head.append(label, input, addBtn, autoBtn);
+  box.append(head);
+
+  const chips = document.createElement("div");
+  chips.className = "review-panel-reminders-chips";
+  if (records.length === 0) {
+    const empty = document.createElement("span");
+    empty.className = "review-panel-reminders-empty";
+    empty.textContent = "还没排复习日";
+    chips.append(empty);
+  } else {
+    for (const record of records) {
+      const chip = document.createElement("span");
+      chip.className = `review-reminder-chip${record.done ? " is-done" : ""}`;
+      chip.textContent = formatReviewDayShort(record.date);
+      chip.title = record.done ? "已提醒过" : "待提醒";
+
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.className = "review-reminder-chip-remove";
+      remove.textContent = "×";
+      remove.title = "取消这个复习日";
+      remove.addEventListener("click", () => {
+        runDayReminderAction(
+          window.noticeNote.removeDayReminder(record.id),
+          remove
+        );
+      });
+      chip.append(remove);
+      chips.append(chip);
+    }
+  }
+  box.append(chips);
+  return box;
+}
+
+// 当天文件列表：同一天的文件一律平级，按最近修改排序；每项带归天日期控件
+// 当天文件列表：同一天的文件一律平级。默认按最近修改排序，拖过之后按手动顺序；
+// 每项带归天日期控件，并挂一个拖拽手柄（手柄只在回顾面板这里出现）。
+// 拖拽状态只记「哪一天的哪一个」，跨天不响应：顺序是按天存的。
+let reviewFileDrag = null;
+
+// 有手动顺序就按它排；没登记过的排在后面，彼此保持默认顺序（sort 稳定）。
+function sortReviewDayEntries(entries, order) {
+  if (!Array.isArray(order) || order.length === 0) {
+    return entries;
+  }
+  const rank = new Map(order.map((key, index) => [key, index]));
+  const rankOf = (key) => (rank.has(key) ? rank.get(key) : Number.MAX_SAFE_INTEGER);
+  return [...entries].sort((a, b) => rankOf(a.key) - rankOf(b.key));
+}
+
+async function commitReviewDayFileOrder(dayKey, dragKey, targetKey, position) {
+  try {
+    const result = await window.noticeNote.reorderReviewDayFile(
+      dayKey,
+      dragKey,
+      targetKey,
+      position,
+    );
+    if (result?.reviewDayOrder) {
+      appSettings = { ...(appSettings || {}), reviewDayOrder: result.reviewDayOrder };
+    }
+    renderNoteList();
+  } catch (error) {
+    console.error("调整回顾顺序失败:", error);
+    alert(error.message || "调整顺序失败");
+  }
+}
+
+function bindReviewDayFileReorder(item, dayKey, key) {
+  item.addEventListener("dragover", (event) => {
+    const drag = reviewFileDrag;
+    if (!drag || drag.dayKey !== dayKey || drag.key === key) {
+      return;
+    }
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "move";
+    const edge = getDropEdge(event, item) === "before" ? "before" : "after";
+    item.classList.remove("drop-before", "drop-after");
+    item.classList.add(edge === "before" ? "drop-before" : "drop-after");
+  });
+  item.addEventListener("dragleave", (event) => {
+    if (event.relatedTarget && item.contains(event.relatedTarget)) {
+      return;
+    }
+    item.classList.remove("drop-before", "drop-after");
+  });
+  item.addEventListener("drop", async (event) => {
+    const drag = reviewFileDrag;
+    if (!drag || drag.dayKey !== dayKey || drag.key === key) {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    const position = item.classList.contains("drop-before") ? "before" : "after";
+    item.classList.remove("drop-before", "drop-after");
+    await commitReviewDayFileOrder(dayKey, drag.key, key, position);
+  });
+}
+
 function renderReviewPanelFileList(dayMap) {
   const list = document.createElement("div");
   list.className = "review-panel-files";
-  const day = dayMap.get(reviewBrowserState.dayKey) || { notes: [], files: [] };
+  const dayKey = reviewBrowserState.dayKey;
+  const day = dayMap.get(dayKey) || { notes: [], files: [] };
 
-  const orderedNotes = [...day.notes].sort((a, b) => {
-    const rank = (note) => (note.reviewRole === "primary" ? 0 : note.reviewRole === "secondary" ? 1 : 2);
-    return rank(a) - rank(b) || Date.parse(b.updatedAt) - Date.parse(a.updatedAt);
-  });
+  // 默认顺序就是接口算基准的那个顺序：笔记按修改时间倒序在前，资源文件接在后面。
+  const entries = [
+    ...[...day.notes]
+      .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt))
+      .map((note) => ({ key: `note:${note.id}`, type: "note", item: note })),
+    ...day.files.map((file) => ({ key: `file:${file.id}`, type: "file", item: file })),
+  ];
+  const ordered = sortReviewDayEntries(entries, appSettings?.reviewDayOrder?.[dayKey]);
 
-  for (const note of orderedNotes) {
-    list.append(
-      createReviewDayItem({
+  for (const entry of ordered) {
+    const drag = {
+      key: entry.key,
+      onStart: () => {
+        reviewFileDrag = { dayKey, key: entry.key };
+      },
+      onEnd: () => {
+        reviewFileDrag = null;
+        clearSidebarDropMarks();
+      },
+    };
+
+    let node;
+    if (entry.type === "note") {
+      const note = entry.item;
+      node = createReviewDayItem({
         label: note.title || "未命名笔记",
         meta: `修改 ${formatListDateTime(note.updatedAt)}`,
-        badge: note.reviewRole === "primary" ? "主" : note.reviewRole === "secondary" ? "次" : note.fileType.toUpperCase(),
+        badge: (note.fileType || "md").toUpperCase(),
         active: note.id === activeNoteId,
         isDailyReview: note.isDailyReview,
-        onClick: () => selectNote(note.id).catch(console.error),
-        role: note.reviewRole,
-        onRoleToggle: () => setReviewRoleForNote(note),
-        extra: createReviewDateControl(note)
-      }),
-    );
-  }
-  for (const file of day.files) {
-    list.append(
-      createReviewDayItem({
+        onClick: () => selectNote(note.id).catch((error) => window.showErrorToast?.(error, "操作失败")),
+        extra: createReviewDateControl(note),
+        entry: { type: "note", id: note.id },
+        drag,
+      });
+    } else {
+      const file = entry.item;
+      node = createReviewDayItem({
         label: file.name,
         meta: `${formatFileSize(file.size)} · 修改 ${formatListDateTime(file.updatedAt)}`,
         badge: file.typeLabel,
         active: file.id === activeResourceId || file.id === activePdfId,
         onClick: file.canOpen
-          ? () => selectResourceFile(file.id).catch(console.error)
+          ? () => selectResourceFile(file.id).catch((error) => window.showErrorToast?.(error, "操作失败"))
           : null,
-        extra: createReviewFileDateControl(file)
-      }),
-    );
+        extra: createReviewFileDateControl(file),
+        entry: { type: "file", id: file.id },
+        drag,
+      });
+    }
+    bindReviewDayFileReorder(node, dayKey, entry.key);
+    list.append(node);
   }
 
   if (list.childElementCount === 0) {
@@ -456,13 +598,266 @@ function renderReviewPanelFileList(dayMap) {
   return list;
 }
 
-// 设为主文件（再点取消）
-function setReviewRoleForNote(note) {
-  const nextRole = note.reviewRole === "primary" ? null : "primary";
-  window.noticeNote
-    .setReviewRole({ type: "note", id: note.id }, nextRole)
-    .then(() => refreshAppSettingsAndRender())
-    .catch((error) => console.error("设置主次失败:", error));
+// ---------- 回顾顺序 / 提醒排期（标题栏小按钮 → 弹窗）----------
+// 把原本藏在算法里的「接下来推哪套」和「哪天提醒哪套」显式化。
+// 这两份列表都不短，塞进 ~300px 宽的侧边栏只能把标题截断，所以改成弹窗看全。
+const REVIEW_OVERVIEW_KINDS = {
+  queue: {
+    label: "回顾顺序",
+    unit: "套",
+    empty: "暂无可回顾的内容。有文件、且没挂着未完成复习日的日子才会排进这里。",
+  },
+  schedule: {
+    label: "提醒排期",
+    unit: "个",
+    empty: "还没有排复习日。在上方「提醒」里点「+ 提醒」或「自动排期」。",
+  },
+};
+
+let reviewOverviewDialog = null;
+
+// 同一个按钮再点一次就收起；点另一个按钮直接换成另一份列表。
+function openReviewOverviewDialog(kind) {
+  if (!REVIEW_OVERVIEW_KINDS[kind]) {
+    return;
+  }
+  const togglingOff = reviewOverviewDialog?.kind === kind;
+  closeReviewOverviewDialog();
+  if (togglingOff) {
+    return;
+  }
+
+  const overlay = document.createElement("div");
+  overlay.className = "review-overview-dialog";
+  overlay.tabIndex = -1;
+
+  const content = document.createElement("div");
+  content.className = "review-overview-dialog-content";
+  content.setAttribute("role", "dialog");
+  content.setAttribute("aria-modal", "true");
+  content.setAttribute("aria-labelledby", "reviewOverviewHeading");
+
+  const head = document.createElement("div");
+  head.className = "review-overview-dialog-head";
+  const heading = document.createElement("strong");
+  heading.id = "reviewOverviewHeading";
+  const closeButton = document.createElement("button");
+  closeButton.type = "button";
+  closeButton.className = "review-overview-dialog-close";
+  closeButton.textContent = "×";
+  closeButton.title = "关闭";
+  closeButton.setAttribute("aria-label", "关闭");
+  head.append(heading, closeButton);
+
+  const body = document.createElement("div");
+  body.className = "review-overview-dialog-body";
+  content.append(head, body);
+  overlay.append(content);
+  document.body.append(overlay);
+
+  overlay.addEventListener("click", (event) => {
+    if (event.target === overlay) {
+      closeReviewOverviewDialog();
+    }
+  });
+  overlay.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      closeReviewOverviewDialog();
+    }
+  });
+  closeButton.addEventListener("click", () => closeReviewOverviewDialog());
+
+  reviewOverviewDialog = { overlay, heading, body, kind };
+  renderReviewOverviewDialog();
+  overlay.focus();
+}
+
+function closeReviewOverviewDialog() {
+  if (!reviewOverviewDialog) {
+    return;
+  }
+  reviewOverviewDialog.overlay.remove();
+  reviewOverviewDialog = null;
+}
+
+// 弹窗开着时，改顺序 / 改日期 / 取消提醒都要就地刷新，不能让人对着旧数据继续点。
+function refreshReviewOverviewDialog() {
+  if (reviewOverviewDialog) {
+    renderReviewOverviewDialog();
+  }
+}
+
+function renderReviewOverviewDialog() {
+  if (!reviewOverviewDialog) {
+    return;
+  }
+  const { heading, body, kind } = reviewOverviewDialog;
+  const meta = REVIEW_OVERVIEW_KINDS[kind];
+  const queue = Array.isArray(appSettings?.reviewQueue) ? appSettings.reviewQueue : [];
+  const records = (appSettings?.dayReminders || []).filter((record) => !record.done);
+  const count = kind === "queue" ? queue.length : records.length;
+
+  heading.textContent = `${meta.label}（${count} ${meta.unit}）`;
+  body.innerHTML = "";
+  if (count === 0) {
+    body.append(createReviewOverviewEmpty(meta.empty));
+    return;
+  }
+  body.append(kind === "queue"
+    ? renderReviewQueueList(queue)
+    : renderReminderScheduleList(records, getReviewDayMap()));
+}
+
+function createReviewOverviewEmpty(text) {
+  const hint = document.createElement("p");
+  hint.className = "review-overview-empty";
+  hint.textContent = text;
+  return hint;
+}
+
+function renderReviewQueueList(queue) {
+  const list = document.createElement("div");
+  list.className = "review-queue-list";
+  queue.forEach((item, index) => {
+    list.append(renderReviewQueueItem(item, index, queue.length));
+  });
+  return list;
+}
+
+function renderReviewQueueItem(item, index, total) {
+  const row = document.createElement("div");
+  row.className = `review-queue-item${item.isToday ? " is-today" : ""}`;
+
+  const order = document.createElement("span");
+  order.className = "review-queue-index";
+  order.textContent = String(index + 1);
+
+  const copy = document.createElement("div");
+  copy.className = "review-queue-copy";
+  // 日期放副标题：侧边栏只有 ~300px，标题前再挂「11月16日」会把正题挤成省略号。
+  const title = document.createElement("strong");
+  title.textContent = item.title;
+  title.title = `${formatReviewDayTitle(item.dayKey)} · ${item.title} · ${item.count} 个文件`;
+  const meta = document.createElement("small");
+  meta.textContent = item.isToday
+    ? `${formatReviewDayShort(item.dayKey)} · 今天推这一套`
+    : `${formatReviewDayShort(item.dayKey)} · ${item.count} 个文件`;
+  copy.append(title, meta);
+
+  const actions = document.createElement("div");
+  actions.className = "review-queue-actions";
+  const addAction = (label, action, titleText, disabled) => {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "review-queue-action";
+    btn.textContent = label;
+    btn.title = titleText;
+    btn.disabled = disabled;
+    btn.addEventListener("click", () => runReviewReorder(item.dayKey, action, btn));
+    actions.append(btn);
+  };
+  addAction("顶", "top", "移到队首，下一个就推它", index === 0);
+  addAction("↑", "up", "往前挪一位", index === 0);
+  addAction("↓", "down", "往后挪一位", index === total - 1);
+
+  row.append(order, copy, actions);
+  return row;
+}
+
+async function runReviewReorder(dayKey, action, button) {
+  button.disabled = true;
+  try {
+    appSettings = await window.noticeNote.reorderDailyReview(dayKey, action);
+    renderNoteList();
+    refreshReviewOverviewDialog();
+  } catch (error) {
+    window.showErrorToast?.(error, "调整回顾顺序失败");
+    button.disabled = false;
+  }
+}
+
+function renderReminderScheduleList(records, dayMap) {
+  const todayKey = toLocalDateKey(new Date());
+  const list = document.createElement("div");
+  list.className = "review-schedule-list";
+  for (const record of records) {
+    list.append(renderReviewScheduleItem(record, dayMap, todayKey));
+  }
+  return list;
+}
+
+function renderReviewScheduleItem(record, dayMap, todayKey) {
+  const day = dayMap.get(record.dayKey);
+  const first = day?.notes?.[0] || day?.files?.[0] || null;
+  const title = first?.title || first?.name || "内容已不在回顾文件夹";
+
+  const row = document.createElement("div");
+  row.className = "review-schedule-item";
+
+  const head = document.createElement("div");
+  head.className = "review-schedule-head";
+  const dateLabel = document.createElement("strong");
+  dateLabel.textContent = formatReviewDayShort(record.date);
+  const arrow = document.createElement("span");
+  arrow.className = "review-schedule-arrow";
+  arrow.textContent = "→";
+  const target = document.createElement("span");
+  target.className = "review-schedule-target";
+  target.textContent = `${formatReviewDayShort(record.dayKey)} ${title}`;
+  target.title = `${formatReviewDayTitle(record.dayKey)} · ${title}`;
+  head.append(dateLabel, arrow, target);
+
+  const footer = document.createElement("div");
+  footer.className = "review-schedule-footer";
+  const input = document.createElement("input");
+  input.type = "date";
+  input.className = "review-schedule-date";
+  input.value = record.date;
+  input.min = todayKey;
+  input.title = "改到哪一天提醒";
+  input.addEventListener("change", () => {
+    runReminderDateChange(record, input.value, input);
+  });
+  const remove = document.createElement("button");
+  remove.type = "button";
+  remove.className = "review-schedule-remove";
+  remove.textContent = "取消";
+  remove.title = "取消这个提醒";
+  remove.addEventListener("click", () => runReminderRemove(record.id, remove));
+  footer.append(input, remove);
+
+  row.append(head, footer);
+  return row;
+}
+
+async function runReminderDateChange(record, date, input) {
+  if (!date || date === record.date) {
+    return;
+  }
+  input.disabled = true;
+  try {
+    await window.noticeNote.updateDayReminderDate(record.id, date);
+    await refreshAppSettingsAndRender();
+    refreshReviewOverviewDialog();
+    window.showToast?.(`已改到 ${formatReviewDayShort(date)}`, "success");
+  } catch (error) {
+    window.showErrorToast?.(error, "改提醒日期失败");
+    input.value = record.date;
+    input.disabled = false;
+  }
+}
+
+async function runReminderRemove(id, button) {
+  button.disabled = true;
+  try {
+    await window.noticeNote.removeDayReminder(id);
+    await refreshAppSettingsAndRender();
+    refreshReviewOverviewDialog();
+  } catch (error) {
+    window.showErrorToast?.(error, "取消提醒失败");
+    button.disabled = false;
+  }
 }
 
 // 归天控件：原生日期选择器 + 恢复创建时间按钮
@@ -470,7 +865,7 @@ function createReviewDateControl(note) {
   return createReviewDateControlInner(
     note,
     note.reviewDate || getNoteReviewDayKey(note) || "",
-    (dayKey) => applyReviewDate(note, dayKey)
+    (dayKey, onFailure) => applyReviewDate(note, dayKey, onFailure)
   );
 }
 
@@ -478,7 +873,7 @@ function createReviewFileDateControl(file) {
   return createReviewDateControlInner(
     file,
     file.reviewDate || getFileReviewDayKey(file) || "",
-    (dayKey) => applyReviewFileDate(file, dayKey)
+    (dayKey, onFailure) => applyReviewFileDate(file, dayKey, onFailure)
   );
 }
 
@@ -496,9 +891,13 @@ function createReviewDateControlInner(entry, currentDay, onApply) {
   input.value = currentDay;
   input.title = "更改这个文件归属于哪一天";
   input.addEventListener("click", (event) => event.stopPropagation());
+  // 失败时把控件值回弹到旧日期，避免界面显示一个其实没保存成功的新值（R11）。
+  const restoreValue = () => {
+    input.value = currentDay;
+  };
   input.addEventListener("change", () => {
     const value = input.value.trim();
-    onApply(value || null);
+    onApply(value || null, restoreValue);
   });
 
   wrap.append(label, input);
@@ -511,7 +910,7 @@ function createReviewDateControlInner(entry, currentDay, onApply) {
     reset.title = "恢复按创建时间归天";
     reset.addEventListener("click", (event) => {
       event.stopPropagation();
-      onApply(null);
+      onApply(null, restoreValue);
     });
     wrap.append(reset);
   }
@@ -519,43 +918,49 @@ function createReviewDateControlInner(entry, currentDay, onApply) {
   return wrap;
 }
 
-function applyReviewDate(note, dayKey) {
-  window.noticeNote
+function applyReviewDate(note, dayKey, onFailure = null) {
+  return window.noticeNote
     .setReviewDate({ type: "note", id: note.id }, dayKey)
     .then(() => refreshAppSettingsAndRender(dayKey))
-    .catch((error) => console.error("设置回顾日期失败:", error));
+    .catch((error) => {
+      window.showErrorToast?.(error, "改归天日期失败");
+      onFailure?.();
+    });
 }
 
-function applyReviewFileDate(file, dayKey) {
-  window.noticeNote
+function applyReviewFileDate(file, dayKey, onFailure = null) {
+  return window.noticeNote
     .setReviewDate({ type: "file", id: file.id }, dayKey)
     .then(() => refreshAppSettingsAndRender(dayKey))
-    .catch((error) => console.error("设置回顾日期失败:", error));
+    .catch((error) => {
+      window.showErrorToast?.(error, "改归天日期失败");
+      onFailure?.();
+    });
 }
 
-// 右键菜单用：输入任意日期（YYYY-MM-DD），留空恢复创建时间
-function promptReviewDate(note) {
-  const current = note.reviewDate || getNoteReviewDayKey(note) || "";
-  const input = window.prompt("设置回顾日期（YYYY-MM-DD）\n留空则按创建时间归天：", current);
-  if (input === null) {
-    return;
-  }
-  const value = input.trim();
-  if (!value) {
-    applyReviewDate(note, null);
-    return;
-  }
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(value) || Number.isNaN(Date.parse(value))) {
-    alert("日期格式无效，请使用 YYYY-MM-DD");
-    return;
-  }
-  applyReviewDate(note, value);
-}
-
+// 归天只走列表里的日期控件：右键菜单不再提供入口。
+// 这里曾有一个 prompt 版「设置回顾日期」，与控件改的是同一个字段，
+// 两个入口并存只会让人以为它们是两件事。
 async function createReviewNoteForDay(dayKey) {
-  const folderId = getReviewFolderId();
+  let folderId = getReviewFolderId();
   if (!folderId) {
-    console.error("未找到回顾文件夹");
+    // 主进程启动时会确保 .study_notice 存在；这里再拉一次文件夹列表兜底
+    // （切换存储位置后渲染层可能还拿着旧列表），失败则给出可读提示而不是静默返回。
+    try {
+      const nextFolders = await window.noticeNote.listFolders();
+      if (Array.isArray(nextFolders)) {
+        folders = nextFolders;
+      }
+      folderId = getReviewFolderId();
+    } catch (error) {
+      window.showErrorToast?.(error, "刷新文件夹列表失败");
+    }
+  }
+  if (!folderId) {
+    window.showErrorToast?.(
+      new Error("未找到回顾目录 .study_notice，请点资料库刷新后重试"),
+      "新建到当天失败",
+    );
     return;
   }
   try {
@@ -564,7 +969,6 @@ async function createReviewNoteForDay(dayKey) {
     await selectNote(note.id);
     refreshAppSettingsAndRender();
   } catch (error) {
-    console.error("新建到当天失败:", error);
-    alert(error.message || "新建到当天失败");
+    window.showErrorToast?.(error, "新建到当天失败");
   }
 }

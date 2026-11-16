@@ -121,7 +121,7 @@ function renderWorkspaceTabs() {
       if (Date.now() - workspaceTabDragStartedAt < 250) {
         return;
       }
-      activateWorkspaceTab(tab.type, tab.id).catch(console.error);
+      activateWorkspaceTab(tab.type, tab.id).catch((error) => window.showErrorToast?.(error, "操作失败"));
     });
     mainButton.addEventListener("pointerdown", (event) => {
       beginWorkspaceTabPointerDrag(event, item, tabKey);
@@ -130,7 +130,7 @@ function renderWorkspaceTabs() {
     mainButton.addEventListener("pointerup", finishWorkspaceTabPointerDrag);
     mainButton.addEventListener("pointercancel", cancelWorkspaceTabPointerDrag);
     closeButton.addEventListener("click", () => {
-      closeWorkspaceTab(tabKey).catch(console.error);
+      closeWorkspaceTab(tabKey).catch((error) => window.showErrorToast?.(error, "操作失败"));
     });
     item.append(mainButton, closeButton);
     workspaceTabsRoot.append(item);

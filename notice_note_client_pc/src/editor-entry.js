@@ -958,6 +958,55 @@ class OrderedMarkerWidget extends WidgetType {
   }
 }
 
+// 远程图片的「占位 → 点击后才加载」门控，两个图片 widget 共用（R6）。
+// 以前只有 ImageWidget 做了，光标所在行的 ImageBelowWidget 仍会直接发第三方请求。
+// 负责把 image / 占位按钮挂到 container，并返回一个统一的 activate 供事件绑定。
+function createImageGate(container, image, src, alt, onOpen) {
+  const isRemote = /^https?:\/\//i.test(String(src || ''));
+  let remoteLoaded = !isRemote;
+  let hint = null;
+
+  if (isRemote) {
+    container.classList.add('cm-rendered-image-remote');
+    hint = document.createElement('button');
+    hint.type = 'button';
+    hint.className = 'cm-remote-image-hint';
+    hint.textContent = `远程图片「${alt}」· 点击后才向第三方发起请求`;
+    hint.setAttribute('aria-label', hint.textContent);
+  } else {
+    image.src = src;
+  }
+
+  container.append(image);
+
+  const loadRemote = () => {
+    if (remoteLoaded) {
+      return false;
+    }
+    remoteLoaded = true;
+    image.src = src;
+    container.classList.remove('cm-rendered-image-remote');
+    hint?.remove();
+    return true;
+  };
+  const activate = () => {
+    if (loadRemote()) {
+      return;
+    }
+    onOpen?.(image);
+  };
+
+  if (hint) {
+    hint.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      activate();
+    });
+    container.append(hint);
+  }
+  return activate;
+}
+
 class ImageWidget extends WidgetType {
   constructor(alt, src, onOpen) {
     super();
@@ -974,14 +1023,16 @@ class ImageWidget extends WidgetType {
     const wrapper = document.createElement('span');
     wrapper.className = 'cm-rendered-image';
 
+    // 远程图片默认不自动加载（与 ImageBelowWidget 共用同一门控）。
     const image = document.createElement('img');
-    image.src = this.src;
     image.alt = this.alt;
     image.title = `${this.alt} · 点击放大`;
     image.loading = 'lazy';
     image.tabIndex = 0;
     image.setAttribute('role', 'button');
     image.setAttribute('aria-label', `放大图片：${this.alt}`);
+    const activate = createImageGate(wrapper, image, this.src, this.alt, this.onOpen);
+
     let suppressNextClick = false;
     let lastPressOpenedAt = Number.NEGATIVE_INFINITY;
     const openOnPress = (event) => {
@@ -994,7 +1045,7 @@ class ImageWidget extends WidgetType {
       const now = performance.now();
       if (now - lastPressOpenedAt > 100) {
         lastPressOpenedAt = now;
-        this.onOpen?.(image);
+        activate();
       }
     };
     image.addEventListener('pointerdown', openOnPress);
@@ -1006,7 +1057,7 @@ class ImageWidget extends WidgetType {
         suppressNextClick = false;
         return;
       }
-      this.onOpen?.(image);
+      activate();
     });
     image.addEventListener('keydown', (event) => {
       if (event.key !== 'Enter' && event.key !== ' ') {
@@ -1014,13 +1065,11 @@ class ImageWidget extends WidgetType {
       }
       event.preventDefault();
       event.stopPropagation();
-      this.onOpen?.(image);
+      activate();
     });
     image.addEventListener('error', () => {
       wrapper.textContent = `${this.alt}（图片加载失败）`;
     });
-
-    wrapper.append(image);
     return wrapper;
   }
 
@@ -1046,13 +1095,14 @@ class ImageBelowWidget extends WidgetType {
     container.className = 'cm-image-preview-below';
 
     const image = document.createElement('img');
-    image.src = this.src;
     image.alt = this.alt;
     image.title = `${this.alt} · 点击放大`;
     image.loading = 'lazy';
     image.tabIndex = 0;
     image.setAttribute('role', 'button');
     image.setAttribute('aria-label', `放大图片：${this.alt}`);
+    // 与 ImageWidget 共用远程图片门控：光标所在行也不能自动请求第三方。
+    const activate = createImageGate(container, image, this.src, this.alt, this.onOpen);
     let suppressNextClick = false;
     let lastPressOpenedAt = Number.NEGATIVE_INFINITY;
     const openOnPress = (event) => {
@@ -1065,7 +1115,7 @@ class ImageBelowWidget extends WidgetType {
       const now = performance.now();
       if (now - lastPressOpenedAt > 100) {
         lastPressOpenedAt = now;
-        this.onOpen?.(image);
+        activate();
       }
     };
     image.addEventListener('pointerdown', openOnPress);
@@ -1077,7 +1127,7 @@ class ImageBelowWidget extends WidgetType {
         suppressNextClick = false;
         return;
       }
-      this.onOpen?.(image);
+      activate();
     });
     image.addEventListener('keydown', (event) => {
       if (event.key !== 'Enter' && event.key !== ' ') {
@@ -1085,13 +1135,12 @@ class ImageBelowWidget extends WidgetType {
       }
       event.preventDefault();
       event.stopPropagation();
-      this.onOpen?.(image);
+      activate();
     });
     image.addEventListener('error', () => {
       container.textContent = `${this.alt}（图片加载失败）`;
     });
 
-    container.append(image);
     return container;
   }
 
@@ -1620,11 +1669,10 @@ function createNoticeNoteEditor(options) {
   let columnDrag = null;
   let altKeyDown = false;
   const editorOptions = { ...options };
-  const view = new EditorView({
-    parent: editorOptions.parent,
-    state: EditorState.create({
-      doc: editorOptions.initialValue || '',
-      extensions: [
+  // 每次程序性替换整篇文档都用它重建 EditorState：撤销历史必须跟着归零。
+  const buildEditorState = (doc) => EditorState.create({
+    doc,
+    extensions: [
         history(),
         revealTickField,
         markdown({ base: markdownLanguage }),
@@ -1694,8 +1742,12 @@ function createNoticeNoteEditor(options) {
             outline: 'none'
           }
         })
-      ]
-    })
+    ]
+  });
+
+  const view = new EditorView({
+    parent: editorOptions.parent,
+    state: buildEditorState(editorOptions.initialValue || '')
   });
 
   editorOptions.onRevealToggle = () => {
@@ -1821,11 +1873,15 @@ function createNoticeNoteEditor(options) {
       if (view.state.doc.toString() === nextValue) {
         return;
       }
+      // 切笔记时如果只 dispatch 一次全文 changes，这次替换会进入 undo 历史：
+      // 切到 B 后按 Ctrl+Z 会把 A 的正文恢复回来，再保存就写进了 B 的文件。
+      // 程序性设置全文一律重建 EditorState，历史归零；internalUpdate 阻止误触发 onChange。
       internalUpdate = true;
-      view.dispatch({
-        changes: { from: 0, to: view.state.doc.length, insert: nextValue }
-      });
-      internalUpdate = false;
+      try {
+        view.setState(buildEditorState(nextValue));
+      } finally {
+        internalUpdate = false;
+      }
     },
     insertMarkdown(value) {
       insertMarkdownAtSelection(view, value || '');

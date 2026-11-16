@@ -52,7 +52,8 @@ function showEditorContextMenu(x, y, target) {
   contextMenu.style.top = `${y}px`;
 
   const activeNote = getActiveNote();
-  const canInsert = Boolean(activeNote);
+  // 草稿没有真实笔记 id，插入/粘贴图片会被主进程拒绝；直接禁用入口（R5）。
+  const canInsert = Boolean(activeNote) && !activeDraftId;
 
   const activeEl = document.activeElement;
   const selectionText = window.getSelection()?.toString() || "";
@@ -154,7 +155,7 @@ function showEditorContextMenu(x, y, target) {
     createContextMenuItem(
       "插入图片",
       () => {
-        insertImage().catch(console.error);
+        insertImage().catch((error) => window.showErrorToast?.(error, "操作失败"));
       },
       !canInsert,
     ),
@@ -177,6 +178,22 @@ function showEditorContextMenu(x, y, target) {
     contextMenu.style.top = `${y - rect.height}px`;
   }
 }
+// 回顾文件由回顾目录统一管理：把它移出目录等于从回顾体系里摘掉，
+// 而 notes:move / files:move 不会同步 isReviewFile，会留下内存与磁盘不一致的状态。
+// 所以回顾项的菜单不提供「移动到…」，其余项目与普通笔记一致。
+function isReviewEntry(entry) {
+  if (!entry) {
+    return false;
+  }
+  if (entry.type === "note") {
+    return Boolean(notes.find((item) => item.id === entry.id)?.isReviewFile);
+  }
+  if (entry.type === "file") {
+    return Boolean(resourceFiles.find((item) => item.id === entry.id)?.isReviewFile);
+  }
+  return false;
+}
+
 function showContextMenu(x, y, entry = null) {
   hideContextMenu();
 
@@ -186,9 +203,10 @@ function showContextMenu(x, y, entry = null) {
   contextMenu.style.top = `${y}px`;
 
   if (entry) {
+    const reviewEntry = isReviewEntry(entry);
     contextMenu.append(
       createContextMenuItem("复制绝对路径", () => {
-        window.noticeNote.copyEntryPath(entry).catch(console.error);
+        window.noticeNote.copyEntryPath(entry).catch((error) => window.showErrorToast?.(error, "操作失败"));
       }),
     );
     if (entry.type === "folder") {
@@ -198,21 +216,21 @@ function showContextMenu(x, y, entry = null) {
           createContextMenuItem(
             folder.isProtected ? "修改密码" : "设置密码",
             () => {
-              setFolderPasswordForFolder(folder.id).catch(console.error);
+              setFolderPasswordForFolder(folder.id).catch((error) => window.showErrorToast?.(error, "操作失败"));
             },
           ),
         );
         if (folder.isProtected && !folder.isUnlocked) {
           contextMenu.append(
             createContextMenuItem("输入密码解锁", () => {
-              promptUnlockFolder(folder.id).catch(console.error);
+              promptUnlockFolder(folder.id).catch((error) => window.showErrorToast?.(error, "操作失败"));
             }),
           );
         }
         if (folder.isProtected) {
           contextMenu.append(
             createContextMenuItem("清除密码", () => {
-              clearFolderPasswordForFolder(folder.id).catch(console.error);
+              clearFolderPasswordForFolder(folder.id).catch((error) => window.showErrorToast?.(error, "操作失败"));
             }),
           );
         }
@@ -221,64 +239,34 @@ function showContextMenu(x, y, entry = null) {
     if (entry.type !== "folder") {
       contextMenu.append(
         createContextMenuItem("使用默认应用打开", () => {
-          window.noticeNote.openEntryWithDefaultApp(entry).catch(console.error);
+          window.noticeNote.openEntryWithDefaultApp(entry).catch((error) => window.showErrorToast?.(error, "操作失败"));
         }),
       );
     }
-    if (entry.type === "note") {
-      const note = notes.find((item) => item.id === entry.id);
-      if (note?.isReviewFile) {
-        const isPrimary = note.reviewRole === "primary";
-        contextMenu.append(
-          createContextMenuSeparator(),
-          createContextMenuItem("设置回顾日期…", () => {
-            promptReviewDate(note);
-          }),
-          createContextMenuItem(isPrimary ? "取消主文件" : "设为主文件", () => {
-            window.noticeNote
-              .setReviewRole({ type: "note", id: note.id }, isPrimary ? null : "primary")
-              .then(() => {
-                renderNoteList();
-              })
-              .catch((error) => console.error("设置主次失败:", error));
-          }),
-          createContextMenuItem(
-            note.reviewRole === "secondary" ? "取消次文件" : "设为次文件",
-            () => {
-              window.noticeNote
-                .setReviewRole(
-                  { type: "note", id: note.id },
-                  note.reviewRole === "secondary" ? null : "secondary",
-                )
-                .then(() => {
-                  renderNoteList();
-                })
-                .catch((error) => console.error("设置主次失败:", error));
-            },
-          ),
-        );
-      }
-    }
     contextMenu.append(
       createContextMenuItem("打开资源管理器", () => {
-        window.noticeNote.showEntryInFolder(entry).catch(console.error);
+        window.noticeNote.showEntryInFolder(entry).catch((error) => window.showErrorToast?.(error, "操作失败"));
       }),
-      createContextMenuItem("移动到…", () => {
-        moveEntryToFolder(entry).catch(console.error);
-      }),
+    );
+    if (!reviewEntry) {
+      contextMenu.append(
+        createContextMenuItem("移动到…", () => {
+          moveEntryToFolder(entry).catch((error) => window.showErrorToast?.(error, "操作失败"));
+        }),
+      );
+    }
+    contextMenu.append(
       createContextMenuSeparator(),
       createContextMenuItem("删除", () => {
         if (entry.type === "note") {
           deleteNoteById(entry.id).catch((error) => {
-            console.error("删除笔记失败:", error);
-            alert(error.message || "删除笔记失败");
+            window.showErrorToast?.(error, "删除笔记失败");
           });
         } else if (entry.type === "folder") {
-          deleteFolder(entry.id).catch(console.error);
+          deleteFolder(entry.id).catch((error) => window.showErrorToast?.(error, "操作失败"));
         } else if (entry.type === "file") {
           deleteResourceFile(entry.id).catch((error) => {
-            console.error("删除资料文件失败:", error);
-            alert(error.message || "删除资料文件失败");
+            window.showErrorToast?.(error, "删除资料文件失败");
           });
         }
       }),
@@ -286,10 +274,10 @@ function showContextMenu(x, y, entry = null) {
   } else {
     contextMenu.append(
       createContextMenuItem("新建笔记", () => {
-        createNote().catch(console.error);
+        createNote().catch((error) => window.showErrorToast?.(error, "操作失败"));
       }),
       createContextMenuItem("新建文件夹", () => {
-        createFolder().catch(console.error);
+        createFolder().catch((error) => window.showErrorToast?.(error, "操作失败"));
       }),
     );
   }
@@ -314,10 +302,10 @@ function showWorkspaceTabContextMenu(x, y, tabKey) {
   contextMenu.style.top = `${y}px`;
   contextMenu.append(
     createContextMenuItem("关闭其他", () => {
-      closeOtherWorkspaceTabs(tabKey).catch(console.error);
+      closeOtherWorkspaceTabs(tabKey).catch((error) => window.showErrorToast?.(error, "操作失败"));
     }),
     createContextMenuItem("关闭所有", () => {
-      closeAllWorkspaceTabs().catch(console.error);
+      closeAllWorkspaceTabs().catch((error) => window.showErrorToast?.(error, "操作失败"));
     }),
   );
   document.body.append(contextMenu);

@@ -1,76 +1,116 @@
-// 渲染进程可变状态与持久化键名
-// 注意：本文件为经典脚本，顶层 const/let 处于页面全局词法环境，跨文件共享；请勿重复声明同名标识符。
-let notes = [];
-let folders = [];
-let pdfFiles = [];
-let resourceFiles = [];
-let activeNoteId = null;
-let activePdfId = null;
-let activeResourceId = null;
-let activeFolderId = null;
-let sidebarViewMode = "all";
-let reminderCalendarMonth = new Date(
-  new Date().getFullYear(),
-  new Date().getMonth(),
-  1,
-);
-let selectedReminderDate = toLocalDateKey(new Date());
-const noteSaveStates = new Map();
-let noteRecoveryLogCache = null;
-let storageInfo = null;
-let appSettings = null;
-let markdownEditor = null;
-let isRenderingEditor = false;
-const blurRevealState = { revealed: new Map() };
-let pdfLoadingTask = null;
-let pdfDocument = null;
-let pdfPreviewKey = null;
-let pdfPreviewReadyKey = null;
-let pdfPreviewPromise = null;
-let pdfOutlineEntries = [];
-let pdfOutlineIndexVersion = 0;
-let pdfOutlineHighlightFrame = null;
-let activePdfOutlineButton = null;
-let pdfZoom = 1;
-let pdfLoadVersion = 0;
-let pdfPageRenderVersion = 0;
-let imageZoom = 1;
-let workspaceTabs = [];
-let activeWorkspaceTabKey = null;
-let draggedWorkspaceTabKey = null;
-let workspaceTabDragStartedAt = 0;
-let workspaceTabPointerDrag = null;
-let workspaceContentRenderVersion = 0;
-const workspaceTabViewStates = new Map();
-let filePreviewVersion = 0;
-let draftsMap = new Map();
-let activeDraftId = null;
-let pendingCloseDraftId = null;
-let pendingCloseTabKey = null;
-let wordOutlineHeadings = [];
-let wordOutlineHighlightFrame = null;
-let viewerSearchMatches = [];
-let activeViewerSearchIndex = -1;
-const SIDEBAR_COLLAPSED_KEY = "notice-note:sidebar-collapsed";
-const SIDEBAR_WIDTH_KEY = "notice-note:sidebar-width";
-const SIDEBAR_MIN_WIDTH = 200;
-const SIDEBAR_MAX_WIDTH = 600;
-const PDF_OUTLINE_WIDTH_KEY = "notice-note:pdf-outline-width";
-const PDF_OUTLINE_MIN_WIDTH = 160;
-const PDF_OUTLINE_MAX_WIDTH = 600;
-const INTERFACE_THEME_KEY = "notice-note:interface-theme";
-const DRAFTS_PERSIST_KEY = "notice-note:drafts";
-const WORKSPACE_TABS_PERSIST_KEY = "notice-note:workspace-tabs";
-const ACTIVE_TAB_PERSIST_KEY = "notice-note:active-workspace-tab";
-const NOTE_RECOVERY_PERSIST_KEY = "notice-note:recovery-log:v1";
-const editorEmptyState = document.createElement("div");
-editorEmptyState.className = "editor-empty-state";
-editorEmptyState.hidden = true;
-editorEmptyState.innerHTML =
-  "<h2>欢迎使用 Notice Note</h2><p>从左侧打开一个文件，或点击左上角 + 新建内容。</p>";
-contentShell.append(editorEmptyState);
+// 渲染层状态：唯一来源收进 appState 对象，不再有 50+ 个顶层 let 散落在全局词法环境。
+// 13 个经典脚本仍用裸标识符读写（本文件通过全局对象属性做 get/set 转发），
+// 因此不需要同步改 12 个文件；新增状态一律加进 appState，禁止再新增顶层 let。
+// window.noticeNoteStateSnapshot() 供调试与冒烟测试核对状态集合。
+const appState = {
+  notes: [],
+  folders: [],
+  pdfFiles: [],
+  resourceFiles: [],
+  activeNoteId: null,
+  activePdfId: null,
+  activeResourceId: null,
+  activeFolderId: null,
+  sidebarViewMode: "all",
+  reminderCalendarMonth: new Date(
+    new Date().getFullYear(),
+    new Date().getMonth(),
+    1,
+  ),
+  selectedReminderDate: toLocalDateKey(new Date()),
+  noteRecoveryLogCache: null,
+  storageInfo: null,
+  appSettings: null,
+  // 侧边栏拖拽中的条目 { kind: "folders"|"notes"|"files", id }。
+  // HTML5 拖拽在 dragover 阶段读不到 dataTransfer，靠它判断落点算「排序」还是「移入目录」。
+  sidebarDrag: null,
+  markdownEditor: null,
+  isRenderingEditor: false,
+  pdfLoadingTask: null,
+  pdfDocument: null,
+  pdfPreviewKey: null,
+  pdfPreviewReadyKey: null,
+  pdfPreviewPromise: null,
+  pdfOutlineEntries: [],
+  pdfOutlineIndexVersion: 0,
+  pdfOutlineHighlightFrame: null,
+  activePdfOutlineButton: null,
+  pdfZoom: 1,
+  pdfLoadVersion: 0,
+  pdfPageRenderVersion: 0,
+  pdfPageObserver: null,
+  pdfLazyJobs: [],
+  imageZoom: 1,
+  workspaceTabs: [],
+  activeWorkspaceTabKey: null,
+  draggedWorkspaceTabKey: null,
+  workspaceTabDragStartedAt: 0,
+  workspaceTabPointerDrag: null,
+  workspaceContentRenderVersion: 0,
+  filePreviewVersion: 0,
+  draftsMap: new Map(),
+  activeDraftId: null,
+  pendingCloseDraftId: null,
+  pendingCloseTabKey: null,
+  wordOutlineHeadings: [],
+  wordOutlineHighlightFrame: null,
+  viewerSearchMatches: [],
+  activeViewerSearchIndex: -1,
+  imageLightboxPreviousFocus: null,
+  imageLightboxZoom: 1
+};
 
-let imageLightboxPreviousFocus = null;
-let imageLightboxZoom = 1;
-const IMAGE_LIGHTBOX_MIN_ZOOM = 0.25;
-const IMAGE_LIGHTBOX_MAX_ZOOM = 5;
+const appStateConstants = {
+  SIDEBAR_COLLAPSED_KEY: "notice-note:sidebar-collapsed",
+  SIDEBAR_WIDTH_KEY: "notice-note:sidebar-width",
+  SIDEBAR_MIN_WIDTH: 200,
+  SIDEBAR_MAX_WIDTH: 600,
+  PDF_OUTLINE_WIDTH_KEY: "notice-note:pdf-outline-width",
+  PDF_OUTLINE_MIN_WIDTH: 160,
+  PDF_OUTLINE_MAX_WIDTH: 600,
+  INTERFACE_THEME_KEY: "notice-note:interface-theme",
+  DRAFTS_PERSIST_KEY: "notice-note:drafts",
+  WORKSPACE_TABS_PERSIST_KEY: "notice-note:workspace-tabs",
+  ACTIVE_TAB_PERSIST_KEY: "notice-note:active-workspace-tab",
+  NOTE_RECOVERY_PERSIST_KEY: "notice-note:recovery-log:v1",
+  IMAGE_LIGHTBOX_MIN_ZOOM: 0.25,
+  IMAGE_LIGHTBOX_MAX_ZOOM: 5,
+  noteSaveStates: new Map(),
+  blurRevealState: { revealed: new Map() },
+  workspaceTabViewStates: new Map(),
+  editorEmptyState: (() => {
+    const element = document.createElement("div");
+    element.className = "editor-empty-state";
+    element.hidden = true;
+    element.innerHTML =
+      "<h2>欢迎使用 Notice Note</h2><p>从左侧打开一个文件，或点击左上角 + 新建内容。</p>";
+    return element;
+  })()
+};
+
+contentShell.append(appStateConstants.editorEmptyState);
+
+for (const key of Object.keys(appState)) {
+  Object.defineProperty(globalThis, key, {
+    configurable: true,
+    enumerable: true,
+    get() {
+      return appState[key];
+    },
+    set(value) {
+      appState[key] = value;
+    },
+  });
+}
+
+for (const [key, value] of Object.entries(appStateConstants)) {
+  Object.defineProperty(globalThis, key, {
+    configurable: true,
+    enumerable: true,
+    writable: false,
+    value,
+  });
+}
+
+window.noticeNoteAppState = appState;
+window.noticeNoteStateSnapshot = () => ({ ...appState });

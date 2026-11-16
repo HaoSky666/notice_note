@@ -15,6 +15,10 @@ function createEmptyNote() {
     content: '',
     fileType: 'md',
     reminders: [],
+    // 侧边栏用 `note.folderId === activeFolderId` 过滤，undefined !== null 会让
+    // 空库自动创建的笔记在首屏不可见，直到重启被 normalizeLoadedNote 归一后才出现。
+    folderId: null,
+    isReviewFile: false,
     createdAt: now,
     updatedAt: now
   };
@@ -55,10 +59,8 @@ function normalizeReviewDate(value) {
   return typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : null;
 }
 
-function normalizeReviewRole(value) {
-  return value === 'primary' || value === 'secondary' ? value : null;
-}
-
+// 同一天的笔记与资源一律平级：不再有主/次文件的概念。
+// 旧 metadata 里的 reviewRole 字段读入时直接丢弃，不再回写。
 function normalizeNote(input) {
   const now = new Date().toISOString();
   return {
@@ -70,8 +72,7 @@ function normalizeNote(input) {
     folderId: input.folderId || null,
     createdAt: isValidDateTime(input.createdAt) ? input.createdAt : now,
     updatedAt: now,
-    reviewDate: normalizeReviewDate(input.reviewDate),
-    reviewRole: normalizeReviewRole(input.reviewRole)
+    reviewDate: normalizeReviewDate(input.reviewDate)
   };
 }
 
@@ -91,8 +92,7 @@ function normalizeLoadedNote(input) {
     folderId: input.folderId || null,
     createdAt,
     updatedAt,
-    reviewDate: normalizeReviewDate(input.reviewDate),
-    reviewRole: normalizeReviewRole(input.reviewRole)
+    reviewDate: normalizeReviewDate(input.reviewDate)
   };
 }
 
@@ -104,6 +104,5 @@ module.exports = {
   normalizeReminderList,
   normalizeNote,
   normalizeLoadedNote,
-  normalizeReviewDate,
-  normalizeReviewRole
+  normalizeReviewDate
 };

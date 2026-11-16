@@ -42,8 +42,18 @@ contextBridge.exposeInMainWorld('noticeNote', {
   openEntryWithDefaultApp: (entry) => ipcRenderer.invoke('entries:open-default', entry),
   openExternalUrl: (url) => ipcRenderer.invoke('external-url:open', url),
   handleDailyReview: (dayKey, action) => ipcRenderer.invoke('daily-review:handle', { type: 'day', dayKey }, action),
+  reorderDailyReview: (dayKey, action) => ipcRenderer.invoke('daily-review:reorder', dayKey, action),
+  reorderSidebar: (kind, dragId, targetId, position) => (
+    ipcRenderer.invoke('sidebar:reorder', kind, dragId, targetId, position)
+  ),
+  reorderReviewDayFile: (dayKey, dragKey, targetKey, position) => (
+    ipcRenderer.invoke('review-day:reorder', dayKey, dragKey, targetKey, position)
+  ),
   setReviewDate: (entry, reviewDate) => ipcRenderer.invoke('entries:set-review-date', entry, reviewDate),
-  setReviewRole: (entry, role) => ipcRenderer.invoke('entries:set-review-role', entry, role),
+  addDayReminder: (dayKey, date) => ipcRenderer.invoke('day-reminders:add', dayKey, date),
+  updateDayReminderDate: (id, date) => ipcRenderer.invoke('day-reminders:update-date', id, date),
+  removeDayReminder: (id) => ipcRenderer.invoke('day-reminders:remove', id),
+  autoScheduleDayReminders: (dayKey) => ipcRenderer.invoke('day-reminders:auto', dayKey),
   onNotesChanged: (callback) => {
     const listener = (_event, notes) => callback(notes);
     ipcRenderer.on('notes:changed', listener);
@@ -69,9 +79,21 @@ contextBridge.exposeInMainWorld('noticeNote', {
     ipcRenderer.on('storage:changed', listener);
     return () => ipcRenderer.removeListener('storage:changed', listener);
   },
+  takePendingReminders: () => ipcRenderer.invoke('reminders:take-pending'),
+  ackPendingReminders: () => ipcRenderer.invoke('reminders:ack-pending'),
   onReminderFired: (callback) => {
     const listener = (_event, reminder) => callback(reminder);
     ipcRenderer.on('reminder:fired', listener);
     return () => ipcRenderer.removeListener('reminder:fired', listener);
+  },
+  onDayReminderOpen: (callback) => {
+    const listener = (_event, dayKey) => callback(dayKey);
+    ipcRenderer.on('day-reminder:open', listener);
+    return () => ipcRenderer.removeListener('day-reminder:open', listener);
+  },
+  onDayRemindersChanged: (callback) => {
+    const listener = (_event, list) => callback(list);
+    ipcRenderer.on('day-reminders:changed', listener);
+    return () => ipcRenderer.removeListener('day-reminders:changed', listener);
   }
 });

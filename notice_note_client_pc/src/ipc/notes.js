@@ -1,6 +1,6 @@
 // 笔记相关 IPC handler（薄传输层：通过 ctx 访问 main.js 的状态与领域函数）
 module.exports = function registerNotesIpc(ctx) {
-  const { ipcMain, fs, path } = ctx;
+  const { ipcMain, fs } = ctx;
 
   ipcMain.handle('notes:list', () => ctx.getVisibleNotes());
   ipcMain.handle('library:refresh', async () => {

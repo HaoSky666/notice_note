@@ -1,6 +1,7 @@
-// Markdown 编辑器、提醒、草稿、保存与崩溃恢复
+// Markdown 编辑器、草稿、保存与崩溃恢复
 // 注意：本文件为经典脚本，顶层 const/let 处于页面全局词法环境，跨文件共享；请勿重复声明同名标识符。
-const DAILY_REMINDER_SLOTS = ["09:30", "15:00"];
+// 旧版「按单篇笔记多个提醒」的 UI/交互已移除；note.reminders 只作历史数据，
+// 供主进程 migrateRemindersToDays() 迁移，新提醒一律走 dayReminders。
 function saveDraftsToStorage() {
   try {
     if (activeDraftId && draftsMap.has(activeDraftId)) {
@@ -9,7 +10,13 @@ function saveDraftsToStorage() {
       if (typeof getEditorValue === "function") activeDraft.content = getEditorValue();
       activeDraft.updatedAt = new Date().toISOString();
     }
-    const draftsArray = Array.from(draftsMap.values());
+    // 受保护目录里的草稿不能把正文写进 localStorage（与笔记恢复日志同一策略）。
+    // 仍保留条目本身，避免重启后 tab 悬空；正文留空并打标记，由加载时提示用户。
+    const draftsArray = Array.from(draftsMap.values()).map((draft) =>
+      isDraftInProtectedFolder(draft)
+        ? { ...draft, content: "", protectedContentDropped: true }
+        : draft,
+    );
     localStorage.setItem(DRAFTS_PERSIST_KEY, JSON.stringify(draftsArray));
     localStorage.setItem(
       WORKSPACE_TABS_PERSIST_KEY,
@@ -20,6 +27,32 @@ function saveDraftsToStorage() {
     console.error("保存草稿与工作区状态失败:", err);
   }
 }
+
+// 草稿是否落在（或落在子目录里）密码保护目录。
+function isDraftInProtectedFolder(draft) {
+  const ancestorIds = getFolderAncestorIds(draft?.folderId);
+  return folders.some(
+    (folder) => folder.isProtected && ancestorIds.has(folder.id),
+  );
+}
+
+// 每次按键都同步 stringify 全部草稿会卡输入；高频路径走 500ms debounce，
+// 退出/关闭前用 flushDraftsToStorage 强制落一次。
+let draftsPersistTimer = null;
+function flushDraftsToStorage() {
+  if (draftsPersistTimer) {
+    clearTimeout(draftsPersistTimer);
+    draftsPersistTimer = null;
+  }
+  saveDraftsToStorage();
+}
+function scheduleDraftsToStorage() {
+  clearTimeout(draftsPersistTimer);
+  draftsPersistTimer = setTimeout(() => {
+    draftsPersistTimer = null;
+    saveDraftsToStorage();
+  }, 500);
+}
 function loadDraftsFromStorage() {
   try {
     const rawDrafts = localStorage.getItem(DRAFTS_PERSIST_KEY);
@@ -27,10 +60,34 @@ function loadDraftsFromStorage() {
       const draftsArray = JSON.parse(rawDrafts);
       if (Array.isArray(draftsArray)) {
         draftsMap.clear();
+        let protectedDraftsRestored = 0;
         for (const draft of draftsArray) {
           if (draft && draft.id) {
-            draftsMap.set(draft.id, draft);
+            // R18：除了看落盘标记，还要按「当前文件夹是否受保护」再判一次，
+            // 覆盖「加密码前写进去、还没来得及重写」的旧 localStorage 内容。
+            const protectedNow = isDraftInProtectedFolder(draft);
+            if (protectedNow || draft.protectedContentDropped) {
+              protectedDraftsRestored += 1;
+            }
+            draftsMap.set(draft.id, protectedNow
+              ? { ...draft, content: "", protectedContentDropped: true }
+              : draft);
           }
+        }
+        if (protectedDraftsRestored > 0) {
+          // R18：不能只清内存。立即把脱敏后的草稿写回，避免旧正文一直留在
+          // localStorage 里直到下一次草稿编辑（这里只写草稿键，不碰 tab 状态）。
+          const sanitizedDrafts = Array.from(draftsMap.values()).map((item) => {
+            return isDraftInProtectedFolder(item)
+              ? { ...item, content: "", protectedContentDropped: true }
+              : item;
+          });
+          localStorage.setItem(DRAFTS_PERSIST_KEY, JSON.stringify(sanitizedDrafts));
+          window.showToast?.(
+            `${protectedDraftsRestored} 个密码目录草稿的正文未保存在本地，需要重新输入`,
+            "error",
+            8000,
+          );
         }
       }
     }
@@ -75,52 +132,15 @@ function loadDraftsFromStorage() {
 }
 function hasTodayPendingReminder(note) {
   const todayKey = toLocalDateKey(new Date());
-  return (note.reminders || []).some((reminder) => {
-    return getReminderDateKey(reminder) === todayKey;
-  });
-}
-function skipWeekend(date) {
-  const day = date.getDay();
-  if (day === 0) {
-    date.setDate(date.getDate() + 1);
-  } else if (day === 6) {
-    date.setDate(date.getDate() + 2);
-  }
-  return date;
-}
-function createReminderDate(daysToAdd) {
-  const date = new Date();
-  date.setDate(date.getDate() + daysToAdd);
-  skipWeekend(date);
-  return toLocalDateKey(date);
-}
-function createNextMonthReminderDate() {
-  const today = new Date();
-  const targetYear =
-    today.getFullYear() + Math.floor((today.getMonth() + 1) / 12);
-  const targetMonth = (today.getMonth() + 1) % 12;
-  const lastDayOfTargetMonth = new Date(
-    targetYear,
-    targetMonth + 1,
-    0,
-  ).getDate();
-  const date = new Date(
-    targetYear,
-    targetMonth,
-    Math.min(today.getDate(), lastDayOfTargetMonth),
+  const dueRecords = (appSettings?.dayReminders || []).filter(
+    (record) => record.date === todayKey && !record.done,
   );
-  skipWeekend(date);
-  return toLocalDateKey(date);
-}
-function createReminder(date) {
-  return {
-    id: crypto.randomUUID(),
-    date,
-    time: `${date}T09:30:00.000`,
-    done: false,
-    firedAt: null,
-    firedSlots: [],
-  };
+  if (dueRecords.length === 0) {
+    return false;
+  }
+  // 提醒按天：这篇笔记属于今天要回顾的那一套，才显示今日标记
+  const dayKey = getNoteReviewDayKey(note);
+  return Boolean(dayKey) && dueRecords.some((record) => record.dayKey === dayKey);
 }
 function getActiveNote() {
   if (activeDraftId) {
@@ -161,6 +181,12 @@ function setEditorValue(value) {
   }
 }
 async function insertImage() {
+  // 草稿没有真实笔记 id，图片资产写入会被主进程 getAccessibleNote() 拒绝。
+  // 与其让 IPC 报「笔记不存在」，不如在入口说清楚（R5）。
+  if (activeDraftId) {
+    window.showToast?.("草稿暂不支持插入图片，请先「保存为笔记」", "error", 6000);
+    return;
+  }
   const note = getActiveNote();
   if (!note) {
     return;
@@ -207,6 +233,10 @@ function insertCodeBlock() {
   queueSave();
 }
 async function handlePastedImage(file) {
+  if (activeDraftId) {
+    window.showToast?.("草稿暂不支持粘贴图片，请先「保存为笔记」", "error", 6000);
+    return null;
+  }
   const note = getActiveNote();
   if (!note || !file) {
     return null;
@@ -241,9 +271,23 @@ async function handlePastedHtml(htmlText, plainText) {
     .map((img) => img.getAttribute("src"))
     .filter(Boolean);
 
+  // 草稿没有真实笔记 id，images:* 会被主进程拒绝；不要逐张尝试再静默降级成 alt。
+  const isDraft = Boolean(activeDraftId);
+  if (isDraft && imageSrcs.length > 0) {
+    window.showToast?.(
+      "草稿暂不支持粘贴图片，已只保留文字内容",
+      "error",
+      6000,
+    );
+  }
+
   const imageMarkdownMap = new Map();
   for (const src of imageSrcs) {
     if (imageMarkdownMap.has(src)) {
+      continue;
+    }
+    if (isDraft) {
+      imageMarkdownMap.set(src, "");
       continue;
     }
     try {
@@ -535,100 +579,6 @@ function htmlToMarkdown(root) {
     .replace(/\n{3,}/g, "\n\n")
     .trim();
 }
-function renderReminders() {
-  const note = getActiveNote();
-  reminderList.innerHTML = "";
-  const reminderCount = note?.reminders?.length || 0;
-  reminderButtonCount.hidden = reminderCount === 0;
-  reminderButtonCount.textContent = String(reminderCount);
-  reminderDialogCount.textContent = `${reminderCount} 个`;
-  reminderDialogNoteTitle.textContent = note?.title || "为当前笔记安排提醒";
-  openReminderConfigButton.title =
-    reminderCount > 0 ? `管理 ${reminderCount} 个提醒` : "添加提醒";
-
-  if (!note) {
-    const empty = document.createElement("div");
-    empty.className = "reminder-list-empty";
-    empty.innerHTML =
-      "<strong>当前没有打开的笔记</strong><span>打开一篇笔记后即可设置提醒</span>";
-    reminderList.append(empty);
-    return;
-  }
-
-  if (!note.reminders.length) {
-    const empty = document.createElement("div");
-    empty.className = "reminder-list-empty";
-    empty.innerHTML =
-      "<strong>还没有提醒</strong><span>选择日期，为这篇笔记安排第一次提醒</span>";
-    reminderList.append(empty);
-    return;
-  }
-
-  const sortedReminders = [...note.reminders].sort((a, b) => {
-    const dateA = getReminderDateKey(a);
-    const dateB = getReminderDateKey(b);
-    return (
-      (dateA ? Date.parse(`${dateA}T00:00:00`) : 0) -
-      (dateB ? Date.parse(`${dateB}T00:00:00`) : 0)
-    );
-  });
-
-  for (const reminder of sortedReminders) {
-    const row = document.createElement("div");
-    row.className = `reminder-row${reminder.done ? " done" : ""}`;
-    const dateKey = getReminderDateKey(reminder);
-    const date = parseReminderDate(dateKey);
-    const dateBlock = document.createElement("div");
-    dateBlock.className = "reminder-date-block";
-    const dateMain = document.createElement("strong");
-    dateMain.textContent = date
-      ? `${date.getMonth() + 1}月${date.getDate()}日`
-      : "日期无效";
-    const dateMeta = document.createElement("span");
-    dateMeta.textContent = date
-      ? `${date.getFullYear()} · ${new Intl.DateTimeFormat("zh-CN", { weekday: "short" }).format(date)}`
-      : "";
-    dateBlock.append(dateMain, dateMeta);
-
-    const reminderInfo = document.createElement("div");
-    reminderInfo.className = "reminder-row-info";
-    const firedCount = Array.isArray(reminder.firedSlots)
-      ? reminder.firedSlots.length
-      : 0;
-    const status = document.createElement("span");
-    status.className = `reminder-status${reminder.done ? " is-done" : ""}`;
-    status.textContent = reminder.done
-      ? "已完成"
-      : firedCount > 0
-        ? `已通知 ${Math.min(firedCount, DAILY_REMINDER_SLOTS.length)}/${DAILY_REMINDER_SLOTS.length}`
-        : "待提醒";
-    const slots = document.createElement("div");
-    slots.className = "reminder-slots";
-    const firedSlots = new Set(reminder.firedSlots || []);
-    for (const slot of DAILY_REMINDER_SLOTS) {
-      const slotBadge = document.createElement("span");
-      slotBadge.className = firedSlots.has(slot) ? "is-fired" : "";
-      slotBadge.textContent = slot;
-      slots.append(slotBadge);
-    }
-    reminderInfo.append(status, slots);
-
-    const removeButton = document.createElement("button");
-    removeButton.className = "reminder-remove-button";
-    removeButton.type = "button";
-    removeButton.title = "移除提醒";
-    removeButton.setAttribute(
-      "aria-label",
-      `移除 ${dateMain.textContent} 的提醒`,
-    );
-    removeButton.innerHTML =
-      '<svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M2.5 4h11M6 4V2.5h4V4M5 6.5v5M8 6.5v5M11 6.5v5M4 4l.7 9.5h6.6L12 4" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
-    removeButton.addEventListener("click", () => removeReminder(reminder.id));
-
-    row.append(dateBlock, reminderInfo, removeButton);
-    reminderList.append(row);
-  }
-}
 function renderEditor() {
   const activeNote = getActiveNote();
 
@@ -649,7 +599,6 @@ function renderEditor() {
     titleInput.value = "";
     editorTopbar.hidden = true;
     titleInput.disabled = true;
-    openReminderConfigButton.disabled = true;
     deleteNoteButton.disabled = true;
     saveButton.disabled = true;
     editorRoot.hidden = true;
@@ -658,7 +607,6 @@ function renderEditor() {
     if (activeDraftId) {
       editorTopbar.hidden = false;
       titleInput.disabled = false;
-      openReminderConfigButton.disabled = true;
       deleteNoteButton.disabled = false;
       deleteNoteButton.textContent = "丢弃草稿";
       saveButton.disabled = false;
@@ -672,7 +620,6 @@ function renderEditor() {
       activeNoteId = activeNote.id;
       editorTopbar.hidden = false;
       titleInput.disabled = false;
-      openReminderConfigButton.disabled = false;
       deleteNoteButton.disabled = false;
       deleteNoteButton.textContent = "删除";
       saveButton.disabled = false;
@@ -692,7 +639,6 @@ function renderEditor() {
   isRenderingEditor = false;
   renderSaveStatus();
   renderNoteList();
-  renderReminders();
   renderWorkspaceTabs();
 }
 function mergeIncomingNotes(nextNotes) {
@@ -762,7 +708,7 @@ function createMarkdownEditor() {
     onPasteImage: handlePastedImage,
     onPasteHtml: handlePastedHtml,
     onError: (error) => {
-      console.error("图片处理失败:", error);
+      window.showErrorToast?.(error, "图片处理失败");
     },
     onChange: (value) => {
       if (isRenderingEditor) {
@@ -841,6 +787,46 @@ function writeNoteRecoveryLog() {
     console.error("写入笔记恢复日志失败:", error);
   }
 }
+
+// 恢复日志按 500ms 合并写入，并且只写变化过的那几条，
+// 避免每次按键都把整个日志（可能含多篇全文）同步 stringify 一遍。
+const pendingRecoveryEntries = new Map();
+let recoveryPersistTimer = null;
+function flushNoteRecovery() {
+  if (recoveryPersistTimer) {
+    clearTimeout(recoveryPersistTimer);
+    recoveryPersistTimer = null;
+  }
+  if (pendingRecoveryEntries.size === 0) {
+    return;
+  }
+  const recoveryLog = readNoteRecoveryLog();
+  for (const [noteId, entry] of pendingRecoveryEntries) {
+    recoveryLog[noteId] = entry;
+  }
+  pendingRecoveryEntries.clear();
+  try {
+    localStorage.setItem(NOTE_RECOVERY_PERSIST_KEY, JSON.stringify(recoveryLog));
+  } catch (error) {
+    console.error("写入笔记恢复日志失败:", error);
+  }
+}
+function scheduleNoteRecovery(note) {
+  if (!note || activeDraftId || isNoteInProtectedFolder(note)) {
+    if (note?.id) {
+      pendingRecoveryEntries.delete(note.id);
+      removeNoteRecovery(note.id);
+    }
+    return;
+  }
+  pendingRecoveryEntries.set(note.id, {
+    title: String(note.title || ""),
+    content: String(note.content || ""),
+    updatedAt: new Date().toISOString(),
+  });
+  clearTimeout(recoveryPersistTimer);
+  recoveryPersistTimer = setTimeout(flushNoteRecovery, 500);
+}
 function isNoteInProtectedFolder(note) {
   const ancestorIds = getFolderAncestorIds(note?.folderId);
   return folders.some(
@@ -848,6 +834,7 @@ function isNoteInProtectedFolder(note) {
   );
 }
 function removeNoteRecovery(noteId) {
+  pendingRecoveryEntries.delete(noteId);
   const recoveryLog = readNoteRecoveryLog();
   if (!Object.hasOwn(recoveryLog, noteId)) {
     return;
@@ -855,21 +842,7 @@ function removeNoteRecovery(noteId) {
   delete recoveryLog[noteId];
   writeNoteRecoveryLog();
 }
-function persistNoteRecovery(note) {
-  if (!note || activeDraftId || isNoteInProtectedFolder(note)) {
-    if (note?.id) {
-      removeNoteRecovery(note.id);
-    }
-    return;
-  }
-  const recoveryLog = readNoteRecoveryLog();
-  recoveryLog[note.id] = {
-    title: String(note.title || ""),
-    content: String(note.content || ""),
-    updatedAt: new Date().toISOString(),
-  };
-  writeNoteRecoveryLog();
-}
+// 恢复日志统一走 scheduleNoteRecovery / flushNoteRecovery，不再每次按键全量写盘。
 function persistActiveNoteRecovery() {
   if (activeDraftId) {
     return;
@@ -885,7 +858,8 @@ function persistActiveNoteRecovery() {
   }
   note.title = draft.title;
   note.content = draft.content;
-  persistNoteRecovery(note);
+  scheduleNoteRecovery(note);
+  flushNoteRecovery();
 }
 function restoreNotesFromRecoveryLog() {
   const recoveryLog = readNoteRecoveryLog();
@@ -947,7 +921,7 @@ function markNoteDirty(note) {
   state.generation += 1;
   state.lastError = null;
   state.status = "dirty";
-  persistNoteRecovery(note);
+  scheduleNoteRecovery(note);
   updateNoteTitlePresentation(note);
   renderSaveStatus();
   return state;
@@ -994,7 +968,6 @@ function requestNoteSave(noteId) {
         }
         if (activeWorkspaceTabKey === getWorkspaceTabKey("note", noteId)) {
           activeNoteId = noteId;
-          renderReminders();
         }
       } catch (error) {
         state.dirty = true;
@@ -1055,7 +1028,7 @@ function queueSave() {
         getWorkspaceTabKey("draft", activeDraftId),
         draft.title || "未命名草稿",
       );
-      saveDraftsToStorage();
+      scheduleDraftsToStorage();
     }
     return;
   }
@@ -1066,61 +1039,6 @@ function queueSave() {
 
   const note = getActiveNote();
   markNoteDirty(note);
-}
-async function addReminder() {
-  const note = getActiveNote();
-  if (!note || !reminderInput.value) {
-    return;
-  }
-
-  const date = reminderInput.value;
-  if (!parseReminderDate(date)) {
-    return;
-  }
-
-  if (
-    note.reminders.some((reminder) => getReminderDateKey(reminder) === date)
-  ) {
-    return;
-  }
-
-  note.reminders.push(createReminder(date));
-
-  reminderInput.value = "";
-  await saveActiveNote();
-  renderReminders();
-}
-async function addAutoReminders() {
-  const note = getActiveNote();
-  if (!note) {
-    return;
-  }
-
-  const reminderDates = [
-    createReminderDate(1),
-    createReminderDate(7),
-    createNextMonthReminderDate(),
-  ];
-  const existingDates = new Set(note.reminders.map(getReminderDateKey));
-  const nextReminders = reminderDates
-    .map(createReminder)
-    .filter((reminder) => !existingDates.has(reminder.date));
-
-  if (nextReminders.length === 0) {
-    return;
-  }
-
-  note.reminders.push(...nextReminders);
-  await saveActiveNote();
-  renderReminders();
-}
-async function removeReminder(reminderId) {
-  const note = getActiveNote();
-  note.reminders = note.reminders.filter(
-    (reminder) => reminder.id !== reminderId,
-  );
-  await saveActiveNote();
-  renderReminders();
 }
 async function createNote() {
   const note = await window.noticeNote.createNote(activeFolderId);

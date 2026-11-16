@@ -46,35 +46,44 @@ function renderReminderNotifications() {
     body.textContent = notification.body || "你有一条笔记提醒到了。";
     const meta = document.createElement("span");
     meta.className = "notification-item-meta";
-    meta.textContent =
-      `${formatDateOnly(notification.date)} ${notification.slot || ""}`.trim();
+    meta.textContent = `${formatDateOnly(notification.date)} · 整天内容`;
     button.append(title, body, meta);
 
-    const noteExists = notes.some((note) => note.id === notification.noteId);
-    button.disabled = !noteExists;
-    if (!noteExists) {
-      button.title = "对应文件已不存在";
-    } else {
+    if (notification.dayKey) {
+      // 天级提醒：点击定位到回顾面板的那一套内容
+      button.title = "打开这一天的回顾内容";
       button.addEventListener("click", () => {
         notificationPanel.hidden = true;
-        selectNote(notification.noteId).catch(console.error);
+        activateReviewBrowser();
+        selectReviewDay(notification.dayKey);
       });
+    } else {
+      // 兼容旧版按单篇笔记推送的历史通知
+      const noteExists = notes.some((note) => note.id === notification.noteId);
+      button.disabled = !noteExists;
+      if (noteExists) {
+        button.addEventListener("click", () => {
+          notificationPanel.hidden = true;
+          selectNote(notification.noteId).catch((error) => window.showErrorToast?.(error, "操作失败"));
+        });
+      }
     }
     notificationList.append(button);
   }
 }
 function addReminderNotification(reminder) {
-  const id = `${reminder.reminderId || reminder.noteId}:${reminder.date || ""}:${reminder.slot || ""}`;
+  // 主进程可以带稳定 id（错过复习日汇总）；普通天级提醒仍按三段键去重。
+  const id = reminder.id || `${reminder.dayReminderId || reminder.reminderId || reminder.noteId}:${reminder.date || ""}:${reminder.dayKey || ""}`;
   reminderNotifications = reminderNotifications.filter(
     (item) => item.id !== id,
   );
   reminderNotifications.unshift({
     id,
     noteId: reminder.noteId,
+    dayKey: reminder.dayKey,
     title: reminder.title,
     body: reminder.body,
     date: reminder.date,
-    slot: reminder.slot,
     receivedAt: new Date().toISOString(),
     read: false,
   });

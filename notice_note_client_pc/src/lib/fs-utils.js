@@ -115,10 +115,30 @@ async function readJsonWithBackup(targetPath, fallbackValue) {
   }
 }
 
+// 元数据/配置损坏时「重建而不是拒绝启动」：先把损坏文件另存一份供排查，
+// 再用空值继续。笔记正文仍在磁盘上，扫描后可按文件名重新建立元数据。
+async function readJsonWithCorruptFallback(targetPath, fallbackValue) {
+  try {
+    return await readJsonWithBackup(targetPath, fallbackValue);
+  } catch (error) {
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    for (const source of [targetPath, `${targetPath}.bak`]) {
+      try {
+        await fs.copyFile(source, `${source}.corrupt-${stamp}`);
+      } catch {
+        // 文件不存在或无法复制时不阻塞降级
+      }
+    }
+    console.warn(`${path.basename(targetPath)} 已损坏，已备份原始文件并使用默认值重建:`, error.message);
+    return fallbackValue;
+  }
+}
+
 module.exports = {
   pathExists,
   replaceFileSafely,
   atomicWriteFile,
   atomicWriteJson,
-  readJsonWithBackup
+  readJsonWithBackup,
+  readJsonWithCorruptFallback
 };

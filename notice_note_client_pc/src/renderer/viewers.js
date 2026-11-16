@@ -297,7 +297,8 @@ function openViewerSearch() {
   viewerSearchBar.hidden = false;
   viewerSearchInput.focus();
   viewerSearchInput.select();
-  updateViewerSearch();
+  // 大 PDF 的文本层是懒建的，搜索前先补齐，保证全文搜索覆盖所有页。
+  ensureAllPdfTextLayers().then(() => updateViewerSearch());
 }
 function closeViewerSearch() {
   clearViewerSearchHighlights();
@@ -317,6 +318,9 @@ function destroyPdfPreview() {
   pdfPreviewPromise = null;
   pdfOutlineEntries = [];
   pdfOutlineIndexVersion++;
+  pdfPageObserver?.disconnect();
+  pdfPageObserver = null;
+  pdfLazyJobs = [];
   if (pdfOutlineHighlightFrame !== null) {
     cancelAnimationFrame(pdfOutlineHighlightFrame);
     pdfOutlineHighlightFrame = null;
@@ -336,7 +340,17 @@ function showPdfStatus(message, isError = false) {
   status.textContent = message;
   pdfPages.append(status);
 }
+// 位图内存按需分配：以前几百页 PDF 会在创建 DOM 时一次性把全部 canvas 撑满。
+function preparePdfCanvas(job) {
+  if (job.canvasPrepared) {
+    return;
+  }
+  job.canvas.width = Math.floor(job.viewport.width * job.outputScale);
+  job.canvas.height = Math.floor(job.viewport.height * job.outputScale);
+  job.canvasPrepared = true;
+}
 async function renderPdfPageCanvas(job) {
+  preparePdfCanvas(job);
   await job.page.render({
     canvasContext: job.canvas.getContext("2d"),
     transform:
@@ -347,13 +361,23 @@ async function renderPdfPageCanvas(job) {
   }).promise;
 }
 async function renderPdfPageText(job) {
-  const textContent = await job.page.getTextContent();
-  const layer = new window.noticeNotePdf.TextLayer({
-    textContentSource: textContent,
-    container: job.textLayer,
-    viewport: job.viewport,
+  // 懒渲染队列与全文搜索补齐可能同时要这一页的文本层，共享 Promise 避免重复建层。
+  if (job.textRenderPromise) {
+    return job.textRenderPromise;
+  }
+  job.textRenderPromise = (async () => {
+    const textContent = await job.page.getTextContent();
+    const layer = new window.noticeNotePdf.TextLayer({
+      textContentSource: textContent,
+      container: job.textLayer,
+      viewport: job.viewport,
+    });
+    await layer.render();
+  })().catch((error) => {
+    job.textRenderPromise = null;
+    throw error;
   });
-  await layer.render();
+  return job.textRenderPromise;
 }
 async function renderPdfPages(options = {}) {
   if (!pdfDocument) {
@@ -394,8 +418,7 @@ async function renderPdfPages(options = {}) {
     pageElement.style.height = `${Math.floor(viewport.height)}px`;
 
     const canvas = document.createElement("canvas");
-    canvas.width = Math.floor(viewport.width * outputScale);
-    canvas.height = Math.floor(viewport.height * outputScale);
+    // width/height 延后到实际绘制时设置，避免一次性分配所有页的位图内存
     canvas.style.width = `${Math.floor(viewport.width)}px`;
     canvas.style.height = `${Math.floor(viewport.height)}px`;
     canvas.setAttribute("aria-label", `第 ${pageNumber} 页`);
@@ -411,6 +434,7 @@ async function renderPdfPages(options = {}) {
       pageElement,
       canvas,
       textLayer,
+      canvasPrepared: false,
     };
   });
 
@@ -443,9 +467,25 @@ async function renderPdfPages(options = {}) {
         Math.abs(b.pageNumber - priorityPageNumber)
       );
     });
+
+  // R16：大文件的 canvas 与文本层都按可视区域建立，不再为几百页一次性建全量 TextLayer。
+  // 全文搜索在打开/输入时通过 ensureAllPdfTextLayers() 按需补齐剩余页。
+  const LAZY_PDF_PAGE_THRESHOLD = 40;
+  const lazyRender = jobs.length > LAZY_PDF_PAGE_THRESHOLD;
+  if (lazyRender) {
+    window.showToast?.(
+      `PDF 共 ${jobs.length} 页，按可视区域加载；全文搜索会自动补齐剩余页面`,
+      "info",
+      8000,
+    );
+    setupLazyPdfRendering(jobs, version, priorityJob);
+  }
   for (const job of remainingJobs) {
     if (version !== pdfPageRenderVersion) {
       return false;
+    }
+    if (lazyRender) {
+      continue; // 由 IntersectionObserver 驱动
     }
     await renderPdfPageCanvas(job);
     if (version !== pdfPageRenderVersion) {
@@ -458,11 +498,82 @@ async function renderPdfPages(options = {}) {
   }
 
   if (!viewerSearchBar.hidden) {
-    updateViewerSearch();
+    ensureAllPdfTextLayers().then(() => updateViewerSearch());
   }
   schedulePdfOutlineHighlight();
   return true;
 }
+
+// 全文搜索前补齐懒加载 PDF 尚未建立的文本层；renderPdfPageText 自带 Promise 缓存，
+// 与可视区域队列并发调用也只会建一次。
+async function ensureAllPdfTextLayers() {
+  for (const job of pdfLazyJobs) {
+    try {
+      await renderPdfPageText(job);
+    } catch (error) {
+      console.error(`补齐 PDF 第 ${job.pageNumber} 页文本层失败:`, error);
+    }
+  }
+}
+
+// 按可视区域渲染 canvas + 文本层；切换 PDF 时 version 变化会让队列自然停摆。
+function setupLazyPdfRendering(jobs, version, alreadyRendered = null) {
+  pdfPageObserver?.disconnect();
+  pdfLazyJobs = jobs;
+  const rendered = new Set(alreadyRendered ? [alreadyRendered.pageNumber] : []);
+  const queue = [];
+  let draining = false;
+
+  const renderJob = async (job) => {
+    if (!job || rendered.has(job.pageNumber)) {
+      return;
+    }
+    rendered.add(job.pageNumber);
+    try {
+      await renderPdfPageCanvas(job);
+      if (version !== pdfPageRenderVersion) {
+        return;
+      }
+      await renderPdfPageText(job);
+    } catch (error) {
+      console.error(`渲染 PDF 第 ${job.pageNumber} 页失败:`, error);
+    }
+  };
+  const drain = async () => {
+    if (draining) {
+      return;
+    }
+    draining = true;
+    while (queue.length > 0 && version === pdfPageRenderVersion) {
+      await renderJob(queue.shift());
+    }
+    draining = false;
+  };
+  const enqueue = (job) => {
+    if (!job || rendered.has(job.pageNumber) || queue.includes(job)) {
+      return;
+    }
+    queue.push(job);
+    drain();
+  };
+
+  pdfPageObserver = new IntersectionObserver(
+    (entries) => {
+      for (const entry of entries) {
+        if (!entry.isIntersecting) {
+          continue;
+        }
+        enqueue(jobs.find((job) => job.pageElement === entry.target));
+        pdfPageObserver?.unobserve(entry.target);
+      }
+    },
+    { root: pdfPages, rootMargin: "800px 0px" },
+  );
+  for (const job of jobs) {
+    pdfPageObserver.observe(job.pageElement);
+  }
+}
+
 function getPdfViewportAnchor(anchor) {
   if (anchor?.page?.isConnected) {
     return anchor;
@@ -730,7 +841,7 @@ function renderPdfOutline(items) {
   const entries = [];
   pdfOutlineList.append(createPdfOutlineItems(items, entries));
   pdfOutlineEntries = entries;
-  indexPdfOutlineEntries(entries).catch(console.error);
+  indexPdfOutlineEntries(entries).catch((error) => window.showErrorToast?.(error, "操作失败"));
 }
 function loadPdfPreview(pdf, initialZoom = 1) {
   const previewKey = getPdfPreviewKey(pdf);
@@ -1594,6 +1705,11 @@ function renderWordPreview(html) {
 }
 async function loadResourcePreview(file, version, viewState = {}) {
   try {
+    // ExcelJS 的 readFile 解析阶段无法中断，接近上限的工作簿会让主进程卡数秒；
+    // 先给出明确预期，避免用户以为界面死了。
+    if (file.kind === "spreadsheet") {
+      showFilePreviewStatus("正在解析工作簿，大文件可能需要数秒…");
+    }
     const preview = await window.noticeNote.previewFile(file.id);
     if (version !== filePreviewVersion) {
       return;
@@ -1671,7 +1787,7 @@ function renderResourceFile() {
   renderWorkspaceTabs();
   loadResourcePreview(file, version, viewState)
     .then(() => restoreWorkspaceTabViewState(tabKey, fileViewerContent))
-    .catch(console.error);
+    .catch((error) => window.showErrorToast?.(error, "操作失败"));
 }
 function resetFileViewerActions(file) {
   showFileViewerToast('');
@@ -1685,6 +1801,12 @@ function resetFileViewerActions(file) {
 }
 function openActiveFileExternal() {
   const file = resourceFiles.find((item) => item.id === activeResourceId);
-  if (!file) return;
-  window.noticeNote.openEntryWithDefaultApp({ path: file.path }).catch(console.error);
+  if (!file) {
+    window.showToast?.('找不到当前文件，请刷新资料库后重试', 'error');
+    return;
+  }
+  // 主进程只认 { type, id }；以前传 { path } 会解析成 null，按钮点了没反应。
+  window.noticeNote
+    .openEntryWithDefaultApp({ type: 'file', id: file.id })
+    .catch((error) => window.showErrorToast?.(error, '无法用默认应用打开'));
 }

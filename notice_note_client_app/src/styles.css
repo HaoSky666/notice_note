@@ -291,9 +291,41 @@ h1 {
   color: #f5e9d3;
 }
 
-.folder-lock-badge.is-unlocked {
-  background: rgba(64, 98, 55, 0.9);
-  color: #e8f5e0;
+/* 手机端离线包一律明文：密码目录用文字徽章如实说明「未加密」，不再用开锁/闭锁图标暗示解锁状态。 */
+.folder-lock-badge.is-plaintext {
+  position: static;
+  display: inline-block;
+  width: auto;
+  height: auto;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(64, 98, 55, 0.14);
+  color: #3f6237;
+  font-size: 10px;
+  font-weight: 800;
+  line-height: 1.5;
+  white-space: nowrap;
+  justify-self: start;
+}
+
+/* {{ }} 糊住块：PC 端是视觉遮挡、点击展开；手机端用纯色药丸遮住真实内容，点击后显示原文。 */
+.markdown-body .cloze {
+  display: inline;
+  padding: 0.08em 0.4em;
+  border-radius: 6px;
+  background: rgba(47, 36, 27, 0.86);
+  color: #f5e9d3;
+  font-size: 0.86em;
+  font-weight: 700;
+  cursor: pointer;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+}
+
+.markdown-body .cloze.is-revealed {
+  background: rgba(245, 197, 107, 0.4);
+  color: #241a12;
+  font-weight: 400;
 }
 
 .folder-stats {

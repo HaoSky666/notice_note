@@ -18,6 +18,21 @@ const closeImageLightboxButton = document.querySelector('#closeImageLightboxButt
 const zoomOutImageLightboxButton = document.querySelector('#zoomOutImageLightboxButton');
 const zoomInImageLightboxButton = document.querySelector('#zoomInImageLightboxButton');
 
+// 纯函数工具由 index.html 在本脚本之前引入的 lib/mobile-utils.js 提供（UMD 挂到 window）。
+// 这里统一复用，避免 app.js 内再复制一份校验 / 规划 / 糊住 / 转义逻辑。
+const {
+  MOBILE_PACKAGE_MAGIC,
+  MOBILE_PACKAGE_HEADER_SIZE,
+  MOBILE_PACKAGE_VERSION,
+  validateMobilePackage,
+  planMobileAssets,
+  computeUnusedAssetKeys,
+  normalizeMobileFolder,
+  splitClozeSegments,
+  escapeHtml,
+  isPreviewableResourceMime
+} = window.NoticeNoteMobileUtils;
+
 const NAVIGATION_STATE_KEY = 'notice-note-mobile-state';
 const OFFLINE_DB_NAME = 'notice-note-offline';
 const OFFLINE_DB_VERSION = 1;
@@ -165,37 +180,8 @@ async function readOfflineValue(storeName, key) {
   });
 }
 
-async function writeOfflineValue(storeName, key, value) {
-  const database = await openOfflineDatabase();
-  return new Promise((resolve, reject) => {
-    const transaction = database.transaction(storeName, 'readwrite');
-    transaction.objectStore(storeName).put(value, key);
-    transaction.oncomplete = () => resolve();
-    transaction.onerror = () => reject(transaction.error || new Error('写入手机本地文件失败'));
-  });
-}
-
-async function deleteUnusedOfflineAssets(allowedSources) {
-  const database = await openOfflineDatabase();
-  return new Promise((resolve, reject) => {
-    const transaction = database.transaction(ASSET_STORE, 'readwrite');
-    const store = transaction.objectStore(ASSET_STORE);
-    const request = store.openCursor();
-    request.onsuccess = () => {
-      const cursor = request.result;
-      if (!cursor) {
-        return;
-      }
-      if (!allowedSources.has(cursor.key)) {
-        cursor.delete();
-      }
-      cursor.continue();
-    };
-    transaction.oncomplete = () => resolve();
-    transaction.onerror = () => reject(transaction.error || new Error('清理手机旧文件失败'));
-  });
-}
-
+// 导入已改为「整包预校验 + 单个跨 store 事务」，逐条写入与独立清理的旧函数已删除。
+// readOfflineValue 仍被资产 URL / snapshot 读取使用，保留。
 function releaseOfflineAssetUrls() {
   for (const url of offlineAssetUrls.values()) {
     URL.revokeObjectURL(url);
@@ -218,26 +204,13 @@ async function loadOfflineSnapshot() {
   if (!snapshot) {
     return null;
   }
+  // 离线包始终是明文：统一归一化文件夹语义，后续渲染拿到的都是「未解锁 / 明文导出」对象。
+  snapshot.folders = (snapshot.folders || []).map(normalizeMobileFolder);
   await loadOfflineAssetUrls(snapshot);
   return snapshot;
 }
 
-const MOBILE_PACKAGE_MAGIC = 'NNMOBILE';
-const MOBILE_PACKAGE_HEADER_SIZE = 16;
-const MOBILE_PACKAGE_VERSION = 2;
-
-function validateMobilePackage(packageData) {
-  if (packageData?.format !== 'notice-note-mobile'
-    || packageData.formatVersion !== MOBILE_PACKAGE_VERSION) {
-    throw new Error('文件不是有效的 Notice Note 手机离线包');
-  }
-  const snapshot = packageData.snapshot;
-  if (!snapshot || !Array.isArray(snapshot.folders) || !Array.isArray(snapshot.notes)
-    || !Array.isArray(snapshot.resources) || !Array.isArray(snapshot.assets)) {
-    throw new Error('离线包内容不完整，请在电脑端重新导出');
-  }
-  return snapshot;
-}
+// 离线包格式常量与 validateMobilePackage 已迁移到 lib/mobile-utils.js（见文件顶部解构）。
 
 function showContentPanel() {
   contentPanel.hidden = false;
@@ -277,24 +250,37 @@ async function importMobilePackage(file) {
   statusText.textContent = '正在读取离线包...';
   try {
     const { snapshot, assetOffset } = await readMobilePackageManifest(file);
-    let offset = assetOffset;
-    for (let index = 0; index < snapshot.assets.length; index += 1) {
-      const asset = snapshot.assets[index];
-      const assetSize = Number(asset.size);
-      if (!asset.source || !Number.isSafeInteger(assetSize) || assetSize < 0
-        || offset + assetSize > file.size) {
-        throw new Error('离线包中的附件数据不完整，请在电脑端重新导出');
+    // a) 在写任何东西之前完成整包预校验，拿到完整的资产写入计划。
+    //    任何一条资产不合法都会在规划阶段抛错，不会产生部分写入。
+    const plan = planMobileAssets(snapshot, file.size, assetOffset);
+
+    // 事务外读旧 snapshot，算出本次需要清理的旧资产（新包不再引用的 key）。
+    const previousSnapshot = await readOfflineValue(SNAPSHOT_STORE, 'current');
+    const previousSources = (previousSnapshot?.assets || []).map((asset) => asset.source);
+    const nextSources = plan.map((item) => item.source);
+    const unusedKeys = computeUnusedAssetKeys(previousSources, new Set(nextSources));
+
+    // b) 所有资产写入 + snapshot 写入 + 旧资产清理放进同一个跨 store 事务。
+    //    任一步失败事务自动回滚，旧 snapshot 引用的附件不会被新包部分覆盖。
+    statusText.textContent = '正在写入离线包...';
+    const database = await openOfflineDatabase();
+    await new Promise((resolve, reject) => {
+      const transaction = database.transaction([ASSET_STORE, SNAPSHOT_STORE], 'readwrite');
+      const assetStore = transaction.objectStore(ASSET_STORE);
+      const snapshotStore = transaction.objectStore(SNAPSHOT_STORE);
+      for (const item of plan) {
+        const blob = file.slice(item.start, item.end, item.mimeType);
+        assetStore.put(blob, item.source);
       }
-      statusText.textContent = `正在导入文件 ${index + 1}/${snapshot.assets.length}`;
-      const blob = file.slice(offset, offset + assetSize, asset.mimeType || 'application/octet-stream');
-      await writeOfflineValue(ASSET_STORE, asset.source, blob);
-      offset += assetSize;
-    }
-    if (offset !== file.size) {
-      throw new Error('离线包包含无法识别的数据，请在电脑端重新导出');
-    }
-    await writeOfflineValue(SNAPSHOT_STORE, 'current', snapshot);
-    await deleteUnusedOfflineAssets(new Set(snapshot.assets.map((asset) => asset.source)));
+      snapshotStore.put(snapshot, 'current');
+      for (const key of unusedKeys) {
+        assetStore.delete(key);
+      }
+      transaction.oncomplete = () => resolve();
+      transaction.onerror = () => reject(transaction.error || new Error('导入离线包失败'));
+      transaction.onabort = () => reject(transaction.error || new Error('导入离线包已中止'));
+    });
+
     library = await loadOfflineSnapshot();
     currentFolderId = null;
     searchInput.value = '';
@@ -304,7 +290,7 @@ async function importMobilePackage(file) {
     if (cachedSnapshot) {
       library = cachedSnapshot;
       renderLibrary();
-      statusText.textContent = `${error.message} · 已继续使用上次导入内容`;
+      statusText.textContent = `${error.message} · 导入失败，已保留上次导入内容`;
     } else {
       renderDisconnectedState(error.message);
     }
@@ -555,7 +541,10 @@ function applyNavigationState(state) {
   showContentPanel();
   const targetFolderId = state.folderId || null;
   const targetFolder = targetFolderId ? getFolderById(targetFolderId) : null;
-  if (targetFolder?.isProtected && !targetFolder.isUnlocked) {
+  // 手机端离线包是明文、没有真正的锁：normalizeMobileFolder 已把 isUnlocked 恒置 false，
+  // unlockFolder 也不再校验密码、恒返回 true。这里让 isProtected 目录复用统一的 openFolder
+  // 导航流程，行为上等价于不拦截（直接进入该目录），并不是还有一道密码锁。
+  if (targetFolder?.isProtected) {
     isApplyingNavigationState = true;
     openFolder(targetFolderId, { pushHistory: false }).then((opened) => {
       if (!opened) {
@@ -575,12 +564,9 @@ function applyNavigationState(state) {
 }
 
 async function unlockFolder(folderId) {
-  const folder = getFolderById(folderId);
-  if (!folder?.isProtected || folder.isUnlocked) {
-    return true;
-  }
-  alert('这个加密目录尚未导入，请在电脑端重新导出离线包。');
-  return false;
+  // 手机端离线包始终是明文：密码目录的内容已随包一起导入，没有密码校验、也没有「解锁」状态。
+  // 保留 folderId 参数与既有调用点，仅为统一导航流程，直接进入即可。
+  return true;
 }
 
 async function relockFoldersOnNavigate(targetFolderId) {
@@ -618,15 +604,6 @@ function formatDateTime(value) {
   });
 }
 
-function escapeHtml(value) {
-  return String(value || '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
-}
-
 function escapeAttribute(value) {
   return escapeHtml(value).replace(/`/g, '&#96;');
 }
@@ -650,6 +627,23 @@ function resolveImageUrl(url) {
 function renderInlineMarkdown(text) {
   const placeholders = [];
   let value = escapeHtml(text);
+
+  // {{ ... }} 糊住块优先抽成占位符：与 PC 一致的「视觉遮挡、点击展开」语义。
+  // 抽离后真实内容只存在于 placeholders 里，不会被后续代码/链接/粗体/斜体正则二次改写。
+  // splitClozeSegments 跑在已 escapeHtml 的文本上，{{ }} 不跨行（与 PC 一致）。
+  const clozeParts = [];
+  for (const segment of splitClozeSegments(value)) {
+    if (segment.type === 'cloze') {
+      const key = `\u0000${placeholders.length}\u0000`;
+      // segment.value 已 HTML 转义，只需补转义反引号（不重复 escapeHtml，避免实体被二次转义）。
+      const content = segment.value.replace(/`/g, '&#96;');
+      placeholders.push(`<span class="cloze" data-cloze="${content}" role="button" tabindex="0">点击查看</span>`);
+      clozeParts.push(key);
+    } else {
+      clozeParts.push(segment.value);
+    }
+  }
+  value = clozeParts.join('');
 
   value = value.replace(/`([^`]+)`/g, (_match, code) => {
     const key = `\u0000${placeholders.length}\u0000`;
@@ -959,15 +953,12 @@ function renderFolderCard(folder) {
   titleWrap.append(name);
 
   if (folder.isProtected) {
+    // 离线包是明文，手机端没有密码保护：用文字徽章如实说明，不再显示开锁/闭锁 SVG。
     const badge = document.createElement('span');
-    badge.className = `folder-lock-badge${folder.isUnlocked ? ' is-unlocked' : ''}`;
-    badge.title = folder.isUnlocked ? '当前会话已解锁' : '进入前需要输入密码';
-    if (folder.isUnlocked) {
-      badge.innerHTML = '<svg width="13" height="13" viewBox="0 0 16 16" fill="none"><rect x="3" y="7" width="10" height="7" rx="1.2" stroke="currentColor" stroke-width="1.3"/><path d="M5 7V5a3 3 0 0 1 5.5-1.6" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" fill="none"/></svg>';
-    } else {
-      badge.innerHTML = '<svg width="13" height="13" viewBox="0 0 16 16" fill="none"><rect x="3" y="7" width="10" height="7" rx="1.2" stroke="currentColor" stroke-width="1.3"/><path d="M5 7V5a3 3 0 0 1 6 0v2" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" fill="none"/></svg>';
-    }
-    icon.append(badge);
+    badge.className = 'folder-lock-badge is-plaintext';
+    badge.title = '密码目录在离线包中是明文，手机端没有密码保护';
+    badge.textContent = '此离线包未加密';
+    titleWrap.append(badge);
   }
 
   const stats = document.createElement('div');
@@ -1018,6 +1009,9 @@ function renderResourceCard(file) {
   button.type = 'button';
   button.dataset.assetSource = file.localAssetPath;
   button.dataset.resourceName = file.name;
+  // 资源本身不带 mimeType，用 localAssetPath 关联到离线包 assets 里的同一份附件。
+  const asset = (library.assets || []).find((item) => item.source === file.localAssetPath);
+  button.dataset.resourceMime = asset?.mimeType || '';
 
   const title = document.createElement('h3');
   title.textContent = file.name;
@@ -1030,7 +1024,7 @@ function renderResourceCard(file) {
   meta.append(type, size);
   const preview = document.createElement('p');
   preview.className = 'note-preview';
-  preview.textContent = file.canOpen ? '点击从手机本地打开' : '文件已保存到手机本地';
+  preview.textContent = file.canOpen ? '文件已保存到手机本地，手机端暂不预览' : '文件已保存到手机本地';
   button.append(title, meta, preview);
   return button;
 }
@@ -1192,7 +1186,16 @@ noteList.addEventListener('click', (event) => {
       alert('手机本地文件不存在，请重新导入离线包。');
       return;
     }
-    window.open(url, '_blank', 'noopener');
+    // Android WebView 里打开新窗口的方式不可用：图片走页面内 lightbox，其余资源明确提示仅保存不预览。
+    if (isPreviewableResourceMime(resourceCard.dataset.resourceMime)) {
+      openImageLightbox({
+        src: url,
+        currentSrc: url,
+        alt: resourceCard.dataset.resourceName
+      });
+    } else {
+      alert('该文件已保存在离线包中，手机端暂不预览，请在电脑端打开。');
+    }
     return;
   }
 
@@ -1207,6 +1210,13 @@ noteList.addEventListener('click', (event) => {
 });
 
 noteContent.addEventListener('click', (event) => {
+  const cloze = event.target.closest?.('.cloze');
+  if (cloze) {
+    // 切换显示/隐藏真实内容；textContent 写回不会把 data 里的原文当 HTML 执行。
+    const revealed = cloze.classList.toggle('is-revealed');
+    cloze.textContent = revealed ? (cloze.dataset.cloze || '') : '点击查看';
+    return;
+  }
   const image = event.target.closest?.('img');
   if (!image) {
     return;

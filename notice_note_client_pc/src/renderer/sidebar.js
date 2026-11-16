@@ -164,6 +164,121 @@ function resolveFolderIdByNamePath(names, sourceFolders = folders) {
   }
   return parentId;
 }
+// ---------- 侧边栏手动顺序 ----------
+// 目录 / 笔记 / 资源文件三组各自可以拖拽排序，但分组本身不变：
+// 目录永远排在最上面，其次是笔记，最后是资源文件。
+// 顺序存在 config.json 的 sidebarOrder 里；数组为空时完全按默认规则（笔记还带今日回顾置顶）。
+
+function getSidebarOrderIds(kind) {
+  const order = appSettings?.sidebarOrder?.[kind];
+  return Array.isArray(order) ? order : [];
+}
+
+function sortBySidebarOrder(items, kind, getId) {
+  const order = getSidebarOrderIds(kind);
+  if (order.length === 0) {
+    return items;
+  }
+  const rank = (item) => {
+    const index = order.indexOf(getId(item));
+    return index === -1 ? Number.MAX_SAFE_INTEGER : index;
+  };
+  return [...items].sort((a, b) => rank(a) - rank(b));
+}
+
+// 落点判定：上下 30% 算「插到这条前面/后面」，中间留给目录的「移入」语义。
+const DROP_EDGE_RATIO = 0.3;
+function getDropEdge(event, element) {
+  const rect = element.getBoundingClientRect();
+  if (rect.height <= 0) {
+    return "inside";
+  }
+  const ratio = (event.clientY - rect.top) / rect.height;
+  if (ratio < DROP_EDGE_RATIO) return "before";
+  if (ratio > 1 - DROP_EDGE_RATIO) return "after";
+  return "inside";
+}
+
+function clearSidebarDropMarks() {
+  noteList.querySelectorAll(".drop-before, .drop-after, .drag-over").forEach((element) => {
+    element.classList.remove("drop-before", "drop-after", "drag-over");
+  });
+}
+
+async function reorderSidebarEntry(kind, dragId, targetId, position) {
+  try {
+    const result = await window.noticeNote.reorderSidebar(kind, dragId, targetId, position);
+    if (result?.sidebarOrder) {
+      appSettings = { ...(appSettings || {}), sidebarOrder: result.sidebarOrder };
+    }
+    renderNoteList();
+  } catch (error) {
+    console.error("调整顺序失败:", error);
+    alert(error.message || "调整顺序失败");
+  }
+}
+
+// 笔记与资源文件的排序落点（同一组内上下边缘）。目录项另写一套，因为它中间区要留给「移入」。
+function bindSidebarReorder(item, kind, id) {
+  item.addEventListener("dragover", (event) => {
+    const drag = sidebarDrag;
+    if (!drag || drag.kind !== kind || drag.id === id) {
+      return;
+    }
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "move";
+    const edge = getDropEdge(event, item) === "before" ? "before" : "after";
+    item.classList.remove("drop-before", "drop-after");
+    item.classList.add(edge === "before" ? "drop-before" : "drop-after");
+  });
+  item.addEventListener("dragleave", (event) => {
+    if (event.relatedTarget && item.contains(event.relatedTarget)) {
+      return;
+    }
+    item.classList.remove("drop-before", "drop-after");
+  });
+  item.addEventListener("drop", async (event) => {
+    const drag = sidebarDrag;
+    if (!drag || drag.kind !== kind || drag.id === id) {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    const position = item.classList.contains("drop-before") ? "before" : "after";
+    item.classList.remove("drop-before", "drop-after");
+    await reorderSidebarEntry(kind, drag.id, id, position);
+  });
+}
+
+// 标题栏的两个小按钮：分别打开「回顾顺序」「提醒排期」弹窗。
+// 有内容时在角上带一个数字，不点开也知道还剩几套、几个提醒。
+function createReviewOverviewButton(text, label, kind) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "review-overview-trigger";
+  const count = kind === "queue"
+    ? (Array.isArray(appSettings?.reviewQueue) ? appSettings.reviewQueue.length : 0)
+    : (appSettings?.dayReminders || []).filter((record) => !record.done).length;
+
+  const caption = document.createElement("span");
+  caption.textContent = text;
+  button.append(caption);
+  if (count > 0) {
+    const badge = document.createElement("span");
+    badge.className = "review-overview-trigger-count";
+    badge.textContent = String(count);
+    button.append(badge);
+  }
+
+  button.title = count === 0 ? `暂无${label}` : `${label}：${count} 项`;
+  button.setAttribute("aria-label", `${label}，共 ${count} 项`);
+  button.addEventListener("click", (event) => {
+    event.stopPropagation();
+    openReviewOverviewDialog(kind);
+  });
+  return button;
+}
+
 function renderBreadcrumb() {
   breadcrumb.innerHTML = "";
   if (noteListSearch) {
@@ -192,10 +307,12 @@ function renderBreadcrumb() {
       <ol>
         <li>这里展示 .study_notice 回顾文件夹中的全部文件（含子文件夹），不在「全部」中显示。</li>
         <li>把文件放进 .study_notice 文件夹，即可加入回顾。</li>
+        <li>在下方「提醒」里给这一整套内容排复习日，到那天会提醒这一天的全部文件。</li>
+        <li>「自动排期」一次排好第 2、3、7、15、30 天（当天算第 1 天）；已提醒过的日期会标灰。</li>
+        <li>标题栏的「顺序」「排期」两个按钮：前者看接下来会按什么顺序推，可以顶/上移/下移；后者看已排的复习日，可以直接改日期或取消。</li>
+        <li>手动排的复习日与每日自动回顾是两套独立安排，可能同一天各推一次。</li>
         <li>每日自动回顾在周一至周五生效，“明天再看”的内容可延续到周末。</li>
-        <li>仅选择回顾文件夹内、应用能够打开的内容。</li>
-        <li>存在未完成提醒的文件不会参与今日回顾。</li>
-        <li>提醒全部完成的当天会记作一次回顾时间，避免隔天重复推送。</li>
+        <li>提醒结束会按天记作一次接触时间，避免隔天被当成从未看过而重复推送。</li>
         <li>当天选择保持不变；完成回顾后记录时间，明天再看则下次优先。</li>
       </ol>
     `;
@@ -206,7 +323,13 @@ function renderBreadcrumb() {
     });
     rules.addEventListener("click", (event) => event.stopPropagation());
     helpWrap.append(helpButton, rules);
-    breadcrumb.append(reminderBtn, helpWrap);
+    // 回顾顺序与提醒排期内容较长，侧边栏放不下，改成这两个小按钮各开一个弹窗。
+    breadcrumb.append(
+      reminderBtn,
+      createReviewOverviewButton("顺序", "回顾顺序", "queue"),
+      createReviewOverviewButton("排期", "提醒排期", "schedule"),
+      helpWrap,
+    );
     return;
   }
   if (sidebarViewMode === "calendar") {
@@ -253,7 +376,7 @@ function renderBreadcrumb() {
   rootBtn.className = `breadcrumb-item breadcrumb-root${activeFolderId === null ? " active" : ""}`;
   rootBtn.textContent = "全部文件";
   rootBtn.addEventListener("click", () => {
-    openFolderWithAccessCheck(null).catch(console.error);
+    openFolderWithAccessCheck(null).catch((error) => window.showErrorToast?.(error, "操作失败"));
   });
   makeBreadcrumbDropTarget(rootBtn, null);
   breadcrumb.append(rootBtn);
@@ -265,7 +388,7 @@ function renderBreadcrumb() {
     btn.textContent = folder.name;
     btn.title = folder.name;
     btn.addEventListener("click", () => {
-      openFolderWithAccessCheck(folder.id).catch(console.error);
+      openFolderWithAccessCheck(folder.id).catch((error) => window.showErrorToast?.(error, "操作失败"));
     });
     makeBreadcrumbDropTarget(btn, folder.id);
     breadcrumb.append(btn);
@@ -282,28 +405,19 @@ function getChildFolderCount(folderId) {
     (folder) => folder.parentId === folderId && !folder.isReviewFolder,
   ).length;
 }
+// 日历条目统一口径：一条 = 某个日期要看「dayKey 那一套内容」
+// kind: reminder 手动排的复习日 / today 今日自动回顾 / reviewed 历史上已回顾过
+// 数据统一走 day-index.js 的共享索引，避免日历与回顾面板各算一套。
 function getCalendarReminderEntries() {
-  const reminderEntries = notes.flatMap((note) => {
-    return (note.reminders || [])
-      .map((reminder) => ({
-        note,
-        reminder,
-        date: getReminderDateKey(reminder),
-      }))
-      .filter((entry) => entry.date);
-  });
-  const dailyReviewNote = notes.find((note) => note.isDailyReview);
-  const dailyReviewFile = resourceFiles.find((file) => file.isDailyReview);
-  if (dailyReviewNote || dailyReviewFile) {
-    reminderEntries.push({
-      note: dailyReviewNote || null,
-      file: dailyReviewFile || null,
-      reminder: null,
-      date: toLocalDateKey(new Date()),
-      isDailyReview: true,
-    });
-  }
-  return reminderEntries;
+  return buildCalendarEntries(
+    {
+      notes,
+      resourceFiles,
+      dayReminders: appSettings?.dayReminders || [],
+      dayReviewLog: appSettings?.dayReviewLog || [],
+    },
+    toLocalDateKey(new Date()),
+  );
 }
 function renderReminderCalendar() {
   const entries = getCalendarReminderEntries();
@@ -382,7 +496,11 @@ function renderReminderCalendar() {
     dayButton.classList.toggle("has-reminder", dateEntries.length > 0);
     dayButton.classList.toggle(
       "has-daily-review",
-      dateEntries.some((entry) => entry.isDailyReview),
+      dateEntries.some((entry) => entry.kind === "today"),
+    );
+    dayButton.classList.toggle(
+      "has-review-history",
+      dateEntries.some((entry) => entry.kind === "reviewed"),
     );
     dayButton.setAttribute(
       "aria-label",
@@ -432,34 +550,34 @@ function renderReminderCalendar() {
     empty.textContent = "当天没有提醒或回顾";
     details.append(empty);
   } else {
-    for (const { note, file, reminder, isDailyReview } of selectedEntries) {
-      const resource = note || file;
+    for (const entry of selectedEntries) {
       const item = document.createElement("button");
-      item.className = `reminder-calendar-entry${isDailyReview ? " is-daily-review" : ""}`;
+      item.className = `reminder-calendar-entry${entry.kind === "today" ? " is-daily-review" : ""}`;
       item.type = "button";
+
       const title = document.createElement("strong");
-      title.textContent = note?.title || file?.name || "未命名文件";
+      title.textContent = `${formatReviewDayShort(entry.dayKey)} 那一套`;
+
       const folderPath = document.createElement("span");
-      const pathParts = getFolderNamePath(resource?.folderId);
-      folderPath.textContent =
-        pathParts.length > 0 ? pathParts.join(" / ") : "根目录";
+      folderPath.textContent = "回顾面板 · 一整天内容";
+
       const meta = document.createElement("span");
-      if (isDailyReview) {
+      if (entry.kind === "today") {
         meta.className = "daily-review-calendar-meta";
-        meta.textContent = "今日回顾 · 回忆以前内容";
+        meta.textContent = "今日回顾";
+      } else if (entry.kind === "reviewed") {
+        meta.className = "is-done";
+        meta.textContent = `已回顾 · ${formatListDateTime(entry.reviewedAt)}`;
       } else {
-        meta.className = reminder.done ? "is-done" : "";
-        const reminderTimes = DAILY_REMINDER_SLOTS.join("、");
-        meta.textContent = reminder.done
-          ? `${reminderTimes} · 已完成`
-          : `${reminderTimes} · 待提醒`;
+        meta.className = entry.done ? "is-done" : "";
+        meta.textContent = entry.done ? "已提醒" : "待提醒";
       }
+
       item.append(title, folderPath, meta);
       item.addEventListener("click", () => {
-        const openPromise = note
-          ? selectNote(note.id)
-          : selectResourceFile(file.id);
-        openPromise.catch(console.error);
+        // 提醒与回顾在日历里同版式、同落点：都定位到回顾面板的那一天
+        activateReviewBrowser();
+        selectReviewDay(entry.dayKey);
       });
       details.append(item);
     }
@@ -475,7 +593,7 @@ function createDailyReviewLastTime(target) {
   return lastTime;
 }
 // 侧边栏回顾模式：当天文件紧凑列表（与主区回顾浏览器同步）
-// 翻页/日历/主次操作都在主区回顾浏览器里，这里只提供当天的快速入口。
+// 翻页/日历/归天操作都在主区回顾浏览器里，这里只提供当天的快速入口。
 function renderReviewSidebar(filteredNotes, filteredResources, searchKeyword) {
   if (searchKeyword) {
     // 搜索时展示全部回顾文件的简洁列表
@@ -486,7 +604,8 @@ function renderReviewSidebar(filteredNotes, filteredResources, searchKeyword) {
           meta: formatListDateTime(note.updatedAt),
           badge: note.fileType.toUpperCase(),
           active: note.id === activeNoteId,
-          onClick: () => selectNote(note.id).catch(console.error),
+          onClick: () => selectNote(note.id).catch((error) => window.showErrorToast?.(error, "操作失败")),
+          entry: { type: "note", id: note.id }
         }),
       );
     }
@@ -498,8 +617,9 @@ function renderReviewSidebar(filteredNotes, filteredResources, searchKeyword) {
           badge: file.typeLabel,
           active: file.id === activeResourceId || file.id === activePdfId,
           onClick: file.canOpen
-            ? () => selectResourceFile(file.id).catch(console.error)
+            ? () => selectResourceFile(file.id).catch((error) => window.showErrorToast?.(error, "操作失败"))
             : null,
+          entry: { type: "file", id: file.id }
         }),
       );
     }
@@ -518,9 +638,15 @@ function renderReviewSidebar(filteredNotes, filteredResources, searchKeyword) {
   }
 }
 
-function createReviewDayItem({ label, meta, badge, active, isDailyReview, onClick, role, onRoleToggle, extra }) {
+function createReviewDayItem({ label, meta, badge, active, isDailyReview, onClick, extra, entry, drag }) {
   const item = document.createElement("div");
   item.className = `note-item review-side-item${active ? " active" : ""}`;
+  // 带上身份标记，右键菜单才能解析出「这一项」而不是当成空白区
+  if (entry?.type === "note") {
+    item.dataset.noteId = entry.id;
+  } else if (entry?.type === "file") {
+    item.dataset.fileId = entry.id;
+  }
   if (onClick) {
     item.type = "button";
     item.addEventListener("click", onClick);
@@ -533,20 +659,31 @@ function createReviewDayItem({ label, meta, badge, active, isDailyReview, onClic
   const title = document.createElement("strong");
   title.textContent = label;
   title.title = label;
-  const badgeEl = document.createElement(onRoleToggle ? "button" : "span");
-  badgeEl.className = onRoleToggle ? "file-type-badge review-side-role" : "file-type-badge";
+  // 同一天的文件平级，徽标只表示文件类型，不再承载主/次角色
+  const badgeEl = document.createElement("span");
+  badgeEl.className = "file-type-badge";
   badgeEl.textContent = badge;
-  if (onRoleToggle) {
-    badgeEl.type = "button";
-    badgeEl.title = role === "primary"
-      ? "当天的主文件（点击取消）"
-      : "点击设为当天的主文件";
-    badgeEl.addEventListener("click", (event) => {
-      event.stopPropagation();
-      onRoleToggle();
-    });
-  }
   titleRow.append(title, badgeEl);
+  if (drag) {
+    // 只有回顾面板的「当天文件」才挂手柄：搜索结果那种平铺列表没有排序语义。
+    const dragHandle = document.createElement("span");
+    dragHandle.className = "note-drag-handle";
+    dragHandle.textContent = "⋮⋮";
+    dragHandle.title = "拖动调整这一天的顺序";
+    dragHandle.setAttribute("aria-label", "拖动调整这一天的顺序");
+    dragHandle.draggable = true;
+    dragHandle.addEventListener("dragstart", (event) => {
+      event.dataTransfer.setData("text/plain", drag.key);
+      event.dataTransfer.effectAllowed = "move";
+      item.classList.add("dragging");
+      drag.onStart();
+    });
+    dragHandle.addEventListener("dragend", () => {
+      item.classList.remove("dragging");
+      drag.onEnd();
+    });
+    titleRow.prepend(dragHandle);
+  }
 
   const metaRow = document.createElement("div");
   metaRow.className = "review-side-meta";
@@ -570,7 +707,11 @@ function renderNoteList() {
   }
 
   const searchKeyword = getNoteSearchKeyword();
-  const currentFolders = getCurrentFolders();
+  const currentFolders = sortBySidebarOrder(
+    getCurrentFolders(),
+    "folders",
+    (folder) => folder.id,
+  );
   const filteredNotes = getFilteredNotes();
   const filteredResources = getFilteredResources();
 
@@ -619,18 +760,44 @@ function renderNoteList() {
     item.tabIndex = 0;
     item.setAttribute("aria-label", `打开文件夹 ${folder.name}`);
 
-    // Drop target: accept notes/folders dragged into this folder
+    // Drop target：中间区把笔记/文件夹移入这里，上下边缘用于同级排序
     item.addEventListener("dragover", (e) => {
+      const drag = sidebarDrag;
+      if (!drag) {
+        return;
+      }
       e.preventDefault();
       e.dataTransfer.dropEffect = "move";
-      item.classList.add("drag-over");
+      const edge = drag.kind === "folders" && drag.id !== folder.id
+        ? getDropEdge(e, item)
+        : "inside";
+      item.classList.remove("drag-over", "drop-before", "drop-after");
+      if (edge === "inside") {
+        item.classList.add("drag-over");
+      } else {
+        item.classList.add(edge === "before" ? "drop-before" : "drop-after");
+      }
     });
-    item.addEventListener("dragleave", () => {
-      item.classList.remove("drag-over");
+    item.addEventListener("dragleave", (event) => {
+      if (event.relatedTarget && item.contains(event.relatedTarget)) {
+        return;
+      }
+      item.classList.remove("drag-over", "drop-before", "drop-after");
     });
     item.addEventListener("drop", async (e) => {
       e.preventDefault();
-      item.classList.remove("drag-over");
+      const drag = sidebarDrag;
+      // 同组拖到上下边缘 = 排序；其余位置保持原来的「移入这个目录」
+      const position = item.classList.contains("drop-before")
+        ? "before"
+        : item.classList.contains("drop-after")
+          ? "after"
+          : null;
+      item.classList.remove("drag-over", "drop-before", "drop-after");
+      if (drag?.kind === "folders" && position && drag.id !== folder.id) {
+        await reorderSidebarEntry("folders", drag.id, folder.id, position);
+        return;
+      }
       const dragType = e.dataTransfer.getData("text/plain");
       if (dragType.startsWith("note:")) {
         const noteId = dragType.slice(5);
@@ -640,22 +807,28 @@ function renderNoteList() {
         if (folderId !== folder.id) {
           await moveFolderToFolder(folderId, folder.id);
         }
+      } else if (dragType.startsWith("file:")) {
+        const fileId = dragType.slice(5);
+        await moveResourceToFolder(fileId, folder.id);
       }
     });
 
     const dragHandle = document.createElement("span");
     dragHandle.className = "note-drag-handle";
     dragHandle.textContent = "⋮⋮";
-    dragHandle.title = "拖动文件夹到其他文件夹";
-    dragHandle.setAttribute("aria-label", "拖动文件夹到其他文件夹");
+    dragHandle.title = "拖动调顺序，或拖到其他文件夹";
+    dragHandle.setAttribute("aria-label", "拖动调顺序，或拖到其他文件夹");
     dragHandle.draggable = true;
     dragHandle.addEventListener("dragstart", (e) => {
       e.dataTransfer.setData("text/plain", `folder:${folder.id}`);
       e.dataTransfer.effectAllowed = "move";
+      sidebarDrag = { kind: "folders", id: folder.id };
       item.classList.add("dragging");
     });
     dragHandle.addEventListener("dragend", () => {
       item.classList.remove("dragging");
+      sidebarDrag = null;
+      clearSidebarDropMarks();
     });
 
     const icon = document.createElement("span");
@@ -727,7 +900,7 @@ function renderNoteList() {
     folderMeta.append(counts, actions);
     item.append(dragHandle, icon, name, folderMeta);
     const openFolder = () => {
-      openFolderWithAccessCheck(folder.id).catch(console.error);
+      openFolderWithAccessCheck(folder.id).catch((error) => window.showErrorToast?.(error, "操作失败"));
     };
     item.addEventListener("click", (event) => {
       if (event.target.closest(".folder-action-btn, .note-drag-handle")) {
@@ -741,15 +914,17 @@ function renderNoteList() {
         (event.key === "Enter" || event.key === " ")
       ) {
         event.preventDefault();
-        openFolderWithAccessCheck(folder.id).catch(console.error);
+        openFolderWithAccessCheck(folder.id).catch((error) => window.showErrorToast?.(error, "操作失败"));
       }
     });
     noteList.append(item);
   }
 
-  const orderedNotes = sortNotes(filteredNotes).sort((a, b) => {
+  let orderedNotes = sortNotes(filteredNotes).sort((a, b) => {
     return Number(Boolean(b.isDailyReview)) - Number(Boolean(a.isDailyReview));
   });
+  // 手动排过顺序就整体按它来（今日回顾也参与），没排过才保留「今日回顾置顶」。
+  orderedNotes = sortBySidebarOrder(orderedNotes, "notes", (note) => note.id);
   for (const note of orderedNotes) {
     const item = document.createElement("button");
     const isActiveNote =
@@ -763,17 +938,22 @@ function renderNoteList() {
     const dragHandle = document.createElement("span");
     dragHandle.className = "note-drag-handle";
     dragHandle.textContent = "⋮⋮";
-    dragHandle.title = "拖动笔记到其他文件夹";
-    dragHandle.setAttribute("aria-label", "拖动笔记到其他文件夹");
+    dragHandle.title = "拖动调顺序，或拖到文件夹";
+    dragHandle.setAttribute("aria-label", "拖动调顺序，或拖到文件夹");
     dragHandle.draggable = true;
     dragHandle.addEventListener("dragstart", (e) => {
       e.dataTransfer.setData("text/plain", `note:${note.id}`);
       e.dataTransfer.effectAllowed = "move";
+      sidebarDrag = { kind: "notes", id: note.id };
       item.classList.add("dragging");
     });
     dragHandle.addEventListener("dragend", () => {
       item.classList.remove("dragging");
+      sidebarDrag = null;
+      clearSidebarDropMarks();
     });
+    // 笔记之间上下拖动 = 排序（不改变所在文件夹）
+    bindSidebarReorder(item, "notes", note.id);
 
     const titleRow = document.createElement("div");
     titleRow.className = "note-title-row";
@@ -856,7 +1036,7 @@ function renderNoteList() {
     `;
     item.append(timeMeta);
 
-    const openNote = () => selectNote(note.id).catch(console.error);
+    const openNote = () => selectNote(note.id).catch((error) => window.showErrorToast?.(error, "操作失败"));
     item.addEventListener("click", (event) => {
       if (event.target.closest(".note-drag-handle")) {
         return;
@@ -866,9 +1046,13 @@ function renderNoteList() {
     noteList.append(item);
   }
 
-  const orderedResources = [...filteredResources].sort((a, b) => {
-    return Number(Boolean(b.isDailyReview)) - Number(Boolean(a.isDailyReview));
-  });
+  const orderedResources = sortBySidebarOrder(
+    [...filteredResources].sort((a, b) => {
+      return Number(Boolean(b.isDailyReview)) - Number(Boolean(a.isDailyReview));
+    }),
+    "files",
+    (file) => file.id,
+  );
   for (const file of orderedResources) {
     const item = document.createElement("button");
     const isActive =
@@ -880,7 +1064,7 @@ function renderNoteList() {
     item.dataset.fileId = file.id;
     if (file.canOpen) {
       const openResource = () =>
-        selectResourceFile(file.id).catch(console.error);
+        selectResourceFile(file.id).catch((error) => window.showErrorToast?.(error, "操作失败"));
       item.addEventListener("click", openResource);
     } else {
       item.title = "该文件类型仅支持在列表中查看";
@@ -888,6 +1072,26 @@ function renderNoteList() {
 
     const titleRow = document.createElement("div");
     titleRow.className = "note-title-row";
+
+    const dragHandle = document.createElement("span");
+    dragHandle.className = "note-drag-handle";
+    dragHandle.textContent = "⋮⋮";
+    dragHandle.title = "拖动排序";
+    dragHandle.setAttribute("aria-label", "拖动排序");
+    dragHandle.draggable = true;
+    dragHandle.addEventListener("dragstart", (e) => {
+      e.dataTransfer.setData("text/plain", `file:${file.id}`);
+      e.dataTransfer.effectAllowed = "move";
+      sidebarDrag = { kind: "files", id: file.id };
+      item.classList.add("dragging");
+    });
+    dragHandle.addEventListener("dragend", () => {
+      item.classList.remove("dragging");
+      sidebarDrag = null;
+      clearSidebarDropMarks();
+    });
+    // 资源文件之间上下拖动 = 排序（不改变所在文件夹）
+    bindSidebarReorder(item, "files", file.id);
 
     const title = document.createElement("strong");
     title.textContent = file.name;
@@ -903,7 +1107,7 @@ function renderNoteList() {
     meta.className = "note-time-meta";
     meta.textContent = `${formatFileSize(file.size)} · 修改：${formatListDateTime(file.updatedAt)}`;
 
-    titleRow.append(title);
+    titleRow.append(dragHandle, title);
     if (file.isDailyReview) {
       const dailyReviewBadge = document.createElement("span");
       dailyReviewBadge.className = "daily-review-badge";
@@ -930,11 +1134,10 @@ function renderNoteList() {
   }
 }
 function selectFolder(folderId) {
-  clearNoteListSearch();
-  sidebarViewMode = "all";
-  showAllFilesButton.classList.add("is-active");
-  showReminderCalendarButton.classList.remove("is-active");
-  showDailyReviewButton.classList.remove("is-active");
+  // 走统一的视图切换：这里原先手写了一遍 sidebarViewMode 与按钮态，
+  // 漏了 data-view-mode，导致从日历/回顾点「全部文件」回来时
+  // 侧栏仍带着 calendar/reminder 标记，顶部工具组被 CSS 一直藏着。
+  setSidebarViewMode("all", false);
   activeFolderId = folderId;
   renderBreadcrumb();
   renderNoteList();
@@ -979,6 +1182,11 @@ async function openFolderWithAccessCheck(folderId) {
 function setSidebarViewMode(mode, shouldRender = true) {
   clearNoteListSearch();
   sidebarViewMode = ["calendar", "reminder"].includes(mode) ? mode : "all";
+  // 顶部工具组（刷新 / 定位 / 草稿 / 新建）只服务「全部」列表，
+  // 日历与回顾各自的入口在面板里，这里靠这个标记在 CSS 里整组收起。
+  if (sidebar) {
+    sidebar.dataset.viewMode = sidebarViewMode;
+  }
   showAllFilesButton.classList.toggle("is-active", sidebarViewMode === "all");
   showReminderCalendarButton.classList.toggle(
     "is-active",
@@ -1256,7 +1464,8 @@ function showFolderNameDialog(defaultName) {
     });
   });
 }
-function showFolderPasswordDialog(title, confirmLabel = "确定") {
+function showFolderPasswordDialog(title, confirmLabel = "确定", options = {}) {
+  const { requireConfirmation = false, hint = "" } = options;
   return new Promise((resolve) => {
     const dialog = document.createElement("dialog");
     dialog.className = "folder-dialog folder-password-dialog";
@@ -1268,6 +1477,16 @@ function showFolderPasswordDialog(title, confirmLabel = "确定") {
     input.type = "password";
     input.placeholder = "输入密码";
     input.autocomplete = "current-password";
+    const confirmInput = document.createElement("input");
+    confirmInput.type = "password";
+    confirmInput.placeholder = "再输入一次密码";
+    confirmInput.autocomplete = "new-password";
+    const hintLine = document.createElement("p");
+    hintLine.className = "folder-dialog-hint";
+    hintLine.textContent = hint;
+    const errorLine = document.createElement("p");
+    errorLine.className = "folder-dialog-error";
+    errorLine.hidden = true;
     const actions = document.createElement("div");
     actions.className = "folder-dialog-actions";
     const cancelBtn = document.createElement("button");
@@ -1279,7 +1498,14 @@ function showFolderPasswordDialog(title, confirmLabel = "确定") {
     confirmBtn.className = "primary-button";
     confirmBtn.textContent = confirmLabel;
     actions.append(cancelBtn, confirmBtn);
-    content.append(label, input, actions);
+    content.append(
+      label,
+      input,
+      ...(requireConfirmation ? [confirmInput] : []),
+      ...(hint ? [hintLine] : []),
+      errorLine,
+      actions,
+    );
     dialog.append(content);
     document.body.append(dialog);
     dialog.showModal();
@@ -1291,16 +1517,34 @@ function showFolderPasswordDialog(title, confirmLabel = "确定") {
       dialog.remove();
       resolve(value);
     };
+    const submit = () => {
+      if (requireConfirmation && input.value !== confirmInput.value) {
+        errorLine.textContent = "两次输入的密码不一致，请重新输入";
+        errorLine.hidden = false;
+        confirmInput.focus();
+        return;
+      }
+      errorLine.hidden = true;
+      close(input.value);
+    };
 
     dialog.addEventListener("cancel", (event) => {
       event.preventDefault();
       close(null);
     });
     cancelBtn.addEventListener("click", () => close(null));
-    confirmBtn.addEventListener("click", () => close(input.value));
+    confirmBtn.addEventListener("click", submit);
     input.addEventListener("keydown", (event) => {
       if (event.key === "Enter") {
-        close(input.value);
+        submit();
+      }
+      if (event.key === "Escape") {
+        close(null);
+      }
+    });
+    confirmInput.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        submit();
       }
       if (event.key === "Escape") {
         close(null);
@@ -1327,7 +1571,7 @@ async function promptUnlockFolder(folderId) {
     await refreshNotes();
     return true;
   } catch (error) {
-    alert(error.message || "密码不正确");
+    window.showErrorToast?.(error, "解锁失败");
     return false;
   }
 }
@@ -1349,6 +1593,10 @@ async function setFolderPasswordForFolder(folderId) {
   const password = await showFolderPasswordDialog(
     `为「${folder.name}」设置访问密码`,
     folder.isProtected ? "更新密码" : "设置密码",
+    {
+      requireConfirmation: true,
+      hint: "密码只限制应用内访问，磁盘文件与离线包仍是明文。忘记密码：关闭应用后编辑 .notice-note/folders.json，删除该文件夹的 passwordHash 与 passwordSalt。",
+    },
   );
   if (!password) {
     return;
@@ -1360,8 +1608,12 @@ async function setFolderPasswordForFolder(folderId) {
       currentPassword,
     );
     await refreshNotes();
+    // R18：加密码之前草稿正文可能已经写进 localStorage。folders 刷新后
+    // saveDraftsToStorage 会把该目录草稿落盘为空正文，这里立刻重写一次不留时间窗。
+    flushDraftsToStorage();
+    window.showToast?.("密码已设置", "success");
   } catch (error) {
-    alert(error.message || "设置密码失败");
+    window.showErrorToast?.(error, "设置密码失败");
   }
 }
 async function clearFolderPasswordForFolder(folderId) {

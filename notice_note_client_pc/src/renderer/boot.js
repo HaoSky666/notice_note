@@ -196,11 +196,38 @@
 
 
 
+// 启动画面（DSH 风格）：进度环弧长 72°→288°，加载完成后淡出移除
+const BOOT_ARC_MIN = 72;
+const BOOT_ARC_SPAN = 216;
+const BOOT_DISMISS_FADE_MS = 350;
+let bootDismissed = false;
+
+function setBootProgress(ratio) {
+  const spinner = document.getElementById("bootSpinner");
+  if (!spinner || bootDismissed) return;
+  const clamped = Math.max(0, Math.min(1, Number(ratio) || 0));
+  spinner.style.setProperty("--dsh-boot-arc", `${Math.round(BOOT_ARC_MIN + clamped * BOOT_ARC_SPAN)}deg`);
+}
+
+function dismissBootScreen() {
+  if (bootDismissed) return;
+  bootDismissed = true;
+  const boot = document.getElementById("bootScreen");
+  if (!boot) return;
+  setBootProgress(1);
+  boot.classList.add("is-done");
+  setTimeout(() => boot.remove(), BOOT_DISMISS_FADE_MS);
+}
+
+// 兜底：即使 boot() 中途异常，也保证启动画面一定消失
+setTimeout(dismissBootScreen, 10000);
+
 async function boot() {
   setSidebarCollapsed(readBooleanSetting(SIDEBAR_COLLAPSED_KEY));
   initSidebarResizer();
   initPdfOutlineResizer();
   createMarkdownEditor();
+  setBootProgress(0.15);
   notes = sortNotes(await window.noticeNote.listNotes());
   for (const n of notes) {
     noteSavedBaselines.set(n.id, {
@@ -209,16 +236,17 @@ async function boot() {
       reminders: JSON.parse(JSON.stringify(n.reminders || [])),
     });
   }
+  setBootProgress(0.45);
   folders = await window.noticeNote.listFolders();
   pdfFiles = await window.noticeNote.listPdfs();
   resourceFiles = await window.noticeNote.listFiles();
   storageInfo = await window.noticeNote.getStorage();
   appSettings = await window.noticeNote.getSettings();
+  setBootProgress(0.85);
   const restoredTitles = restoreNotesFromRecoveryLog();
   activeNoteId = null;
   workspaceTabs = [];
   activeWorkspaceTabKey = null;
-  reminderInput.value = toLocalDateKey(new Date());
   renderBreadcrumb();
   renderNoteList();
   renderEditor();
@@ -287,6 +315,42 @@ async function boot() {
   window.noticeNote.onReminderFired((reminder) => {
     addReminderNotification(reminder);
   });
+
+  // R2：启动时结算出的「错过的复习日」不靠主进程抢在页面加载前 send，
+  // 而是订阅就绪后主动拉取；写入通知中心成功再 ack 清空，失败则下次启动仍能补。
+  window.noticeNote.takePendingReminders?.()
+    .then(async (notices) => {
+      if (!Array.isArray(notices) || notices.length === 0) {
+        return;
+      }
+      for (const notice of notices) {
+        addReminderNotification(notice);
+      }
+      await window.noticeNote.ackPendingReminders?.();
+    })
+    .catch((error) => window.showErrorToast?.(error, "读取待发提醒失败"));
+
+  // 系统通知点击后：切到回顾模式并定位到这一套内容所属的那一天
+  window.noticeNote.onDayReminderOpen((dayKey) => {
+    if (!dayKey) {
+      return;
+    }
+    activateReviewBrowser();
+    selectReviewDay(dayKey);
+  });
+
+  // 天级提醒 / 回顾历史有变动时，同步刷新回顾面板与日历
+  window.noticeNote.onDayRemindersChanged((data) => {
+    appSettings = {
+      ...(appSettings || {}),
+      dayReminders: Array.isArray(data?.dayReminders) ? data.dayReminders : [],
+      dayReviewLog: Array.isArray(data?.dayReviewLog) ? data.dayReviewLog : []
+    };
+    renderNoteList();
+  });
+
+  setBootProgress(1);
+  dismissBootScreen();
 }
 
 
@@ -310,10 +374,10 @@ newNoteButton.addEventListener("click", () => {
   newMenuDropdown.classList.toggle("is-open");
 });
 refreshButton.addEventListener("click", () => {
-  refreshNotes().catch(console.error);
+  refreshNotes().catch((error) => window.showErrorToast?.(error, "操作失败"));
 });
 settingsButton.addEventListener("click", () => {
-  openSettings().catch(console.error);
+  openSettings().catch((error) => window.showErrorToast?.(error, "操作失败"));
 });
 closeSettingsDialogButton.addEventListener("click", () => {
   settingsDialog.close();
@@ -392,7 +456,7 @@ dailyReviewEnabledInput.addEventListener("change", () => {
       appSettings = settings;
       renderSettings();
     })
-    .catch(console.error)
+    .catch((error) => window.showErrorToast?.(error, "操作失败"))
     .finally(() => {
       dailyReviewEnabledInput.disabled = false;
     });
@@ -430,7 +494,7 @@ resetStorageButton.addEventListener("click", async () => {
   }
 });
 showAllFilesButton.addEventListener("click", () => {
-  openFolderWithAccessCheck(null).catch(console.error);
+  openFolderWithAccessCheck(null).catch((error) => window.showErrorToast?.(error, "操作失败"));
 });
 showReminderCalendarButton.addEventListener("click", () => {
   setSidebarViewMode("calendar");
@@ -457,11 +521,11 @@ newDraftOption.addEventListener("click", () => {
 });
 newNoteOption.addEventListener("click", () => {
   newMenuDropdown.classList.remove("is-open");
-  createNote().catch(console.error);
+  createNote().catch((error) => window.showErrorToast?.(error, "操作失败"));
 });
 newFolderOption.addEventListener("click", () => {
   newMenuDropdown.classList.remove("is-open");
-  createFolder().catch(console.error);
+  createFolder().catch((error) => window.showErrorToast?.(error, "操作失败"));
 });
 document.addEventListener("click", (e) => {
   if (!e.target.closest(".new-menu")) {
@@ -475,24 +539,7 @@ document.addEventListener("click", (e) => {
       ?.setAttribute("aria-expanded", "false");
   }
 });
-addReminderButton.addEventListener("click", () => {
-  addReminder().catch(console.error);
-});
-openReminderConfigButton.addEventListener("click", () => {
-  renderReminders();
-  reminderDialog.showModal();
-});
-closeReminderDialogButton.addEventListener("click", () => {
-  reminderDialog.close();
-});
-autoReminderButton.addEventListener("click", () => {
-  autoReminderButton.disabled = true;
-  addAutoReminders()
-    .catch(console.error)
-    .finally(() => {
-      autoReminderButton.disabled = false;
-    });
-});
+// 旧版「按单篇笔记提醒」配置弹窗已移除，提醒统一在回顾面板按天设置。
 deleteNoteButton.addEventListener("click", () => {
   deleteActiveNote().catch((error) => {
     console.error("删除笔记失败:", error);
@@ -569,7 +616,10 @@ noteSearchInput?.addEventListener("keydown", (event) => {
     renderNoteList();
   }
 });
-viewerSearchInput.addEventListener("input", updateViewerSearch);
+viewerSearchInput.addEventListener("input", () => {
+  // 大 PDF 文本层懒加载：输入关键词时先补齐未建页，再跑全文高亮。
+  Promise.resolve(ensureAllPdfTextLayers()).then(updateViewerSearch);
+});
 viewerSearchInput.addEventListener("keydown", (event) => {
   if (event.key === "Enter") {
     event.preventDefault();
@@ -583,10 +633,10 @@ viewerSearchPrevious.addEventListener("click", () => moveViewerSearch(-1));
 viewerSearchNext.addEventListener("click", () => moveViewerSearch(1));
 viewerSearchClose.addEventListener("click", closeViewerSearch);
 deferDailyReviewButton.addEventListener("click", () => {
-  handleActiveDailyReview("defer").catch(console.error);
+  handleActiveDailyReview("defer").catch((error) => window.showErrorToast?.(error, "操作失败"));
 });
 completeDailyReviewButton.addEventListener("click", () => {
-  handleActiveDailyReview("complete").catch(console.error);
+  handleActiveDailyReview("complete").catch((error) => window.showErrorToast?.(error, "操作失败"));
 });
 document.addEventListener("keydown", (event) => {
   // 回顾浏览器激活时，左右键按天翻页
@@ -635,17 +685,19 @@ showSidebarButton.addEventListener("click", () => {
   setSidebarCollapsed(false);
 });
 // Right-click context menu on note list
-
-
-
-
-
-
-
-
 noteList.addEventListener("contextmenu", (e) => {
   e.preventDefault();
-  showContextMenu(e.clientX, e.clientY, getContextMenuEntry(e.target));
+  const entry = getContextMenuEntry(e.target);
+  if (entry) {
+    showContextMenu(e.clientX, e.clientY, entry);
+    return;
+  }
+  // 空白区的菜单只有「在当前文件夹里新建」。
+  // 日历是格子、回顾是聚合视图，都没有这个落点，点了会建到别处去，所以不弹。
+  if (sidebarViewMode !== "all") {
+    return;
+  }
+  showContextMenu(e.clientX, e.clientY, null);
 });
 
 workspaceTabsRoot.addEventListener("contextmenu", (e) => {
@@ -915,10 +967,81 @@ discardDraftButton?.addEventListener("click", () => {
 
 window.addEventListener("beforeunload", () => {
   persistActiveNoteRecovery();
-  saveDraftsToStorage();
+  flushDraftsToStorage();
 });
 
-window.noticeNoteFlushForQuit = flushPendingSave;
+// 主进程退出前的三段协议：问有多少未保存 -> 用户确认后保存 -> 收尾 flush。
+// 以前托盘退出只等在途请求，dirty 笔记既不写盘也不提示，等于静默丢内容。
+function getDirtyNotesForQuit() {
+  const dirtyNotes = [];
+  for (const [noteId, state] of noteSaveStates) {
+    if (!state.dirty && !state.inflight && state.status !== "recovered") {
+      continue;
+    }
+    const note = notes.find((item) => item.id === noteId);
+    if (note) {
+      dirtyNotes.push(note);
+    }
+  }
+  return dirtyNotes;
+}
+
+window.noticeNoteGetDirtySummary = () => {
+  const dirtyNotes = getDirtyNotesForQuit();
+  const protectedDrafts = Array.from(draftsMap.values()).filter(
+    isDraftInProtectedFolder,
+  );
+  return {
+    count: dirtyNotes.length + protectedDrafts.length,
+    protectedCount:
+      dirtyNotes.filter(isNoteInProtectedFolder).length + protectedDrafts.length,
+    draftCount: draftsMap.size,
+  };
+};
+
+window.noticeNoteSaveAllForQuit = async () => {
+  // 当前编辑器里的正文可能还没同步进 note 对象，先补上再保存。
+  if (!activeDraftId && activeNoteId) {
+    const note = notes.find((item) => item.id === activeNoteId);
+    if (note) {
+      note.title = titleInput.value;
+      note.content = getEditorValue();
+      markNoteDirty(note);
+    }
+  }
+
+  // 密码目录草稿的正文刻意不落 localStorage，也没有自动保存入口，
+  // 必须拦住「保存并退出」，让用户先手动保存，不能假装保存成功。
+  const protectedDrafts = Array.from(draftsMap.values()).filter(
+    isDraftInProtectedFolder,
+  );
+  if (protectedDrafts.length > 0) {
+    window.showToast?.(
+      "密码目录中的草稿无法自动保存，请先手动保存为笔记再退出",
+      "error",
+      8000,
+    );
+    return false;
+  }
+
+  const results = await Promise.allSettled(
+    getDirtyNotesForQuit().map((note) => requestNoteSave(note.id)),
+  );
+  const failed = results.find((result) => result.status === "rejected");
+  if (failed) {
+    window.showErrorToast?.(failed.reason, "有笔记保存失败");
+    return false;
+  }
+  flushDraftsToStorage();
+  flushNoteRecovery();
+  return true;
+};
+
+window.noticeNoteFlushForQuit = async () => {
+  flushDraftsToStorage();
+  flushNoteRecovery();
+  await flushPendingSave();
+};
 
 cancelDraftButton?.addEventListener("click", () => {
   draftSaveDialog.close();
@@ -981,5 +1104,7 @@ unsavedNoteDialog?.addEventListener("cancel", (event) => {
 });
 
 applyInterfaceTheme(getInterfaceTheme());
-boot().catch(console.error);
+boot()
+  .catch((error) => window.showErrorToast?.(error, "操作失败"))
+  .finally(dismissBootScreen);
 

@@ -14,6 +14,22 @@ module.exports = function registerFoldersIpc(ctx) {
     const folder = ctx.folders.find(f => f.id === folderId);
     if (!folder) throw new Error('文件夹不存在');
     ctx.assertFolderAccessible(folderId);
+    // 回顾目录被移走后就不在笔记根目录下，回顾体系会静默失效（R10）。
+    ctx.assertMutableFolder(folder, '移动');
+    const movingIds = new Set([folderId]);
+    let foundDescendant = true;
+    while (foundDescendant) {
+      foundDescendant = false;
+      for (const item of ctx.folders) {
+        if (item.parentId && movingIds.has(item.parentId) && !movingIds.has(item.id)) {
+          movingIds.add(item.id);
+          foundDescendant = true;
+        }
+      }
+    }
+    if (ctx.folders.some((item) => movingIds.has(item.id) && item.isReviewFolder)) {
+      throw new Error('不能移动包含回顾目录的文件夹，否则其中的内容会脱离回顾体系');
+    }
 
     const normalizedTargetFolderId = targetFolderId || null;
     ctx.assertFolderTargetAccessible(normalizedTargetFolderId);
@@ -43,22 +59,34 @@ module.exports = function registerFoldersIpc(ctx) {
 
     const previousParentId = folder.parentId;
     const previousNoteMetadata = structuredClone(ctx.noteMetadata);
+    const previousResourceMetadata = structuredClone(ctx.resourceMetadata);
+    // ctx.noteFileMap 现在有 setter，回滚赋值不再被静默忽略。
     const previousNoteFileMap = new Map(ctx.noteFileMap);
     await fs.rename(oldPath, newPath);
     try {
       ctx.moveNoteMetadataTree(oldPath, newPath);
+      ctx.moveResourceMetadataTree(
+        ctx.resourceMetadata,
+        ctx.getNoteMetadataKey(oldPath),
+        ctx.getNoteMetadataKey(newPath)
+      );
       folder.parentId = normalizedTargetFolderId;
-      await ctx.saveNoteMetadata();
-      await ctx.saveFolderMetadata();
+      await Promise.all([
+        ctx.saveNoteMetadata(),
+        ctx.saveResourceMetadata(),
+        ctx.saveFolderMetadata()
+      ]);
     } catch (error) {
       await fs.rename(newPath, oldPath).catch((rollbackError) => {
         console.error('回滚移动文件夹失败:', rollbackError);
       });
       folder.parentId = previousParentId;
       ctx.noteMetadata = previousNoteMetadata;
+      ctx.resourceMetadata = previousResourceMetadata;
       ctx.noteFileMap = previousNoteFileMap;
       await Promise.allSettled([
         ctx.saveNoteMetadata(),
+        ctx.saveResourceMetadata(),
         ctx.saveFolderMetadata()
       ]);
       throw error;

@@ -2,28 +2,13 @@
 // 注意：本文件为经典脚本，顶层 const/let 处于页面全局词法环境，跨文件共享；请勿重复声明同名标识符。
 const noteList = document.querySelector("#noteList");
 const titleInput = document.querySelector("#titleInput");
-const reminderInput = document.querySelector("#reminderInput");
-const reminderList = document.querySelector("#reminderList");
 const editorRoot = document.querySelector("#editorRoot");
 const contentShell = document.querySelector("#contentShell");
 const saveButton = document.querySelector("#saveButton");
 const saveStatus = document.querySelector("#saveStatus");
 const newNoteButton = document.querySelector("#newNoteButton");
-const addReminderButton = document.querySelector("#addReminderButton");
 const deleteNoteButton = document.querySelector("#deleteNoteButton");
-const autoReminderButton = document.querySelector("#autoReminderButton");
-const reminderDialog = document.querySelector("#reminderDialog");
-const openReminderConfigButton = document.querySelector(
-  "#openReminderConfigButton",
-);
-const closeReminderDialogButton = document.querySelector(
-  "#closeReminderDialogButton",
-);
-const reminderButtonCount = document.querySelector("#reminderButtonCount");
-const reminderDialogCount = document.querySelector("#reminderDialogCount");
-const reminderDialogNoteTitle = document.querySelector(
-  "#reminderDialogNoteTitle",
-);
+const appToastHost = document.querySelector("#appToastHost");
 const sidebar = document.querySelector("#sidebar");
 const toggleSidebarButton = document.querySelector("#toggleSidebarButton");
 const showSidebarButton = document.querySelector("#showSidebarButton");
