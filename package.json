@@ -1,6 +1,6 @@
 {
   "name": "notice-note",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "本地优先的 Markdown 笔记工具：按内容天归档、天级复习提醒与每日回顾",
   "main": "notice_note_client_pc/src/main.js",
   "scripts": {
