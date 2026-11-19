@@ -107,8 +107,11 @@ test('P1-8 自动排期节奏走偏移表；复习日不早于今天', () => {
 test('P1-9 离线包导入全量预校验 + 单事务写入', () => {
   const source = app('app.js');
   assert.match(source, /planMobileAssets\(snapshot, file\.size, assetOffset\)/);
-  assert.match(source, /transaction\(\[ASSET_STORE, SNAPSHOT_STORE\], 'readwrite'\)/);
-  assert.match(source, /transaction\.onabort/);
+  // 事务执行统一收敛到 store.js（同步落库也走同一入口）：跨 store 单事务 + 中止回滚保障不变
+  assert.match(source, /NoticeNoteStore\.runAssetTransaction\(\{/);
+  const store = app('store.js');
+  assert.match(store, /transaction\(\[ASSET_STORE, SNAPSHOT_STORE\], 'readwrite'\)/);
+  assert.match(store, /transaction\.onabort/);
   assert.doesNotMatch(source, /window\.open\(/);
 });
 
@@ -316,4 +319,309 @@ test('P2-27 主题图已纳入版本控制', () => {
     assert.ok(fs.existsSync(path.join(PC, `assets/themes/${name}`)));
   }
   assert.match(read('.gitignore'), /\.dsh-vision-router\//);
+});
+
+test('记忆卡模块：SM-2 调度与 .memory_card 落盘接线', () => {
+  const main = pc('main.js');
+  const preload = pc('preload.js');
+  const memoryIpc = pc('ipc/memory-cards.js');
+  const sidebar = pc('renderer/sidebar.js');
+  const dom = pc('renderer/dom.js');
+  const memory = pc('renderer/memory.js');
+  const index = pc('index.html');
+
+  // 数据目录必须挂在笔记库下（源码根目录打包后是只读 asar，写不进去）
+  assert.match(main, /function getMemoryCardDirPath\(\) \{\s*\n\s*return path\.join\(getNotesPath\(\), MEMORY_CARD_DIR_NAME\);/);
+  assert.match(main, /path\.join\(getMemoryCardDirPath\(\), MEMORY_CARD_FILE_NAME\)/);
+  assert.match(main, /path\.join\(getMemoryCardDirPath\(\), MEMORY_SETTINGS_FILE_NAME\)/);
+
+  // 启动与切换笔记库都要重新读；切库失败要整体回滚
+  assert.match(main, /await loadNotes\(\);\s*\n\s*\/\/ 记忆卡跟着笔记库走[\s\S]{0,140}await loadMemoryCards\(\);/);
+  assert.match(main, /await loadNotes\(\);\s*\n\s*await loadMemoryCards\(\);/);
+  assert.match(main, /memoryCards = previousState\.memoryCards;/);
+  assert.match(main, /memorySettings = previousState\.memorySettings;/);
+  // 切库后必须广播新快照，否则界面停在旧库的卡片上
+  assert.match(main, /function sendMemoryChanged\(\)/);
+  assert.match(main, /await loadMemoryCards\(\);\s*\n\s*await loadMemoryAnswers\(\);\s*\n\s*sendMemoryChanged\(\);/);
+  assert.match(preload, /onMemoryChanged: \(callback\) => \{/);
+
+  // IPC 链路：主进程 handler → preload 暴露 → 渲染层调用
+  assert.match(memoryIpc, /ipcMain\.handle\('memory:list', async \(\) => \{/);
+  assert.match(memoryIpc, /ipcMain\.handle\('memory:review', ctx\.reviewMemoryCard\)/);
+  assert.match(memoryIpc, /ipcMain\.handle\('memory:settings:update', ctx\.updateMemoryCardSettings\)/);
+  assert.match(preload, /reviewMemoryCard: \(payload\) => ipcRenderer\.invoke\('memory:review', payload\)/);
+  assert.match(preload, /updateMemorySettings: \(settings\) => ipcRenderer\.invoke\('memory:settings:update', settings\)/);
+  assert.match(main, /registerMemoryIpc\(ipcContext\);/);
+
+  // 导航入口与侧边栏分发
+  assert.match(index, /id="showMemoryButton"/);
+  assert.match(index, /renderer\/memory\.js/);
+  assert.match(dom, /const memoryView = document\.querySelector\("#memoryView"\);/);
+  assert.match(sidebar, /\["calendar", "reminder", "memory"\]\.includes\(mode\)/);
+  assert.match(sidebar, /if \(sidebarViewMode === "memory"\) \{\s*\n\s*renderMemorySidebar\(\);/);
+
+  // 修改/删除入口挂在卡片信息行上：编辑按钮进编辑器，删除按钮在编辑器里。
+  assert.match(index, /id="memoryEditCardButton"/);
+  assert.match(dom, /const memoryEditCardButton = document\.querySelector\("#memoryEditCardButton"\);/);
+  assert.match(memory, /memoryEditCardButton\?\.addEventListener\("click", \(\) => \{/);
+  assert.match(memory, /memoryDeleteCardButton\?\.addEventListener\("click", deleteMemoryCardFromEditor\);/);
+
+  // 切窗口回来不能清空正在编辑的草稿：只有显式打开编辑器才回填表单
+  assert.match(memory, /memoryEditorSession \+= 1;/);
+  assert.match(memory, /if \(memoryEditorRenderedSession === memoryEditorSession\) \{\s*\n\s*return;/);
+  assert.match(
+    memory,
+    /if \(memoryViewMode === "study"\) \{\s*\n\s*renderMemoryView\(\);\s*\n\s*\} else \{\s*\n\s*renderMemoryStats\(\);/
+  );
+
+  // 侧边栏选中态跟着卡面走：只切 class，不重建列表（否则滚动位置会跳）
+  assert.match(memory, /item\.dataset\.memoryCardId = card\.id;/);
+  assert.match(memory, /function syncMemorySidebarActive\(\)/);
+  assert.match(memory, /item\.classList\.toggle\("is-active", item\.dataset\.memoryCardId === memoryCurrentCardId\);/);
+});
+
+test('记忆卡类型：多类型落盘、按类型学习、筛选由主进程统一持有', () => {
+  const main = pc('main.js');
+  const preload = pc('preload.js');
+  const memoryIpc = pc('ipc/memory-cards.js');
+  const store = pc('lib/memory-card-store.js');
+  const types = pc('lib/memory-types.js');
+  const index = pc('index.html');
+  const memory = pc('renderer/memory.js');
+
+  // 类型目录从卡片的 types 汇总，没有第二份需要同步的数据
+  assert.match(types, /function collectCardTypes\(cards\)/);
+  assert.match(types, /function normalizeCardTypes\(value\)/);
+  assert.match(main, /const \{ normalizeCardTypes, normalizeTypeName \} = require\('\.\/lib\/memory-types'\);/);
+
+  // 快照按类型筛选，目录与 allTotal 始终基于全部卡片
+  assert.match(store, /options && options\.type/);
+  assert.match(store, /const list = type \? all\.filter\(\(card\) => hasCardType\(card, type\)\) : all;/);
+  assert.match(store, /types: catalog,/);
+  assert.match(store, /allTotal: all\.length/);
+
+  // 筛选放主进程：切库广播走的也是同一份口径
+  assert.match(main, /let memoryTypeFilter = null;/);
+  assert.match(main, /memoryTypeFilter = snapshot\.type;/);
+  assert.match(main, /memoryTypeFilter = null;\s*\n  return memoryCards;/);
+  assert.match(memoryIpc, /ipcMain\.handle\('memory:filter', ctx\.filterMemoryCards\)/);
+  assert.match(preload, /filterMemoryCards: \(payload\) => ipcRenderer\.invoke\('memory:filter', payload\)/);
+
+  // 界面：学习页切换条 + 编辑器类型输入
+  assert.match(index, /id="memoryTypeBar"/);
+  assert.match(index, /id="memoryTypeInput"/);
+  assert.match(memory, /async function setMemoryTypeFilter\(typeName\)/);
+  assert.match(memory, /window\.noticeNote\.filterMemoryCards\(\{ type: typeName \|\| null \}\)/);
+  assert.match(memory, /const types = \[\.\.\.memoryEditorTypes\];/);
+  assert.match(memory, /updateMemoryCard\(\{ id: memoryEditingCardId, front, back, types \}\)/);
+});
+
+test('记忆卡天级间隔按本地日切，不是 24 小时整', () => {
+  const scheduler = pc('lib/sm2-scheduler.js');
+  const memory = pc('renderer/memory.js');
+
+  // 天数统一从「当天 00:00」往后推，逾期天数按整天算。
+  assert.match(scheduler, /function localDayIndex\(time\) \{\s*\n\s*const date = new Date\(time\);\s*\n\s*return Date\.UTC\(/);
+  assert.match(scheduler, /function dueFromDays\(now, days\) \{\s*\n\s*const date = new Date\(now\);\s*\n\s*date\.setHours\(0, 0, 0, 0\);/);
+  assert.match(scheduler, /function lateDaysSince\(dueAt, now\)/);
+  assert.match(scheduler, /const lateDays = lateDaysSince\(current\.dueAt, now\);/);
+
+  // 渲染层快照带日期戳：跨天后必须重新取，否则早上还显示昨晚的待复习数。
+  assert.match(memory, /let memorySnapshotDay = "";/);
+  assert.match(memory, /const dayChanged = memorySnapshotDay !== currentMemoryDayStamp\(\);/);
+  assert.match(memory, /await ensureMemorySnapshot\(true\);/);
+});
+
+test('记忆卡界面配色跟主题走，不写死暖色 --nn-* 令牌', () => {
+  const css = pc('styles.css');
+  const start = css.indexOf('记忆卡（SM-2 间隔重复）');
+  assert.ok(start > 0, '找不到记忆卡样式段');
+  const block = css.slice(start);
+
+  // 深色/冷色主题的 --nn-* 不会跟着变，混用会让整块发黄。
+  assert.match(block, /--mv-bg: var\(--theme-canvas, var\(--nn-canvas\)\)/);
+  assert.match(block, /--mv-surface: var\(--theme-surface, var\(--nn-surface-100\)\)/);
+  assert.match(block, /--mv-border: var\(--theme-border, var\(--nn-line-300\)\)/);
+  assert.match(block, /\.memory-view \{[\s\S]{0,200}background: var\(--mv-bg\)/);
+  assert.match(block, /\.memory-card-stage \{[\s\S]{0,220}background: var\(--mv-surface\)/);
+
+  // 卡片高度随内容，不再固定撑满（min-height 会让单行问题变成大白框）。
+  const stageRule = block.match(/\.memory-card-stage \{[^}]*\}/);
+  assert.ok(stageRule, '找不到 .memory-card-stage 规则');
+  assert.doesNotMatch(stageRule[0], /min-height/);
+  assert.match(stageRule[0], /max-height/);
+});
+
+test('记忆卡长答案靠 margin:auto 居中，不会被信息行盖住', () => {
+  const css = pc('styles.css');
+  const block = css.slice(css.indexOf('记忆卡（SM-2 间隔重复）'));
+  const bodyRule = block.match(/\.memory-card-body \{[^}]*\}/);
+  assert.ok(bodyRule, '找不到 .memory-card-body 规则');
+
+  // justify-content:center + overflow:auto 会让内容向两端等量溢出，
+  // 顶部跑到信息行后面且滚不到 —— 长答案被「新卡 · 未开始」压住就是这个。
+  assert.doesNotMatch(bodyRule[0], /justify-content/);
+  assert.match(block, /\.memory-card-inner \{[\s\S]{0,220}margin: auto 0;/);
+  assert.match(pc('index.html'), /<div class="memory-card-inner">/);
+});
+
+test('记忆卡 AI 判定：作答 → 模型 → 落盘调度的接线', () => {
+  const main = pc('main.js');
+  const preload = pc('preload.js');
+  const memoryIpc = pc('ipc/memory-cards.js');
+  const memory = pc('renderer/memory.js');
+  const index = pc('index.html');
+  const dom = pc('renderer/dom.js');
+
+  // key 只在主进程：渲染层只发起 invoke，不发网络请求、不碰 apiKey
+  assert.match(memoryIpc, /ipcMain\.handle\('memory:judge', ctx\.judgeMemoryAnswer\)/);
+  assert.match(preload, /judgeMemoryAnswer: \(payload\) => ipcRenderer\.invoke\('memory:judge', payload\)/);
+  assert.match(memory, /window\.noticeNote\.judgeMemoryAnswer\(\{ cardId, answer \}\)/);
+  assert.doesNotMatch(memory, /apiKey/, '渲染层不该出现 apiKey');
+  assert.doesNotMatch(memory, /fetch\(/, '渲染层不该自己发请求');
+
+  // 判定完直接按档位调度，不再等用户点四档
+  assert.match(main, /const next = scheduleMemoryCard\(cardBefore, judgment\.rating, memorySettings, Date\.now\(\)\);/);
+  // 判定必须带上前几次作答作为背景
+  assert.match(main, /const history = listCardAnswers\(memoryAnswers, cardId, 3\);/);
+
+  // 改判要用评分前的卡片状态重算，否则连点两次会把间隔乘两次
+  assert.match(main, /let lastMemoryJudge = null;/);
+  assert.match(main, /lastMemoryJudge = \{ cardId, cardBefore, entryId \};/);
+  assert.match(main, /const base = context \? context\.cardBefore : card;/);
+
+  // 历史跟卡片同目录，删卡片要连带清理孤儿条目
+  assert.match(main, /function getMemoryAnswerLogPath\(\) \{\s*\n\s*return path\.join\(getMemoryCardDirPath\(\), ANSWER_LOG_FILE_NAME\);/);
+  assert.match(main, /pruneAnswersForCards\(memoryAnswers, new Set\(memoryCards\.map\(\(card\) => card\.id\)\)\)/);
+
+  // 界面三块：作答区、判定结果、历史
+  for (const id of [
+    'memoryAnswerZone',
+    'memoryAnswerInput',
+    'memoryAnswerSubmitButton',
+    'memoryJudgeResult',
+    'memoryJudgeOverrideButton',
+    'memoryAnswerHistory'
+  ]) {
+    assert.match(index, new RegExp(`id="${id}"`), `index.html 缺 #${id}`);
+  }
+  assert.match(dom, /const memoryAnswerInput = document\.querySelector\("#memoryAnswerInput"\);/);
+
+  // 草稿按卡片隔离：后台重渲染不能把正在敲的内容冲掉
+  assert.match(memory, /if \(memoryAnswerDraftCardId !== card\.id\) \{/);
+  // 中文输入法选词回车不能当成提交
+  assert.match(memory, /if \(event\.isComposing \|\| event\.keyCode === 229\) \{/);
+});
+
+test('记忆卡 AI 判定：没配 Key 或判定失败都要退回手动四档', () => {
+  const memory = pc('renderer/memory.js');
+  // 四档只在三种情况下露出：未配置 AI、判定失败、主动改判
+  assert.match(
+    memory,
+    /const showRatingBar = memoryRevealed\s*\n\s*&& \(!aiReady \|\| memoryJudgeState === "error" \|\| memoryJudgeState === "override"\);/
+  );
+  assert.match(memory, /function isMemoryAiReady\(\) \{\s*\n\s*return Boolean\(memorySnapshot\?\.aiJudge\?\.configured\);/);
+  // 判定失败时保留已敲的答案，并把四档放出来
+  assert.match(memory, /memoryJudgeState = "error";/);
+  // 数字键只在四档真的可见时生效
+  assert.match(memory, /if \(!memoryRevealed \|\| !memoryRatingBar \|\| memoryRatingBar\.hidden\) \{/);
+});
+
+test('作答必须发生在看不见答案的时候：输入框只在问题面', () => {
+  const memory = pc('renderer/memory.js');
+
+  // 输入区的可见条件必须带 !memoryRevealed：翻面后还能作答，等于边看答案边回忆
+  assert.match(memory, /const showAnswerInput = aiReady && !showResult && !memoryRevealed;/);
+  // 配了 AI 就不给「显示答案」按钮，答案只能由判定结果带出来
+  assert.match(memory, /memoryRevealButton\.hidden = memoryRevealed \|\| aiReady;/);
+  // 判定成功要翻面（否则看不到正确答案），失败也要翻面（否则改判无从对照）
+  assert.match(memory, /memoryJudgeState = "result";[\s\S]{0,400}memoryRevealed = true;/);
+  assert.match(memory, /memoryJudgeState = "error";[\s\S]{0,600}memoryRevealed = true;/);
+  // 历史里存着上次的作答原文，翻面前不能露出来
+  assert.match(memory, /memoryAnswerHistory\.hidden = !memoryRevealed \|\| entries\.length === 0;/);
+  // 空格不再是「翻答案」：配了 AI 时把光标送进作答框（判定中也不许翻）
+  assert.match(
+    memory,
+    /if \(isMemoryAiReady\(\) && !memoryRevealed && memoryJudgeState === "idle"[\s\S]{0,140}memoryAnswerInput\?\.focus\(\);/
+  );
+  // 每张新卡自动聚焦输入框，全程不用摸鼠标
+  assert.match(memory, /function focusMemoryAnswerInput\(\) \{/);
+  for (const fn of ['openMemoryView', 'selectMemoryCard', 'goToNextMemoryCard']) {
+    assert.match(
+      memory,
+      new RegExp(`function ${fn}\\([^)]*\\)[\\s\\S]{0,700}focusMemoryAnswerInput\\(\\);`),
+      `${fn} 之后要把光标送回作答框`
+    );
+  }
+});
+
+test('新增的作答区与历史样式同样跟主题走，不写死颜色', () => {
+  const css = pc('styles.css');
+  const start = css.indexOf('作答区：AI 判定的入口');
+  assert.ok(start > 0, '找不到作答区样式段');
+  // 只截到下一段（新建 / 编辑卡片）为止，后面的侧边栏样式是既有代码。
+  const end = css.indexOf('新建 / 编辑卡片', start);
+  const block = css.slice(start, end > start ? end : undefined);
+  // 只查「颜色值」：十六进制、rgb()、hsl()。border: none 这类不带颜色的声明不算。
+  assert.doesNotMatch(block, /#[0-9a-fA-F]{3,8}\b/, '作答区/历史样式里出现了硬编码十六进制颜色');
+  assert.doesNotMatch(block, /\brgba?\(/, '作答区/历史样式里出现了硬编码 rgb()');
+  assert.doesNotMatch(block, /\bhsla?\(/, '作答区/历史样式里出现了硬编码 hsl()');
+  // 关键元素至少要用到主题令牌
+  assert.match(block, /\.memory-answer-input \{[\s\S]{0,220}border: 1px solid var\(--mv-border\)/);
+  assert.match(block, /\.memory-judge-badge \{[\s\S]{0,240}background: var\(--mv-surface\)/);
+});
+
+test('手机端 hidden 兜底：自定义 display 的面板/遮罩必须能被 hidden 隐藏', () => {
+  const css = app('styles.css');
+  assert.match(css, /\[hidden\]\s*\{\s*display: none !important;\s*\}/);
+});
+
+test('手机端镜像 PC 可见性：浏览藏回顾文件夹，回顾/日历只取复习文件', () => {
+  const main = pc('main.js');
+  // 文件夹摘要必须带 isReviewFolder，手机端才能隐藏 .study_notice（PC 侧边栏同款规则）
+  const folderSummary = main.slice(
+    main.indexOf('function createMobileFolderSummary('),
+    main.indexOf('async function createMobileExportSnapshot('),
+  );
+  assert.match(folderSummary, /isReviewFolder: Boolean\(folder\.isReviewFolder\)/);
+  // 笔记/资源摘要都要带 isReviewFile，回顾与日历候选才能只认复习文件
+  const noteSummary = main.slice(
+    main.indexOf('function createMobileNoteSummary('),
+    main.indexOf('function createMobileFolderSummary('),
+  );
+  assert.match(noteSummary, /isReviewFile: Boolean\(note\.isReviewFile\)/);
+  assert.match(main, /isReviewFile: Boolean\(file\.isReviewFile\)/, '资源摘要缺 isReviewFile');
+
+  const appSource = app('app.js');
+  assert.match(appSource, /function isReviewBrowseFolder\(/, '需要沿祖先链判断回顾目录');
+  const childFolders = appSource.slice(
+    appSource.indexOf('function getChildFolders('),
+    appSource.indexOf('function getFolderById('),
+  );
+  assert.match(childFolders, /!isReviewBrowseFolder\(folder\.id\)/, '浏览树要藏回顾目录及子目录');
+  const filteredNotes = appSource.slice(
+    appSource.indexOf('function getFilteredNotes('),
+    appSource.indexOf('function getFilteredResources('),
+  );
+  assert.match(filteredNotes, /note\.isReviewFile/, '浏览/搜索不展示复习笔记');
+  const filteredResources = appSource.slice(
+    appSource.indexOf('function getFilteredResources('),
+    appSource.indexOf('function getChildFolders('),
+  );
+  assert.match(filteredResources, /file\.isReviewFile/, '浏览/搜索不展示复习资料');
+
+  // 回顾候选镜像 getDailyReviewCandidates：只收 isReviewFile
+  const review = app('review.js');
+  const candidates = review.slice(
+    review.indexOf('function rvGetCandidates('),
+    review.indexOf('function rvGetSortedQueue('),
+  );
+  assert.match(candidates, /!item\.isReviewFile/, '回顾不能拿全库笔记当候选');
+  // 日历内容天镜像 getReviewDayContent：同样只收 isReviewFile
+  const calendar = app('calendar.js');
+  const dayMap = calendar.slice(
+    calendar.indexOf('function calGetDayMap('),
+    calendar.indexOf('function calRender('),
+  );
+  assert.match(dayMap, /!item\.isReviewFile/, '日历内容天不能拿全库笔记');
 });

@@ -828,3 +828,696 @@ body.image-lightbox-open {
     padding: 16px;
   }
 }
+
+/* ---- 底部 Tab 导航 ---- */
+.app-shell {
+  padding-bottom: calc(84px + env(safe-area-inset-bottom));
+}
+
+.tab-bar {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 40;
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 4px;
+  padding: 8px 12px calc(8px + env(safe-area-inset-bottom));
+  background: rgba(255, 250, 243, 0.94);
+  backdrop-filter: blur(14px);
+  border-top: 1px solid var(--line);
+}
+
+.tab-item {
+  display: grid;
+  justify-items: center;
+  gap: 2px;
+  padding: 6px 0;
+  border: 0;
+  border-radius: 12px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.tab-item .tab-icon {
+  font-size: 18px;
+  line-height: 1;
+}
+
+.tab-item.is-active {
+  background: rgba(245, 197, 107, 0.28);
+  color: var(--accent);
+}
+
+.tab-panel {
+  display: grid;
+  gap: 14px;
+}
+
+/* ---- 通用动作按钮 ---- */
+.primary-action {
+  border: 0;
+  border-radius: 12px;
+  padding: 10px 16px;
+  background: var(--accent);
+  color: #fffaf3;
+  font-weight: 700;
+  font-size: 14px;
+}
+
+.primary-action:disabled {
+  opacity: 0.45;
+}
+
+.secondary-action {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 9px 14px;
+  background: var(--paper);
+  color: var(--accent);
+  font-weight: 600;
+  font-size: 13px;
+}
+
+/* ---- 日历 ---- */
+.cal-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.cal-title {
+  flex: 1;
+  text-align: center;
+  font-size: 17px;
+}
+
+.cal-nav,
+.cal-today {
+  border: 1px solid var(--line);
+  background: var(--paper);
+  border-radius: 10px;
+  min-width: 38px;
+  height: 36px;
+  color: var(--accent);
+  font-size: 15px;
+}
+
+.cal-today {
+  padding: 0 12px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.cal-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 4px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--paper);
+}
+
+.cal-week {
+  text-align: center;
+  font-size: 12px;
+  color: var(--muted);
+  padding: 4px 0;
+}
+
+.cal-day {
+  position: relative;
+  display: grid;
+  justify-items: center;
+  align-content: center;
+  gap: 2px;
+  aspect-ratio: 1;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--text);
+  font-size: 13px;
+}
+
+.cal-day.is-blank {
+  visibility: hidden;
+}
+
+.cal-day.has-files {
+  background: rgba(245, 197, 107, 0.18);
+  font-weight: 700;
+}
+
+.cal-day.has-files i {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+.cal-day.is-reminder::after {
+  content: '';
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  border: 2px solid #b9d8b0;
+}
+
+.cal-day.is-viewed span::after {
+  content: ' ✓';
+  color: #6f9a65;
+  font-size: 10px;
+}
+
+.cal-day.is-today {
+  border-color: var(--accent);
+}
+
+.cal-day.is-selected {
+  background: var(--accent);
+  color: #fffaf3;
+}
+
+.cal-day.is-selected.has-files i {
+  background: #fffaf3;
+}
+
+.cal-legend {
+  margin: 0;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.cal-day-panel {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--paper);
+}
+
+.cal-day-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.cal-day-heading h2 {
+  font-size: 17px;
+}
+
+.cal-viewed-badge {
+  font-size: 12px;
+  color: #6f9a65;
+  font-weight: 600;
+}
+
+.cal-reminders {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.cal-reminder {
+  font-size: 12px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: rgba(185, 216, 176, 0.35);
+  color: var(--accent);
+}
+
+.cal-reminder.is-done {
+  opacity: 0.6;
+  text-decoration: line-through;
+}
+
+.cal-day-count,
+.cal-day-empty {
+  margin: 0;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.cal-file-list {
+  margin: 0;
+}
+
+.cal-day-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.cal-day-hint {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+/* ---- 回顾 ---- */
+.rv-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.rv-heading h2 {
+  font-size: 20px;
+}
+
+.rv-pending-badge {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent);
+  background: rgba(245, 197, 107, 0.3);
+  border-radius: 999px;
+  padding: 4px 10px;
+}
+
+.rv-today-card {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--paper);
+}
+
+.rv-today-label {
+  margin: 0;
+  font-weight: 700;
+  font-size: 14px;
+}
+
+.rv-weekend {
+  margin: 0;
+  font-size: 13px;
+  color: var(--muted);
+  line-height: 1.6;
+}
+
+.rv-file-list {
+  margin: 0;
+}
+
+.rv-actions {
+  display: flex;
+  gap: 10px;
+}
+
+.rv-queue-title {
+  margin: 4px 0 0;
+  font-size: 15px;
+}
+
+.rv-queue {
+  display: grid;
+  gap: 8px;
+}
+
+.rv-queue-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--paper);
+}
+
+.rv-queue-info {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.rv-queue-info strong {
+  font-size: 14px;
+}
+
+.rv-queue-info span {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.rv-hint,
+.mem-hint {
+  margin: 0;
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.6;
+}
+
+/* ---- 记忆卡 ---- */
+.mem-stats {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+}
+
+.mem-stat {
+  display: grid;
+  justify-items: center;
+  gap: 2px;
+  padding: 10px 4px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--paper);
+}
+
+.mem-stat strong {
+  font-size: 18px;
+}
+
+.mem-stat span {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.mem-type-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.mem-type-chip {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--paper);
+  color: var(--muted);
+  padding: 5px 12px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.mem-type-chip.is-active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fffaf3;
+}
+
+.mem-status {
+  margin: 0;
+  font-size: 12px;
+  color: #a05a2c;
+  min-height: 1em;
+}
+
+.mem-study {
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--paper-strong);
+  box-shadow: var(--shadow);
+}
+
+.mem-empty {
+  font-size: 14px;
+  color: var(--muted);
+  line-height: 1.7;
+}
+
+.mem-front {
+  font-size: 16px;
+}
+
+.mem-back {
+  border-top: 1px dashed var(--line);
+  padding-top: 12px;
+}
+
+.mem-types {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.mem-types span {
+  font-size: 11px;
+  color: var(--muted);
+  background: rgba(245, 197, 107, 0.22);
+  border-radius: 999px;
+  padding: 3px 9px;
+}
+
+.mem-answer-input {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 10px 12px;
+  background: #fff;
+  color: var(--text);
+  resize: vertical;
+  font-size: 14px;
+}
+
+.mem-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.mem-judging {
+  margin: 0;
+  font-size: 14px;
+  color: var(--muted);
+}
+
+.mem-judge-result {
+  display: grid;
+  gap: 4px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(185, 216, 176, 0.3);
+  font-size: 13px;
+}
+
+.mem-judge-result p {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.6;
+}
+
+.mem-judge-error {
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(224, 122, 95, 0.16);
+  color: #a05a2c;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.mem-rating-bar {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+}
+
+.mem-rating {
+  display: grid;
+  justify-items: center;
+  gap: 2px;
+  padding: 9px 4px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: var(--paper);
+  color: var(--text);
+}
+
+.mem-rating strong {
+  font-size: 13px;
+}
+
+.mem-rating span {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.mem-rating-again {
+  border-color: rgba(224, 122, 95, 0.5);
+}
+
+.mem-rating-easy {
+  border-color: rgba(111, 154, 101, 0.5);
+}
+
+.mem-rating.is-current {
+  background: rgba(245, 197, 107, 0.35);
+  border-color: var(--accent);
+}
+
+.mem-next {
+  justify-self: start;
+}
+
+.mem-list-toggle {
+  justify-self: start;
+}
+
+.mem-card-list {
+  display: grid;
+  gap: 6px;
+}
+
+.mem-card-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  text-align: left;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--paper);
+  color: var(--text);
+}
+
+.mem-card-front {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+}
+
+.mem-card-due {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.mem-card-due.is-due {
+  color: #a05a2c;
+  font-weight: 700;
+}
+
+/* ---- 设置面板 ---- */
+.msettings-dialog {
+  width: min(92vw, 460px);
+  max-height: 86vh;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  padding: 18px;
+  background: var(--paper-strong);
+  color: var(--text);
+  box-shadow: var(--shadow);
+}
+
+.msettings-dialog::backdrop {
+  background: rgba(37, 27, 19, 0.4);
+}
+
+.msettings-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.msettings-head h2 {
+  font-size: 19px;
+}
+
+.msettings-section {
+  display: grid;
+  gap: 10px;
+  padding: 14px 0;
+  border-top: 1px solid var(--line);
+}
+
+.msettings-section h3 {
+  margin: 0;
+  font-size: 15px;
+}
+
+.msettings-status {
+  margin: 0;
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.6;
+}
+
+.msettings-field {
+  display: grid;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.msettings-field input {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 9px 12px;
+  background: #fff;
+  color: var(--text);
+  font-size: 14px;
+}
+
+.msettings-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.msettings-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.msettings-note {
+  margin: 10px 0 0;
+  font-size: 11px;
+  color: var(--muted-soft);
+  line-height: 1.6;
+}
+
+/* ---- 同步进度 ---- */
+.sync-progress {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: grid;
+  place-items: center;
+  background: rgba(37, 27, 19, 0.35);
+}
+
+.sync-progress-card {
+  display: grid;
+  gap: 12px;
+  justify-items: center;
+  width: min(86vw, 360px);
+  padding: 22px;
+  border-radius: 16px;
+  background: var(--paper-strong);
+  box-shadow: var(--shadow);
+}
+
+.sync-progress-card p {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.6;
+  text-align: center;
+  word-break: break-all;
+}
+
+/* hidden 属性兜底：自定义 display（grid/flex）会覆盖 UA 的 [hidden] 默认隐藏 */
+[hidden] {
+  display: none !important;
+}

@@ -382,6 +382,12 @@ settingsButton.addEventListener("click", () => {
 closeSettingsDialogButton.addEventListener("click", () => {
   settingsDialog.close();
 });
+saveAiJudgeButton?.addEventListener("click", () => {
+  saveAiJudgeSettings().catch((error) => window.showErrorToast?.(error, "保存失败"));
+});
+testAiJudgeButton?.addEventListener("click", () => {
+  testAiJudgeConnection().catch((error) => window.showErrorToast?.(error, "测试失败"));
+});
 exportMobilePackageButton.addEventListener("click", async () => {
   exportMobilePackageButton.disabled = true;
   try {
@@ -494,14 +500,20 @@ resetStorageButton.addEventListener("click", async () => {
   }
 });
 showAllFilesButton.addEventListener("click", () => {
+  closeMemoryView();
   openFolderWithAccessCheck(null).catch((error) => window.showErrorToast?.(error, "操作失败"));
 });
 showReminderCalendarButton.addEventListener("click", () => {
+  closeMemoryView();
   setSidebarViewMode("calendar");
 });
 showDailyReviewButton.addEventListener("click", () => {
   // 回顾现在是主工作区的全宽浏览器；按钮负责打开/激活它
+  closeMemoryView();
   activateReviewBrowser();
+});
+showMemoryButton?.addEventListener("click", () => {
+  openMemoryView().catch((error) => window.showErrorToast?.(error, "打开记忆卡失败"));
 });
 
 locateCurrentFileButton.addEventListener("click", () => {

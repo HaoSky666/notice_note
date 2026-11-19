@@ -282,7 +282,16 @@ function createReviewOverviewButton(text, label, kind) {
 function renderBreadcrumb() {
   breadcrumb.innerHTML = "";
   if (noteListSearch) {
-    noteListSearch.hidden = sidebarViewMode === "calendar";
+    noteListSearch.hidden = ["calendar", "memory"].includes(sidebarViewMode);
+  }
+
+  if (sidebarViewMode === "memory") {
+    const memoryBtn = document.createElement("button");
+    memoryBtn.className = "breadcrumb-item breadcrumb-root active";
+    memoryBtn.textContent = "记忆";
+    memoryBtn.title = ".memory_card 文件夹中的记忆卡";
+    breadcrumb.append(memoryBtn);
+    return;
   }
 
   if (sidebarViewMode === "reminder") {
@@ -724,6 +733,11 @@ function renderNoteList() {
 
   if (sidebarViewMode === "reminder") {
     renderReviewSidebar(filteredNotes, filteredResources, searchKeyword);
+    return;
+  }
+
+  if (sidebarViewMode === "memory") {
+    renderMemorySidebar();
     return;
   }
 
@@ -1181,9 +1195,9 @@ async function openFolderWithAccessCheck(folderId) {
 }
 function setSidebarViewMode(mode, shouldRender = true) {
   clearNoteListSearch();
-  sidebarViewMode = ["calendar", "reminder"].includes(mode) ? mode : "all";
+  sidebarViewMode = ["calendar", "reminder", "memory"].includes(mode) ? mode : "all";
   // 顶部工具组（刷新 / 定位 / 草稿 / 新建）只服务「全部」列表，
-  // 日历与回顾各自的入口在面板里，这里靠这个标记在 CSS 里整组收起。
+  // 日历、回顾与记忆各自的入口在面板里，这里靠这个标记在 CSS 里整组收起。
   if (sidebar) {
     sidebar.dataset.viewMode = sidebarViewMode;
   }
@@ -1196,6 +1210,7 @@ function setSidebarViewMode(mode, shouldRender = true) {
     "is-active",
     sidebarViewMode === "reminder",
   );
+  showMemoryButton?.classList.toggle("is-active", sidebarViewMode === "memory");
   if (shouldRender) {
     renderBreadcrumb();
     renderNoteList();

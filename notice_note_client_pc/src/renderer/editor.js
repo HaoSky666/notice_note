@@ -581,11 +581,16 @@ function htmlToMarkdown(root) {
 }
 function renderEditor() {
   const activeNote = getActiveNote();
+  // 记忆卡是主工作区的独占视图：后台收到 notes:changed 时仍要更新编辑器 DOM，
+  // 但不能把 editor-panel 重新显示出来，否则会把记忆视图挤成半屏。
+  const isMemoryViewOpen = typeof memoryView !== "undefined"
+    && memoryView
+    && !memoryView.hidden;
 
   isRenderingEditor = true;
   activePdfId = null;
   activeResourceId = null;
-  editorPanel.hidden = false;
+  editorPanel.hidden = isMemoryViewOpen;
   pdfViewer.hidden = true;
   fileViewer.hidden = true;
   filePreviewVersion++;

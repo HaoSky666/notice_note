@@ -101,6 +101,14 @@
             </svg>
             <span>回顾</span>
           </button>
+          <button id="showMemoryButton" class="library-view-button" type="button" title="查看记忆卡（SM-2 间隔重复）" aria-label="查看记忆卡">
+            <svg width="17" height="17" viewBox="0 0 18 18" fill="none" aria-hidden="true">
+              <rect x="2.5" y="5" width="10" height="10.5" rx="1.6" stroke="currentColor" stroke-width="1.3"/>
+              <path d="M5.6 5V3.4a1 1 0 0 1 1-1h8.9v10.4a1 1 0 0 1-1 1h-1.5" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/>
+              <path d="M5.2 8.6h4.6M5.2 11.3h3.2" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+            </svg>
+            <span>记忆</span>
+          </button>
           <button id="settingsButton" class="library-view-button library-settings-button" type="button" title="设置" aria-label="设置">
             <svg width="17" height="17" viewBox="0 0 20 20" fill="none" aria-hidden="true">
               <path d="M8.7 2.3h2.6l.5 2a6 6 0 0 1 1.2.7l2-.6 1.3 2.2-1.5 1.4a6 6 0 0 1 0 1.4l1.5 1.4-1.3 2.2-2-.6a6 6 0 0 1-1.2.7l-.5 2H8.7l-.5-2a6 6 0 0 1-1.2-.7l-2 .6-1.3-2.2 1.5-1.4a6 6 0 0 1 0-1.4L3.7 6.6 5 4.4l2 .6a6 6 0 0 1 1.2-.7z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/>
@@ -252,6 +260,244 @@
           <div id="fileViewerContent" class="file-viewer-content"></div>
         </div>
       </section>
+      <section id="memoryView" class="memory-view" hidden>
+        <div class="memory-topbar">
+          <div class="memory-heading">
+            <div class="memory-heading-row">
+              <h1>记忆</h1>
+              <span class="memory-algorithm-badge">SM-2</span>
+            </div>
+            <p id="memorySubtitle">在忘记之前，刚好复习一次</p>
+          </div>
+          <div class="memory-topbar-actions">
+            <button id="memorySettingsButton" class="secondary-button" type="button">算法参数</button>
+            <button id="memoryNewCardButton" class="primary-button" type="button">+ 新建卡片</button>
+          </div>
+        </div>
+
+        <div id="memoryStatsBar" class="memory-stats-bar"></div>
+        <div id="memoryTypeBar" class="memory-type-bar" hidden></div>
+
+        <section id="memoryStudyPanel" class="memory-panel memory-study-panel" hidden>
+          <div class="memory-study-body">
+            <article class="memory-card-stage">
+              <div class="memory-stage-head">
+                <span id="memoryCardMeta" class="memory-card-meta"></span>
+                <span class="memory-stage-head-actions">
+                  <span id="memoryStageProgress" class="memory-stage-progress"></span>
+                  <button id="memoryEditCardButton" class="memory-stage-edit" type="button" title="编辑这张卡的正面和背面（E）">编辑</button>
+                </span>
+              </div>
+              <div class="memory-card-body">
+                <div class="memory-card-inner">
+                  <div id="memoryCardFront" class="memory-card-front"></div>
+                  <div id="memoryCardBack" class="memory-card-back" hidden></div>
+                </div>
+              </div>
+              <div class="memory-stage-foot">
+                <button id="memoryRevealButton" class="primary-button memory-reveal-button" type="button">显示答案</button>
+                <div id="memoryAnswerZone" class="memory-answer-zone" hidden>
+                  <textarea id="memoryAnswerInput" class="memory-answer-input" rows="3" placeholder="先别翻答案，用自己的话回忆一遍。回车提交后才会看到答案。"></textarea>
+                  <div class="memory-answer-actions">
+                    <span id="memoryAnswerHint" class="memory-answer-hint">Enter 提交 · Shift + Enter 换行 · 完全不会就写「不会」</span>
+                    <button id="memoryAnswerSubmitButton" class="primary-button memory-answer-submit" type="button">提交判定</button>
+                  </div>
+                </div>
+                <div id="memoryJudgeResult" class="memory-judge-result" hidden>
+                  <div class="memory-judge-main">
+                    <span id="memoryJudgeBadge" class="memory-judge-badge"></span>
+                    <span id="memoryJudgeReason" class="memory-judge-reason"></span>
+                  </div>
+                  <div class="memory-judge-actions">
+                    <button id="memoryJudgeOverrideButton" class="memory-stage-edit" type="button" title="模型判得不对时手动改一档">改判</button>
+                    <button id="memoryJudgeNextButton" class="primary-button memory-judge-next" type="button">下一张</button>
+                  </div>
+                </div>
+                <div id="memoryRatingBar" class="memory-rating-bar" hidden>
+                  <button class="memory-rating-button is-again" type="button" data-memory-rating="again">
+                    <span>重来</span><small id="memoryPreviewAgain"></small>
+                  </button>
+                  <button class="memory-rating-button is-hard" type="button" data-memory-rating="hard">
+                    <span>困难</span><small id="memoryPreviewHard"></small>
+                  </button>
+                  <button class="memory-rating-button is-good" type="button" data-memory-rating="good">
+                    <span>良好</span><small id="memoryPreviewGood"></small>
+                  </button>
+                  <button class="memory-rating-button is-easy" type="button" data-memory-rating="easy">
+                    <span>简单</span><small id="memoryPreviewEasy"></small>
+                  </button>
+                </div>
+              </div>
+            </article>
+            <section id="memoryAnswerHistory" class="memory-answer-history" hidden>
+              <button id="memoryAnswerHistoryToggle" class="memory-history-toggle" type="button" aria-expanded="false">
+                <span class="memory-history-title">作答历史</span>
+                <small id="memoryAnswerHistoryCount" class="memory-history-count"></small>
+                <span class="memory-history-chevron" aria-hidden="true">›</span>
+              </button>
+              <ul id="memoryAnswerHistoryList" class="memory-history-list" hidden></ul>
+            </section>
+          </div>
+          <p id="memoryStudyHint" class="memory-hint">写完整答案按 Enter 提交 · 提交后答案才翻开 · E 编辑</p>
+        </section>
+
+        <section id="memoryEditorPanel" class="memory-panel" hidden>
+          <div class="memory-panel-heading">
+            <h2 id="memoryEditorTitle">新建卡片</h2>
+            <p>正面写问题，背面写答案。一张卡只放一个知识点。</p>
+          </div>
+          <div class="memory-editor-grid">
+            <label class="memory-field">
+              <span class="memory-field-label">正面</span>
+              <textarea id="memoryFrontInput" rows="7" placeholder="例如：SM-2 的 ease factor 初始值是多少？"></textarea>
+            </label>
+            <label class="memory-field">
+              <span class="memory-field-label">背面</span>
+              <textarea id="memoryBackInput" rows="7" placeholder="例如：2.5（界面显示 250%）"></textarea>
+            </label>
+          </div>
+          <div class="memory-type-field">
+            <span class="memory-field-label">类型</span>
+            <div class="memory-type-editor">
+              <div id="memoryTypeChips" class="memory-type-chips"></div>
+              <input id="memoryTypeInput" class="memory-type-input" type="text" maxlength="24" autocomplete="off" placeholder="输入类型后回车，可加多个">
+            </div>
+            <div id="memoryTypeSuggestions" class="memory-type-suggestions" hidden></div>
+          </div>
+          <div class="memory-panel-actions">
+            <button id="memoryDeleteCardButton" class="secondary-button danger-button" type="button" hidden>删除卡片</button>
+            <span class="memory-panel-actions-spacer"></span>
+            <button id="memoryCancelEditButton" class="secondary-button" type="button">取消</button>
+            <button id="memorySaveCardButton" class="primary-button" type="button">保存卡片</button>
+          </div>
+        </section>
+
+        <section id="memorySettingsPanel" class="memory-panel" hidden>
+          <div class="memory-panel-heading">
+            <h2>算法参数</h2>
+            <p>对应 Anki legacy 的 SM-2 调度器。改完只影响之后的复习，已有间隔不会被改写。</p>
+          </div>
+
+          <section class="memory-settings-group">
+            <h3>新卡</h3>
+            <div class="memory-settings-grid">
+              <label class="memory-setting-field">
+                <span class="memory-setting-label">新卡间隔步伐</span>
+                <span class="memory-setting-control">
+                  <input id="memorySettingLearningSteps" type="text" placeholder="1 10" autocomplete="off">
+                  <span class="memory-setting-unit">分钟</span>
+                </span>
+                <small>新卡当天按这些分钟数依次复习，走完才毕业。空格分隔。</small>
+              </label>
+              <label class="memory-setting-field">
+                <span class="memory-setting-label">新卡毕业间隔</span>
+                <span class="memory-setting-control">
+                  <input id="memorySettingGraduatingInterval" type="number" min="1" step="1" autocomplete="off">
+                  <span class="memory-setting-unit">天</span>
+                </span>
+                <small>走完学习步骤后，第一次进入复习池的间隔。</small>
+              </label>
+              <label class="memory-setting-field">
+                <span class="memory-setting-label">新卡简单间隔</span>
+                <span class="memory-setting-control">
+                  <input id="memorySettingEasyInterval" type="number" min="1" step="1" autocomplete="off">
+                  <span class="memory-setting-unit">天</span>
+                </span>
+                <small>新卡直接按「简单」，跳过剩余步骤后的间隔。</small>
+              </label>
+            </div>
+          </section>
+
+          <section class="memory-settings-group">
+            <h3>复习</h3>
+            <div class="memory-settings-grid">
+              <label class="memory-setting-field">
+                <span class="memory-setting-label">新卡初始难度</span>
+                <span class="memory-setting-control">
+                  <input id="memorySettingStartingEase" type="number" min="130" max="500" step="1" autocomplete="off">
+                  <span class="memory-setting-unit">%</span>
+                </span>
+                <small>沿用截图里的译名，实际是简易度：数值越大间隔涨得越快。</small>
+              </label>
+              <label class="memory-setting-field">
+                <span class="memory-setting-label">复习最大时间间隔</span>
+                <span class="memory-setting-control">
+                  <input id="memorySettingMaximumInterval" type="number" min="1" step="1" autocomplete="off">
+                  <span class="memory-setting-unit">天</span>
+                </span>
+                <small>任何卡片的间隔都不会超过这个天数。</small>
+              </label>
+              <label class="memory-setting-field">
+                <span class="memory-setting-label">复习简单奖励</span>
+                <span class="memory-setting-control">
+                  <input id="memorySettingEasyBonus" type="number" min="100" max="500" step="1" autocomplete="off">
+                  <span class="memory-setting-unit">%</span>
+                </span>
+                <small>复习时按「简单」，在正常间隔之外再乘的系数。</small>
+              </label>
+              <label class="memory-setting-field">
+                <span class="memory-setting-label">复习时间间隔因子</span>
+                <span class="memory-setting-control">
+                  <input id="memorySettingIntervalModifier" type="number" min="10" max="500" step="1" autocomplete="off">
+                  <span class="memory-setting-unit">%</span>
+                </span>
+                <small>全局倍率。调低会整体缩短间隔、增加复习量。</small>
+              </label>
+            </div>
+          </section>
+
+          <section class="memory-settings-group">
+            <h3>失误与限额</h3>
+            <div class="memory-settings-grid">
+              <label class="memory-setting-field">
+                <span class="memory-setting-label">失误间隔步伐</span>
+                <span class="memory-setting-control">
+                  <input id="memorySettingRelearningSteps" type="text" placeholder="10" autocomplete="off">
+                  <span class="memory-setting-unit">分钟</span>
+                </span>
+                <small>遗忘后当天重学的分钟级步骤，空格分隔。</small>
+              </label>
+              <label class="memory-setting-field">
+                <span class="memory-setting-label">失误新的间隔</span>
+                <span class="memory-setting-control">
+                  <input id="memorySettingNewInterval" type="number" min="0" max="100" step="1" autocomplete="off">
+                  <span class="memory-setting-unit">%</span>
+                </span>
+                <small>遗忘后保留原间隔的比例。0 表示不继承，从头开始。</small>
+              </label>
+              <label class="memory-setting-field">
+                <span class="memory-setting-label">失误最小间隔</span>
+                <span class="memory-setting-control">
+                  <input id="memorySettingMinimumInterval" type="number" min="1" step="1" autocomplete="off">
+                  <span class="memory-setting-unit">天</span>
+                </span>
+                <small>任何天级间隔的下限。</small>
+              </label>
+              <label class="memory-setting-field">
+                <span class="memory-setting-label">每天新卡上限</span>
+                <span class="memory-setting-control">
+                  <input id="memorySettingNewCardsPerDay" type="number" min="1" step="1" autocomplete="off">
+                  <span class="memory-setting-unit">张</span>
+                </span>
+                <small>Anki 的牌组日限额，防止新卡一次性全涌进来。</small>
+              </label>
+            </div>
+          </section>
+
+          <div class="memory-panel-actions">
+            <button id="memoryResetSettingsButton" class="secondary-button" type="button">恢复默认</button>
+            <span class="memory-panel-actions-spacer"></span>
+            <button id="memoryCancelSettingsButton" class="secondary-button" type="button">取消</button>
+            <button id="memorySaveSettingsButton" class="primary-button" type="button">保存参数</button>
+          </div>
+        </section>
+
+        <div id="memoryEmptyState" class="memory-empty-state" hidden>
+          <h2>还没有记忆卡</h2>
+          <p>新建一张卡，按 SM-2 的四档评分开始复习。</p>
+          <button id="memoryEmptyCreateButton" class="primary-button" type="button">+ 新建卡片</button>
+        </div>
+      </section>
       </div>
       <div id="workspaceMascot" class="workspace-mascot" aria-hidden="true"></div>
     </main>
@@ -315,6 +561,37 @@
               <div class="settings-storage-actions">
                 <button id="exportMobilePackageButton" class="secondary-button" type="button">导出手机离线包</button>
                 <span id="exportMobilePackageStatus" class="settings-export-status" role="status"></span>
+              </div>
+            </div>
+            <div class="settings-storage-card">
+              <div class="settings-storage-heading">
+                <div>
+                  <strong id="aiJudgeEnabledLabel">记忆卡 AI 判定</strong>
+                  <p>答题后由模型判断掌握程度，不再自己选四档；没配 Key 时自动退回手动评分</p>
+                </div>
+                <label class="settings-switch" title="启用 AI 判定">
+                  <input id="aiJudgeEnabledInput" type="checkbox" aria-labelledby="aiJudgeEnabledLabel">
+                  <span></span>
+                </label>
+              </div>
+              <div class="settings-ai-grid">
+                <label class="settings-ai-field">
+                  <span>API 地址</span>
+                  <input id="aiJudgeBaseUrlInput" type="text" autocomplete="off" spellcheck="false" placeholder="https://qianfan.baidubce.com/v2/tokenplan/personal">
+                </label>
+                <label class="settings-ai-field">
+                  <span>模型名</span>
+                  <input id="aiJudgeModelInput" type="text" autocomplete="off" spellcheck="false" placeholder="deepseek-v4.1-flash">
+                </label>
+                <label class="settings-ai-field settings-ai-field-wide">
+                  <span>API Key</span>
+                  <input id="aiJudgeApiKeyInput" type="password" autocomplete="off" spellcheck="false" placeholder="bce-v3/ALTAKSP-...">
+                </label>
+              </div>
+              <div class="settings-storage-actions">
+                <button id="testAiJudgeButton" class="secondary-button" type="button">测试连接</button>
+                <button id="saveAiJudgeButton" class="secondary-button" type="button">保存</button>
+                <span id="aiJudgeStatus" class="settings-export-status" role="status"></span>
               </div>
             </div>
           </section>
@@ -429,6 +706,7 @@
     <script src="./renderer/editor.js"></script>
     <script src="./renderer/viewers.js"></script>
     <script src="./renderer/review-browser.js"></script>
+    <script src="./renderer/memory.js"></script>
     <script src="./renderer/settings.js"></script>
     <script src="./renderer/context-menu.js"></script>
     <script src="./renderer/boot.js"></script>

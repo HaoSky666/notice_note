@@ -8,7 +8,8 @@ const {
   Menu,
   Tray,
   clipboard,
-  shell
+  shell,
+  net: electronNet
 } = require('electron');
 const path = require('node:path');
 const { createReadStream, createWriteStream, watch, constants: fsConstants } = require('node:fs');
@@ -96,6 +97,42 @@ const registerFilesIpc = require('./ipc/files');
 const registerImagesIpc = require('./ipc/images');
 const registerStorageIpc = require('./ipc/storage');
 const registerLibraryIpc = require('./ipc/library');
+const registerMemoryIpc = require('./ipc/memory-cards');
+const {
+  createCard: createMemoryCardRecord,
+  scheduleCard: scheduleMemoryCard
+} = require('./lib/sm2-scheduler');
+const {
+  MEMORY_CARD_DIR_NAME,
+  MEMORY_CARD_FILE_NAME,
+  MEMORY_SETTINGS_FILE_NAME,
+  normalizeMemorySettings,
+  normalizeCardStore,
+  buildCardStore,
+  buildMemorySnapshot
+} = require('./lib/memory-card-store');
+const { normalizeCardTypes, normalizeTypeName } = require('./lib/memory-types');
+const {
+  ANSWER_LOG_FILE_NAME,
+  normalizeAnswerLog,
+  buildAnswerLog,
+  appendAnswerEntry,
+  removeAnswerEntry,
+  updateAnswerRating,
+  listCardAnswers,
+  countCardAnswers,
+  pruneAnswersForCards
+} = require('./lib/memory-answer-log');
+const {
+  normalizeAiJudgeConfig,
+  isAiJudgeConfigured,
+  buildJudgeEndpoint,
+  buildJudgeMessages,
+  buildJudgePayload,
+  parseJudgeReply,
+  truncateAnswer,
+  VALID_RATINGS
+} = require('./lib/ai-judge');
 
 const NOTES_DIR_NAME = 'notes';
 const OLD_NOTE_FILE_NAME = 'notes.json';
@@ -158,6 +195,27 @@ let dayRemindersMigrated = false;
 // 与 dailyReviewHistory 分开——后者是自动选天的排序锚点（每套只存最后一次），不是事件。
 let dayReviewLog = [];
 const DAY_REVIEW_LOG_LIMIT = 1000;
+// 记忆卡（SM-2 间隔重复）：跟着笔记库走，落盘到 notesPath/.memory_card/。
+// 切换笔记库时整组重置，不沿用上一个库的卡片与参数。
+let memoryCards = [];
+let memorySettings = normalizeMemorySettings({});
+let memoryLoadPromise = null;
+let memoryLoadedPath = null;
+// 按类型学习的当前筛选。放在主进程，所有快照（含切库广播）都走同一份口径；
+// 切换笔记库时清空，不能把上一个库的类型名带过来。
+let memoryTypeFilter = null;
+// 作答历史（AI 判定用）：与卡片同目录，同样跟笔记库走。
+let memoryAnswers = buildAnswerLog([]);
+let memoryAnswersLoadPromise = null;
+let memoryAnswersLoadedPath = null;
+// AI 判定配置：baseURL / key / 模型名是机器级凭据，放 config.json（userData），
+// 不进笔记库，避免备份或同步笔记库时把 key 一起带走。
+let aiJudgeConfig = normalizeAiJudgeConfig({});
+// 最近一次判定的「评分前卡片状态」：改判时要用它重算，
+// 否则会在已经改过的调度结果上再算一次，间隔会越改越离谱。
+// 只保留内存里的单条——结果条本来就只在刚判完时出现，重启后不需要回滚。
+let lastMemoryJudge = null;
+const MAX_MEMORY_CARD_TEXT = 20000;
 const unlockedFolderIds = new Set();
 // 启动时补发「错过的复习日」汇总通知，按本地日期去重，避免反复打扰
 let missedReminderNoticeDate = null;
@@ -347,6 +405,24 @@ function getImageAssetDir() {
 
 function getAppDataPath() {
   return path.join(getNotesPath(), APP_DATA_DIR_NAME);
+}
+
+// 记忆卡目录：notesPath/.memory_card/，与 .notice-note、.study_notice 平级。
+// 必须放在可写的笔记库里，不能放源码根目录（打包后 app.asar 只读）。
+function getMemoryCardDirPath() {
+  return path.join(getNotesPath(), MEMORY_CARD_DIR_NAME);
+}
+
+function getMemoryCardFilePath() {
+  return path.join(getMemoryCardDirPath(), MEMORY_CARD_FILE_NAME);
+}
+
+function getMemorySettingsFilePath() {
+  return path.join(getMemoryCardDirPath(), MEMORY_SETTINGS_FILE_NAME);
+}
+
+function getMemoryAnswerLogPath() {
+  return path.join(getMemoryCardDirPath(), ANSWER_LOG_FILE_NAME);
 }
 
 function getNoteMetadataPath() {
@@ -772,6 +848,7 @@ async function loadConfig() {
     } else {
       notesPath = getDefaultNotesPath();
     }
+    aiJudgeConfig = normalizeAiJudgeConfig(config.aiJudge);
   } else {
     notesPath = getDefaultNotesPath();
     dailyReviewEnabled = true;
@@ -788,6 +865,7 @@ async function loadConfig() {
     dayReviewLog = [];
     missedReminderNoticeDate = null;
     pendingMissedReminderNotice = null;
+    aiJudgeConfig = normalizeAiJudgeConfig({});
   }
 }
 
@@ -808,8 +886,449 @@ async function saveConfig() {
     dayRemindersMigrated,
     dayReviewLog,
     missedReminderNoticeDate,
-    pendingMissedReminderNotice
+    pendingMissedReminderNotice,
+    aiJudge: aiJudgeConfig
   });
+}
+
+// ---- 记忆卡（SM-2 间隔重复）------------------------------------------------
+// 卡片与参数都落盘到 notesPath/.memory_card/，与笔记库一起迁移、备份、隔离。
+async function loadMemoryCards() {
+  const rawSettings = await readJsonWithCorruptFallback(getMemorySettingsFilePath(), null);
+  memorySettings = normalizeMemorySettings(
+    rawSettings && typeof rawSettings === 'object' && !Array.isArray(rawSettings) ? rawSettings : {}
+  );
+  const rawCards = await readJsonWithCorruptFallback(getMemoryCardFilePath(), null);
+  memoryCards = normalizeCardStore(rawCards, memorySettings).cards;
+  memoryLoadedPath = path.resolve(getNotesPath());
+  memoryTypeFilter = null;
+  return memoryCards;
+}
+
+async function ensureMemoryCardsLoaded() {
+  if (memoryLoadedPath === path.resolve(getNotesPath())) {
+    return memoryCards;
+  }
+  if (!memoryLoadPromise) {
+    memoryLoadPromise = loadMemoryCards().finally(() => {
+      memoryLoadPromise = null;
+    });
+  }
+  return memoryLoadPromise;
+}
+
+async function saveMemoryCards() {
+  await fs.mkdir(getMemoryCardDirPath(), { recursive: true });
+  await atomicWriteJson(getMemoryCardFilePath(), buildCardStore(memoryCards));
+}
+
+async function saveMemorySettings() {
+  await fs.mkdir(getMemoryCardDirPath(), { recursive: true });
+  await atomicWriteJson(getMemorySettingsFilePath(), memorySettings);
+}
+
+// ---- 作答历史（AI 判定）--------------------------------------------------
+async function loadMemoryAnswers() {
+  const raw = await readJsonWithCorruptFallback(getMemoryAnswerLogPath(), null);
+  memoryAnswers = normalizeAnswerLog(raw, {
+    ratingValidator: (value) => (VALID_RATINGS.includes(value) ? value : null)
+  });
+  memoryAnswersLoadedPath = path.resolve(getNotesPath());
+  return memoryAnswers;
+}
+
+async function ensureMemoryAnswersLoaded() {
+  if (memoryAnswersLoadedPath === path.resolve(getNotesPath())) {
+    return memoryAnswers;
+  }
+  if (!memoryAnswersLoadPromise) {
+    memoryAnswersLoadPromise = loadMemoryAnswers().finally(() => {
+      memoryAnswersLoadPromise = null;
+    });
+  }
+  return memoryAnswersLoadPromise;
+}
+
+async function saveMemoryAnswers() {
+  await fs.mkdir(getMemoryCardDirPath(), { recursive: true });
+  await atomicWriteJson(getMemoryAnswerLogPath(), memoryAnswers);
+}
+
+function getMemoryCardSnapshot() {
+  const requested = memoryTypeFilter ? normalizeTypeName(memoryTypeFilter) : '';
+  const snapshot = buildMemorySnapshot(memoryCards, memorySettings, Date.now(), { type: requested });
+  // 类型被删光时 buildMemorySnapshot 会把 type 置空并回全部卡片，
+  // 这里同步清掉筛选，免得界面卡在一个没有卡片的空类型上。
+  memoryTypeFilter = snapshot.type;
+  // AI 状态单独挂上去，不塞进 lib 的纯函数：那边不该知道网络配置。
+  // 界面靠 configured 决定「显示作答区」还是「退回手动四档」。
+  snapshot.aiJudge = {
+    configured: isAiJudgeConfigured(aiJudgeConfig),
+    enabled: aiJudgeConfig.enabled,
+    model: aiJudgeConfig.model
+  };
+  return snapshot;
+}
+
+function sanitizeMemoryCardText(value) {
+  return String(value == null ? '' : value).slice(0, MAX_MEMORY_CARD_TEXT);
+}
+
+async function filterMemoryCards(_event, input = {}) {
+  await ensureMemoryCardsLoaded();
+  const raw = typeof input === 'string' ? input : input && input.type;
+  memoryTypeFilter = normalizeTypeName(raw) || null;
+  return getMemoryCardSnapshot();
+}
+
+async function createMemoryCard(_event, input = {}) {
+  await ensureMemoryCardsLoaded();
+  const front = sanitizeMemoryCardText(input.front).trim();
+  const back = sanitizeMemoryCardText(input.back).trim();
+  if (!front && !back) {
+    throw new Error('卡片内容不能为空');
+  }
+  const card = createMemoryCardRecord({ front, back, types: normalizeCardTypes(input.types) }, Date.now());
+  memoryCards = [...memoryCards, card];
+  await saveMemoryCards();
+  return getMemoryCardSnapshot();
+}
+
+async function updateMemoryCard(_event, input = {}) {
+  await ensureMemoryCardsLoaded();
+  const id = String(input.id || '');
+  const index = memoryCards.findIndex((card) => card.id === id);
+  if (index === -1) {
+    throw new Error('记忆卡不存在');
+  }
+  // 只允许改卡面，调度状态由 SM-2 独占，避免手改 interval 把队列算乱。
+  const front = input.front === undefined
+    ? memoryCards[index].front
+    : sanitizeMemoryCardText(input.front).trim();
+  const back = input.back === undefined
+    ? memoryCards[index].back
+    : sanitizeMemoryCardText(input.back).trim();
+  // types 不传 = 保持原样；传空数组才是清空类型。
+  const types = input.types === undefined
+    ? (memoryCards[index].types || [])
+    : normalizeCardTypes(input.types);
+  const updated = {
+    ...memoryCards[index],
+    front,
+    back,
+    types,
+    updatedAt: new Date().toISOString()
+  };
+  memoryCards = memoryCards.map((card, i) => (i === index ? updated : card));
+  await saveMemoryCards();
+  return getMemoryCardSnapshot();
+}
+
+async function deleteMemoryCard(_event, cardId) {
+  await ensureMemoryCardsLoaded();
+  const id = String(cardId || '');
+  const next = memoryCards.filter((card) => card.id !== id);
+  if (next.length === memoryCards.length) {
+    throw new Error('记忆卡不存在');
+  }
+  memoryCards = next;
+  await saveMemoryCards();
+  // 连带清掉它的作答历史：卡片没了，这些条目再也看不到，留着只会让
+  // answers.json 无限膨胀，也会让「删卡片」显得没删干净。
+  await ensureMemoryAnswersLoaded();
+  const pruned = pruneAnswersForCards(memoryAnswers, new Set(memoryCards.map((card) => card.id)));
+  if (pruned.entries.length !== memoryAnswers.entries.length) {
+    memoryAnswers = pruned;
+    await saveMemoryAnswers();
+  }
+  if (lastMemoryJudge && lastMemoryJudge.cardId === id) {
+    lastMemoryJudge = null;
+  }
+  return getMemoryCardSnapshot();
+}
+
+async function reviewMemoryCard(_event, input = {}) {
+  await ensureMemoryCardsLoaded();
+  const id = String(input.id || '');
+  const index = memoryCards.findIndex((card) => card.id === id);
+  if (index === -1) {
+    throw new Error('记忆卡不存在');
+  }
+  const next = scheduleMemoryCard(memoryCards[index], input.rating, memorySettings, Date.now());
+  memoryCards = memoryCards.map((card, i) => (i === index ? next : card));
+  await saveMemoryCards();
+  return getMemoryCardSnapshot();
+}
+
+async function updateMemoryCardSettings(_event, input = {}) {
+  await ensureMemoryCardsLoaded();
+  memorySettings = normalizeMemorySettings({ ...memorySettings, ...(input || {}) });
+  await saveMemorySettings();
+  return getMemoryCardSnapshot();
+}
+
+// ---- AI 判定：作答 → 模型打四档 -----------------------------------------
+// 产品前提（用户拍板）：掌握程度不再由用户自己点，交给模型判。
+// 手动四档只在两种情况下出现：AI 没配置，或判定失败时的兜底，以及事后「改判」。
+
+// 带业务码的错误：渲染层靠 code 区分「没配 AI」「网络失败」「回复看不懂」，
+// 分别决定是提示去设置、还是直接降级成手动四档。
+function createAiJudgeError(code, message, detail) {
+  const error = new Error(message);
+  error.code = code;
+  if (detail) {
+    error.detail = detail;
+  }
+  return error;
+}
+
+function describeJudgeFailure(error) {
+  if (error?.name === 'AbortError' || /aborted/i.test(String(error?.message || ''))) {
+    return `模型响应超时（${Math.round(aiJudgeConfig.timeoutMs / 1000)} 秒）`;
+  }
+  return String(error?.message || error || '未知错误');
+}
+
+async function requestAiJudge(messages) {
+  const endpoint = buildJudgeEndpoint(aiJudgeConfig.baseUrl);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), aiJudgeConfig.timeoutMs);
+  const send = (config) => electronNet.fetch(endpoint, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${config.apiKey}`
+    },
+    signal: controller.signal,
+    body: JSON.stringify(buildJudgePayload(config, messages))
+  });
+  try {
+    let response = await send(aiJudgeConfig);
+    // 换到不认 thinking 参数的端点（比如直连 OpenAI）时会是 400。
+    // 只有错误正文点名了 thinking 才去掉该参数重试一次，别把限流、余额不足也重试。
+    if (response.status === 400 && aiJudgeConfig.disableThinking) {
+      const firstText = await response.text();
+      if (/think/i.test(firstText)) {
+        response = await send({ ...aiJudgeConfig, disableThinking: false });
+      } else {
+        throw createAiJudgeError(
+          'AI_REQUEST_FAILED',
+          `模型返回 HTTP 400：${firstText.slice(0, 200)}`
+        );
+      }
+    }
+    if (!response.ok) {
+      const text = await response.text().catch(() => '');
+      let hint = '';
+      try {
+        hint = JSON.parse(text)?.error?.message || '';
+      } catch {
+        hint = text.slice(0, 200);
+      }
+      if (response.status === 401 || response.status === 403) {
+        throw createAiJudgeError('AI_UNAUTHORIZED', `API Key 无效或没有该模型权限（HTTP ${response.status}）`);
+      }
+      throw createAiJudgeError(
+        'AI_REQUEST_FAILED',
+        `模型返回 HTTP ${response.status}${hint ? `：${hint}` : ''}`
+      );
+    }
+    const payload = await response.json();
+    const content = payload?.choices?.[0]?.message?.content;
+    if (typeof content !== 'string' || !content.trim()) {
+      // 推理模型把 max_tokens 吃光时就会走到这里：content 为空但有 reasoning。
+      const reasoningTokens = payload?.usage?.completion_tokens_details?.reasoning_tokens;
+      throw createAiJudgeError(
+        'AI_PARSE_FAILED',
+        reasoningTokens
+          ? `模型只输出了推理过程没有结论（消耗 ${reasoningTokens} 推理 token），请在设置里开启「关闭模型思考」`
+          : '模型返回内容为空'
+      );
+    }
+    return parseJudgeReply(content);
+  } catch (error) {
+    if (error.code && String(error.code).startsWith('AI_')) {
+      throw error;
+    }
+    throw createAiJudgeError('AI_REQUEST_FAILED', `调用模型失败：${describeJudgeFailure(error)}`);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// 判定并立刻按结果调度：用户不用再点四档。
+// 同时把「评分前的卡片」留在 lastMemoryJudge 里，供改判时重算。
+async function judgeMemoryAnswer(_event, input = {}) {
+  await ensureMemoryCardsLoaded();
+  await ensureMemoryAnswersLoaded();
+  const cardId = String(input.cardId || input.id || '');
+  const card = memoryCards.find((item) => item.id === cardId);
+  if (!card) {
+    throw new Error('记忆卡不存在');
+  }
+  const answer = truncateAnswer(input.answer);
+  if (!answer) {
+    throw new Error('先写点内容再提交');
+  }
+  if (!isAiJudgeConfigured(aiJudgeConfig)) {
+    throw createAiJudgeError('AI_NOT_CONFIGURED', '还没有配置 AI 判定');
+  }
+
+  // 历史只取最近的几条喂给模型，帮它判断这次是进步还是退步。
+  const history = listCardAnswers(memoryAnswers, cardId, 3);
+  const messages = buildJudgeMessages({
+    front: card.front,
+    back: card.back,
+    answer,
+    history
+  });
+  const judgment = await requestAiJudge(messages);
+
+  const cardBefore = { ...card };
+  const next = scheduleMemoryCard(cardBefore, judgment.rating, memorySettings, Date.now());
+  memoryCards = memoryCards.map((item) => (item.id === cardId ? next : item));
+
+  const entryId = randomUUID();
+  memoryAnswers = appendAnswerEntry(memoryAnswers, {
+    id: entryId,
+    cardId,
+    kind: 'text',
+    answer,
+    rating: judgment.rating,
+    reason: judgment.reason,
+    source: 'ai',
+    createdAt: new Date().toISOString()
+  }, Date.now());
+  lastMemoryJudge = { cardId, cardBefore, entryId };
+
+  await Promise.all([saveMemoryCards(), saveMemoryAnswers()]);
+  sendMemoryChanged();
+  return {
+    snapshot: getMemoryCardSnapshot(),
+    judgment: {
+      cardId,
+      entryId,
+      rating: judgment.rating,
+      reason: judgment.reason,
+      answer,
+      source: 'ai'
+    }
+  };
+}
+
+// 改判：模型判错时的后门。用评分前的卡片状态重算，而不是在已调度的结果上再叠一次，
+// 否则连点两次「简单」间隔会被乘两次。
+async function rejudgeMemoryAnswer(_event, input = {}) {
+  await ensureMemoryCardsLoaded();
+  await ensureMemoryAnswersLoaded();
+  const cardId = String(input.cardId || input.id || '');
+  const rating = VALID_RATINGS.includes(input.rating) ? input.rating : null;
+  if (!rating) {
+    throw new Error('评分档位无效');
+  }
+  const card = memoryCards.find((item) => item.id === cardId);
+  if (!card) {
+    throw new Error('记忆卡不存在');
+  }
+  const context = lastMemoryJudge && lastMemoryJudge.cardId === cardId ? lastMemoryJudge : null;
+  // 没有评分前快照（例如重启过）就退回当前卡：改动会叠加一次，但总比不给改强。
+  const base = context ? context.cardBefore : card;
+  const next = scheduleMemoryCard(base, rating, memorySettings, Date.now());
+  memoryCards = memoryCards.map((item) => (item.id === cardId ? next : item));
+
+  let entryId = context ? context.entryId : '';
+  if (entryId) {
+    memoryAnswers = updateAnswerRating(memoryAnswers, entryId, rating, input.reason);
+  } else {
+    entryId = randomUUID();
+    memoryAnswers = appendAnswerEntry(memoryAnswers, {
+      id: entryId,
+      cardId,
+      kind: 'text',
+      answer: '',
+      rating,
+      reason: input.reason || '手动改判',
+      source: 'manual',
+      createdAt: new Date().toISOString()
+    }, Date.now());
+  }
+  lastMemoryJudge = { cardId, cardBefore: base, entryId };
+
+  await Promise.all([saveMemoryCards(), saveMemoryAnswers()]);
+  sendMemoryChanged();
+  return {
+    snapshot: getMemoryCardSnapshot(),
+    judgment: {
+      cardId,
+      entryId,
+      rating,
+      reason: input.reason || '',
+      source: 'manual'
+    }
+  };
+}
+
+async function listMemoryAnswers(_event, cardId) {
+  await ensureMemoryAnswersLoaded();
+  const id = String(cardId || '');
+  if (!id) {
+    return { cardId: '', entries: [], total: 0 };
+  }
+  return {
+    cardId: id,
+    entries: listCardAnswers(memoryAnswers, id),
+    total: countCardAnswers(memoryAnswers, id)
+  };
+}
+
+async function deleteMemoryAnswer(_event, input = {}) {
+  await ensureMemoryAnswersLoaded();
+  const entryId = String(input.entryId || input.id || '');
+  if (!entryId) {
+    throw new Error('缺少记录 id');
+  }
+  const before = memoryAnswers.entries.length;
+  memoryAnswers = removeAnswerEntry(memoryAnswers, entryId);
+  if (memoryAnswers.entries.length === before) {
+    throw new Error('记录不存在');
+  }
+  await saveMemoryAnswers();
+  const cardId = String(input.cardId || '');
+  return {
+    cardId,
+    entries: cardId ? listCardAnswers(memoryAnswers, cardId) : [],
+    total: cardId ? countCardAnswers(memoryAnswers, cardId) : 0
+  };
+}
+
+function getAiJudgeSettings() {
+  return {
+    ...aiJudgeConfig,
+    configured: isAiJudgeConfigured(aiJudgeConfig),
+    endpoint: buildJudgeEndpoint(aiJudgeConfig.baseUrl)
+  };
+}
+
+async function updateAiJudgeSettings(_event, input = {}) {
+  aiJudgeConfig = normalizeAiJudgeConfig({ ...aiJudgeConfig, ...(input || {}) });
+  await saveConfig();
+  sendMemoryChanged();
+  return getAiJudgeSettings();
+}
+
+// 设置页的「测试连接」：用一个极短的请求确认 key、模型名、端点三样都通。
+async function testAiJudgeConnection() {
+  if (!isAiJudgeConfigured(aiJudgeConfig)) {
+    throw createAiJudgeError('AI_NOT_CONFIGURED', '请先填写 API Key');
+  }
+  const messages = buildJudgeMessages({
+    front: '测试题：1 + 1 等于多少？',
+    back: '2',
+    answer: '等于 2',
+    history: []
+  });
+  const result = await requestAiJudge(messages);
+  return { ok: true, rating: result.rating, reason: result.reason, model: aiJudgeConfig.model };
 }
 
 // 每日回顾候选：以「天」为单位。
@@ -1016,6 +1535,9 @@ function createMobileFolderSummary(folder, visibleNotes) {
     parentId: folder.parentId || null,
     path: getFolderPathParts(folder).join(' / '),
     isProtected: isFolderProtected(folder),
+    // 回顾文件夹（.study_notice）在 PC 侧边栏是隐藏的，手机端浏览同样要藏起来，
+    // 只供回顾/日历使用。下发标志让手机端能镜像这条可见性规则。
+    isReviewFolder: Boolean(folder.isReviewFolder),
     // 离线包永远是明文：手机端没有密码校验能力，不能谎报「已解锁」。
     isUnlocked: false,
     isPlaintextExport: isFolderProtected(folder),
@@ -1055,6 +1577,8 @@ async function createMobileExportSnapshot() {
         size: file.size,
         createdAt: file.createdAt,
         updatedAt: file.updatedAt,
+        // 回顾/日历只认 .study_notice 里的复习文件；资源也要带这个标志，手机端才能镜像 PC 候选范围。
+        isReviewFile: Boolean(file.isReviewFile),
         localAssetPath: source
       };
     });
@@ -2753,9 +3277,13 @@ function watchPdfFiles() {
       const extension = path.extname(relativePath).toLowerCase();
       const baseName = path.basename(relativePath).toLowerCase();
       const normalizedRelativePath = relativePath.toLowerCase();
+      // 记忆卡目录和 .notice-note 一样属于应用内部数据：每次评分都会写 cards.json，
+      // 不跳过就会触发全量重扫笔记并广播 notes:changed，把正在看的记忆视图顶掉。
       if (
         normalizedRelativePath === APP_DATA_DIR_NAME
         || normalizedRelativePath.startsWith(`${APP_DATA_DIR_NAME}/`)
+        || normalizedRelativePath === MEMORY_CARD_DIR_NAME
+        || normalizedRelativePath.startsWith(`${MEMORY_CARD_DIR_NAME}/`)
       ) {
         return;
       }
@@ -2916,6 +3444,13 @@ function sendDayRemindersChanged() {
 function sendNotesChanged() {
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send('notes:changed', getVisibleNotes());
+  }
+}
+
+// 切换笔记库会整组换掉记忆卡，渲染层需要一份新快照，否则界面还停在旧库的卡片上。
+function sendMemoryChanged() {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('memory:changed', getMemoryCardSnapshot());
   }
 }
 
@@ -3129,6 +3664,12 @@ async function useNotesPath(nextPath) {
     pendingMissedReminderNotice: pendingMissedReminderNotice
       ? { ...pendingMissedReminderNotice, dayKeys: [...pendingMissedReminderNotice.dayKeys] }
       : null,
+    memoryCards: memoryCards.map((card) => ({ ...card })),
+    memorySettings: { ...memorySettings },
+    memoryLoadedPath,
+    memoryAnswers,
+    memoryAnswersLoadedPath,
+    lastMemoryJudge,
     unlockedFolderIds: new Set(unlockedFolderIds)
   };
   notesPath = nextPath;
@@ -3146,10 +3687,21 @@ async function useNotesPath(nextPath) {
   dailyReviewDeferred = { date: null, entryKey: null };
   missedReminderNoticeDate = null;
   pendingMissedReminderNotice = null;
+  // 记忆卡按库隔离：新库从空牌组和默认参数开始，读盘在 loadNotes() 之后。
+  memoryCards = [];
+  memorySettings = normalizeMemorySettings({});
+  memoryLoadedPath = null;
+  // 作答历史同理：换库后旧库的历史一条都不该带过来。
+  memoryAnswers = buildAnswerLog([]);
+  memoryAnswersLoadedPath = null;
+  lastMemoryJudge = null;
   try {
     // R4：切换存储位置后同样要确保回顾目录存在，否则回顾面板「+ 新建」会一直失败到重启。
     await migrateReviewFolder();
     await loadNotes();
+    await loadMemoryCards();
+    await loadMemoryAnswers();
+    sendMemoryChanged();
     // 新库可能带着旧版 note.reminders，切换后按同一规则迁移一次。
     await migrateRemindersToDays();
     updateDailyReviewSelection();
@@ -3177,6 +3729,12 @@ async function useNotesPath(nextPath) {
     dayReviewLog = previousState.dayReviewLog;
     missedReminderNoticeDate = previousState.missedReminderNoticeDate;
     pendingMissedReminderNotice = previousState.pendingMissedReminderNotice;
+    memoryCards = previousState.memoryCards;
+    memorySettings = previousState.memorySettings;
+    memoryLoadedPath = previousState.memoryLoadedPath;
+    memoryAnswers = previousState.memoryAnswers;
+    memoryAnswersLoadedPath = previousState.memoryAnswersLoadedPath;
+    lastMemoryJudge = previousState.lastMemoryJudge;
     unlockedFolderIds.clear();
     for (const folderId of previousState.unlockedFolderIds) {
       unlockedFolderIds.add(folderId);
@@ -3690,6 +4248,9 @@ app.whenReady().then(async () => {
   await migrateImageAssetDir();
   await migrateReviewFolder();
   await loadNotes();
+  // 记忆卡跟着笔记库走：启动时先读一次，渲染层打开「记忆」视图时不必再等磁盘。
+  await loadMemoryCards();
+  await loadMemoryAnswers();
   await prefillReviewDatesFromFilename();
   await migrateDailyReviewHistoryToDays();
   // 旧的单篇提醒按「内容天 + 复习日」归并成天级记录，之后一律以 dayReminders 为准。
@@ -3786,7 +4347,26 @@ app.whenReady().then(async () => {
     downloadRemoteImage,
     getImageExtension,
     getAccessibleNote,
-    getAppDataPath
+    getAppDataPath,
+    // 记忆卡：状态用 getter 暴露，领域函数直接读写 main.js 的同一份变量。
+    get memoryCards() { return memoryCards; },
+    get memorySettings() { return memorySettings; },
+    ensureMemoryCardsLoaded,
+    getMemoryCardSnapshot,
+    createMemoryCard,
+    updateMemoryCard,
+    deleteMemoryCard,
+    reviewMemoryCard,
+    updateMemoryCardSettings,
+    filterMemoryCards,
+    // AI 判定与作答历史
+    judgeMemoryAnswer,
+    rejudgeMemoryAnswer,
+    listMemoryAnswers,
+    deleteMemoryAnswer,
+    getAiJudgeSettings,
+    updateAiJudgeSettings,
+    testAiJudgeConnection
   };
   registerNotesIpc(ipcContext);
   registerFoldersIpc(ipcContext);
@@ -3794,6 +4374,7 @@ app.whenReady().then(async () => {
   registerImagesIpc(ipcContext);
   registerStorageIpc(ipcContext);
   registerLibraryIpc(ipcContext);
+  registerMemoryIpc(ipcContext);
 
   Menu.setApplicationMenu(null);
   // 渲染层 boot 完成后主动拉取待发通知，成功后 ack 清空；主进程不再靠

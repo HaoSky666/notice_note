@@ -1,6 +1,7 @@
 const contentPanel = document.querySelector('#contentPanel');
 const importPackageButton = document.querySelector('#importPackageButton');
 const packageFileInput = document.querySelector('#packageFileInput');
+const msettingsButton = document.querySelector('#msettingsButton');
 const searchInput = document.querySelector('#searchInput');
 const pathBar = document.querySelector('#pathBar');
 const statusText = document.querySelector('#statusText');
@@ -34,10 +35,10 @@ const {
 } = window.NoticeNoteMobileUtils;
 
 const NAVIGATION_STATE_KEY = 'notice-note-mobile-state';
-const OFFLINE_DB_NAME = 'notice-note-offline';
-const OFFLINE_DB_VERSION = 1;
-const SNAPSHOT_STORE = 'snapshot';
-const ASSET_STORE = 'assets';
+// 数据库、附件 URL 缓存、待回传变更统一由 store.js（NoticeNoteStore）管理，
+// 这里复用同一份实例，日历/回顾/记忆 Tab 与同步客户端也从那里取数据。
+const SNAPSHOT_STORE = NoticeNoteStore.SNAPSHOT_STORE;
+const ASSET_STORE = NoticeNoteStore.ASSET_STORE;
 let library = null;
 let currentFolderId = null;
 let isApplyingNavigationState = false;
@@ -51,8 +52,7 @@ let mobileResumePromise = null;
 let isMobileAppActive = true;
 let searchTimer = null;
 let libraryRequestId = 0;
-let offlineDatabasePromise = null;
-const offlineAssetUrls = new Map();
+const offlineAssetUrls = NoticeNoteStore.assetUrls;
 
 const exitPromptToast = document.createElement('div');
 exitPromptToast.className = 'exit-toast';
@@ -150,64 +150,16 @@ function closeImageLightbox() {
 }
 
 function openOfflineDatabase() {
-  if (offlineDatabasePromise) {
-    return offlineDatabasePromise;
-  }
-  offlineDatabasePromise = new Promise((resolve, reject) => {
-    const request = window.indexedDB.open(OFFLINE_DB_NAME, OFFLINE_DB_VERSION);
-    request.onupgradeneeded = () => {
-      const database = request.result;
-      if (!database.objectStoreNames.contains(SNAPSHOT_STORE)) {
-        database.createObjectStore(SNAPSHOT_STORE);
-      }
-      if (!database.objectStoreNames.contains(ASSET_STORE)) {
-        database.createObjectStore(ASSET_STORE);
-      }
-    };
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error || new Error('无法打开手机本地数据库'));
-  });
-  return offlineDatabasePromise;
+  return NoticeNoteStore.openDatabase();
 }
 
 async function readOfflineValue(storeName, key) {
-  const database = await openOfflineDatabase();
-  return new Promise((resolve, reject) => {
-    const transaction = database.transaction(storeName, 'readonly');
-    const request = transaction.objectStore(storeName).get(key);
-    request.onsuccess = () => resolve(request.result || null);
-    request.onerror = () => reject(request.error || new Error('读取手机本地文件失败'));
-  });
+  return NoticeNoteStore.readValue(storeName, key);
 }
 
-// 导入已改为「整包预校验 + 单个跨 store 事务」，逐条写入与独立清理的旧函数已删除。
-// readOfflineValue 仍被资产 URL / snapshot 读取使用，保留。
-function releaseOfflineAssetUrls() {
-  for (const url of offlineAssetUrls.values()) {
-    URL.revokeObjectURL(url);
-  }
-  offlineAssetUrls.clear();
-}
-
-async function loadOfflineAssetUrls(snapshot) {
-  releaseOfflineAssetUrls();
-  for (const asset of snapshot?.assets || []) {
-    const blob = await readOfflineValue(ASSET_STORE, asset.source);
-    if (blob instanceof Blob) {
-      offlineAssetUrls.set(asset.source, URL.createObjectURL(blob));
-    }
-  }
-}
-
+// 导入已改为「整包预校验 + 单个跨 store 事务」，事务执行统一在 store.runAssetTransaction。
 async function loadOfflineSnapshot() {
-  const snapshot = await readOfflineValue(SNAPSHOT_STORE, 'current');
-  if (!snapshot) {
-    return null;
-  }
-  // 离线包始终是明文：统一归一化文件夹语义，后续渲染拿到的都是「未解锁 / 明文导出」对象。
-  snapshot.folders = (snapshot.folders || []).map(normalizeMobileFolder);
-  await loadOfflineAssetUrls(snapshot);
-  return snapshot;
+  return NoticeNoteStore.loadSnapshot();
 }
 
 // 离线包格式常量与 validateMobilePackage 已迁移到 lib/mobile-utils.js（见文件顶部解构）。
@@ -263,28 +215,21 @@ async function importMobilePackage(file) {
     // b) 所有资产写入 + snapshot 写入 + 旧资产清理放进同一个跨 store 事务。
     //    任一步失败事务自动回滚，旧 snapshot 引用的附件不会被新包部分覆盖。
     statusText.textContent = '正在写入离线包...';
-    const database = await openOfflineDatabase();
-    await new Promise((resolve, reject) => {
-      const transaction = database.transaction([ASSET_STORE, SNAPSHOT_STORE], 'readwrite');
-      const assetStore = transaction.objectStore(ASSET_STORE);
-      const snapshotStore = transaction.objectStore(SNAPSHOT_STORE);
-      for (const item of plan) {
-        const blob = file.slice(item.start, item.end, item.mimeType);
-        assetStore.put(blob, item.source);
-      }
-      snapshotStore.put(snapshot, 'current');
-      for (const key of unusedKeys) {
-        assetStore.delete(key);
-      }
-      transaction.oncomplete = () => resolve();
-      transaction.onerror = () => reject(transaction.error || new Error('导入离线包失败'));
-      transaction.onabort = () => reject(transaction.error || new Error('导入离线包已中止'));
+    await NoticeNoteStore.runAssetTransaction({
+      puts: plan.map((item) => ({
+        key: item.source,
+        blob: file.slice(item.start, item.end, item.mimeType)
+      })),
+      removedKeys: unusedKeys,
+      snapshot
     });
 
     library = await loadOfflineSnapshot();
+    NoticeNoteStore.setLibrary(library);
     currentFolderId = null;
     searchInput.value = '';
     renderLibrary();
+    NoticeNoteStore.notifyLibraryChanged();
   } catch (error) {
     const cachedSnapshot = await loadOfflineSnapshot().catch(() => null);
     if (cachedSnapshot) {
@@ -382,6 +327,11 @@ function navigateToParentFolder() {
 }
 
 async function performMobileSystemBack() {
+  // 其他 Tab / 设置面板优先消费返回键（回到笔记 Tab、关面板），再走笔记导航逻辑。
+  if (window.NoticeNoteTabs?.handleBack()) {
+    return;
+  }
+
   if (!imageLightbox.hidden) {
     closeImageLightbox();
     return;
@@ -832,6 +782,10 @@ function renderMarkdown(markdown) {
 function getFilteredNotes() {
   const keyword = searchInput.value.trim().toLocaleLowerCase('zh-CN');
   return (library.notes || []).filter((note) => {
+    // 复习文件归回顾/日历管，浏览与搜索都不展示（镜像 PC）。
+    if (note.isReviewFile) {
+      return false;
+    }
     if (keyword) {
       return [note.title, note.preview, note.folderPath, note.content]
         .some((value) => String(value || '').toLocaleLowerCase('zh-CN').includes(keyword));
@@ -843,6 +797,9 @@ function getFilteredNotes() {
 function getFilteredResources() {
   const keyword = searchInput.value.trim().toLocaleLowerCase('zh-CN');
   return (library.resources || []).filter((file) => {
+    if (file.isReviewFile) {
+      return false;
+    }
     if (keyword) {
       return [file.name, file.folderPath, file.typeLabel]
         .some((value) => String(value || '').toLocaleLowerCase('zh-CN').includes(keyword));
@@ -853,12 +810,25 @@ function getFilteredResources() {
 
 function getChildFolders(folderId) {
   return library.folders
-    .filter((folder) => (folder.parentId || null) === folderId)
+    .filter((folder) => (folder.parentId || null) === folderId && !isReviewBrowseFolder(folder.id))
     .sort((left, right) => left.name.localeCompare(right.name, 'zh-CN'));
 }
 
 function getFolderById(folderId) {
   return library.folders.find((folder) => folder.id === folderId) || null;
+}
+
+// 镜像 PC 侧边栏：回顾文件夹（.study_notice）及其子目录不在浏览树里出现，
+// 它们的内容只供回顾/日历使用。沿祖先链判断，子目录也一并隐藏。
+function isReviewBrowseFolder(folderId) {
+  let current = getFolderById(folderId);
+  while (current) {
+    if (current.isReviewFolder) {
+      return true;
+    }
+    current = current.parentId ? getFolderById(current.parentId) : null;
+  }
+  return false;
 }
 
 function getFolderPath(folderId) {
@@ -874,7 +844,7 @@ function getFolderPath(folderId) {
 function getFolderCounts(folderId) {
   const folder = getFolderById(folderId);
   return {
-    folders: library.folders.filter((folder) => (folder.parentId || null) === folderId).length,
+    folders: library.folders.filter((folder) => (folder.parentId || null) === folderId && !isReviewBrowseFolder(folder.id)).length,
     notes: folder?.noteCount || 0
   };
 }
@@ -1036,7 +1006,7 @@ function renderEmptyState(message) {
   noteList.append(emptyState);
 }
 
-function renderDisconnectedState(message = '请点击右上角“导入文件”。') {
+function renderDisconnectedState(message = '点右上角「同步」配对电脑，或「导入文件」选择离线包。') {
   library = null;
   pathBar.innerHTML = '';
   statusText.textContent = '手机本地还没有导入内容';
@@ -1110,15 +1080,16 @@ async function openNote(noteId, options = {}) {
 async function loadLibrary() {
   const requestId = ++libraryRequestId;
   showContentPanel();
-  const nextLibrary = library || await loadOfflineSnapshot();
+  const nextLibrary = NoticeNoteStore.getLibrary() || library || await loadOfflineSnapshot();
   if (requestId !== libraryRequestId) {
     return;
   }
   if (!nextLibrary) {
-    renderDisconnectedState('请点击右上角“导入文件”，选择电脑端导出的离线包。');
+    renderDisconnectedState('还没有内容：点右上角「同步」配对电脑拉取，或「导入文件」选择离线包。');
     return;
   }
   library = nextLibrary;
+  NoticeNoteStore.setLibrary(nextLibrary);
   if (currentFolderId && !getFolderById(currentFolderId)) {
     currentFolderId = null;
   }
@@ -1170,6 +1141,25 @@ window.addEventListener('popstate', (event) => {
     });
 });
 
+// 资源打开逻辑抽成全局函数：笔记列表、日历、回顾页共用同一套行为。
+function openResourceCard(resourceCard) {
+  const url = offlineAssetUrls.get(resourceCard.dataset.assetSource);
+  if (!url) {
+    alert('手机本地文件不存在，请重新同步或导入离线包。');
+    return;
+  }
+  // Android WebView 里打开新窗口的方式不可用：图片走页面内 lightbox，其余资源明确提示仅保存不预览。
+  if (isPreviewableResourceMime(resourceCard.dataset.resourceMime)) {
+    openImageLightbox({
+      src: url,
+      currentSrc: url,
+      alt: resourceCard.dataset.resourceName
+    });
+  } else {
+    alert('该文件已保存在手机本地，手机端暂不预览，请在电脑端打开。');
+  }
+}
+
 noteList.addEventListener('click', (event) => {
   const folderCard = event.target.closest('.folder-card');
   if (folderCard) {
@@ -1181,21 +1171,7 @@ noteList.addEventListener('click', (event) => {
 
   const resourceCard = event.target.closest('.resource-card');
   if (resourceCard) {
-    const url = offlineAssetUrls.get(resourceCard.dataset.assetSource);
-    if (!url) {
-      alert('手机本地文件不存在，请重新导入离线包。');
-      return;
-    }
-    // Android WebView 里打开新窗口的方式不可用：图片走页面内 lightbox，其余资源明确提示仅保存不预览。
-    if (isPreviewableResourceMime(resourceCard.dataset.resourceMime)) {
-      openImageLightbox({
-        src: url,
-        currentSrc: url,
-        alt: resourceCard.dataset.resourceName
-      });
-    } else {
-      alert('该文件已保存在离线包中，手机端暂不预览，请在电脑端打开。');
-    }
+    openResourceCard(resourceCard);
     return;
   }
 
@@ -1244,6 +1220,18 @@ document.addEventListener('keydown', (event) => {
   if (event.key === 'Escape' && !imageLightbox.hidden) {
     event.preventDefault();
     closeImageLightbox();
+  }
+});
+
+// 同步客户端落库后广播：笔记 Tab 刷新列表（其他 Tab 各自监听同一事件）。
+window.addEventListener('nn-library-changed', () => {
+  const next = NoticeNoteStore.getLibrary();
+  if (next) {
+    library = next;
+    if (currentFolderId && !getFolderById(currentFolderId)) {
+      currentFolderId = null;
+    }
+    renderLibrary();
   }
 });
 

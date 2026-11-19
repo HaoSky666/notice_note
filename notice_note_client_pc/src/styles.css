@@ -186,10 +186,11 @@ button {
   margin-left: auto;
 }
 
-/* 日历 / 回顾没有「当前文件夹」这个落点：刷新、定位、新建草稿、新建都无处可去，
-   各自的入口（新建到当天、自动排期）在面板里，整组收起。 */
+/* 日历 / 回顾 / 记忆没有「当前文件夹」这个落点：刷新、定位、新建草稿、新建都无处可去，
+   各自的入口（新建到当天、自动排期、新建卡片）在面板里，整组收起。 */
 .sidebar[data-view-mode="calendar"] .brand-actions,
-.sidebar[data-view-mode="reminder"] .brand-actions {
+.sidebar[data-view-mode="reminder"] .brand-actions,
+.sidebar[data-view-mode="memory"] .brand-actions {
   display: none;
 }
 
@@ -4095,6 +4096,12 @@ body[data-theme] .cm-blur-reveal:hover {
   overflow: hidden;
 }
 
+/* 设置主视图限高可滚动：卡片增多后小窗口下也能看到底部的同步 / AI 设置 */
+#settingsMainView {
+  max-height: calc(100vh - 40px);
+  overflow-y: auto;
+}
+
 .settings-heading {
   display: flex;
   align-items: center;
@@ -4593,6 +4600,13 @@ body[data-theme] .cm-blur-reveal:hover {
   background: var(--nn-surface-50);
 }
 
+.settings-storage-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
 .settings-storage-heading strong {
   color: var(--nn-ink-700);
   font-size: 14px;
@@ -4636,6 +4650,48 @@ body[data-theme] .cm-blur-reveal:hover {
 .settings-storage-actions .secondary-button {
   padding: 6px 12px;
   font-size: 11px;
+}
+
+/* ---------- 设置：记忆卡 AI 判定 ---------- */
+.settings-ai-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.settings-ai-field {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.settings-ai-field-wide {
+  grid-column: 1 / -1;
+}
+
+.settings-ai-field span {
+  color: var(--nn-ink-350);
+  font-size: 11px;
+}
+
+.settings-ai-field input {
+  width: 100%;
+  border: 1px solid #e6ded2;
+  border-radius: 8px;
+  padding: 7px 9px;
+  background: #fbf8f3;
+  color: var(--nn-ink-700);
+  font-family: inherit;
+  font-size: 12px;
+}
+
+.settings-ai-field input::placeholder {
+  color: var(--nn-ink-250);
+}
+
+.settings-ai-field input:focus {
+  border-color: var(--nn-accent);
+  outline: none;
 }
 
 @media (max-width: 980px) {
@@ -6543,4 +6599,1289 @@ body[data-theme="nte_eloi"] .workspace-tab.is-active {
   margin: 6px 0 0;
   font-size: 12px;
   color: #c0392b;
+}
+
+/* ============================================================
+   记忆卡（SM-2 间隔重复）
+   - 颜色全部走 --theme-* 令牌（带回退），跟随 14 套主题；
+     不用 --nn-* 暖色，否则在 deepseek / blue 这类冷色主题上会发黄。
+   - 学习页是「标题 → 一行统计 → 居中卡片」，卡片高度随内容，
+     不铺满视口，避免只剩一行字的大片空白。
+   ============================================================ */
+.memory-view,
+.memory-sidebar-header,
+.memory-sidebar-list {
+  --mv-bg: var(--theme-canvas, var(--nn-canvas));
+  --mv-surface: var(--theme-surface, var(--nn-surface-100));
+  --mv-soft: var(--theme-surface-soft, var(--nn-surface-soft));
+  --mv-border: var(--theme-border, var(--nn-line-300));
+  --mv-text: var(--theme-text, var(--nn-ink-850));
+  --mv-muted: var(--theme-muted, var(--nn-ink-450));
+  --mv-accent: var(--theme-accent, var(--nn-accent));
+  --mv-accent-hover: var(--theme-accent-hover, var(--nn-accent-deep));
+  --mv-accent-soft: var(--theme-accent-soft, var(--nn-accent-soft));
+  /* 没有统一的 --theme-danger，取亮红兜底：浅色主题不发脏，深色主题也压得住 */
+  --mv-danger: var(--theme-danger, var(--nn-danger-bright));
+}
+
+.memory-view {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 24px 32px 32px;
+  background: var(--mv-bg);
+  color: var(--mv-text);
+}
+
+.memory-view[hidden] {
+  display: none;
+}
+
+.memory-view > * {
+  width: 100%;
+  max-width: 820px;
+  margin-inline: auto;
+}
+
+/* ---------- 顶部标题 ---------- */
+.memory-topbar {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.memory-heading {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.memory-heading-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.memory-heading h1 {
+  margin: 0;
+  font-size: 21px;
+  font-weight: 600;
+  line-height: 1.2;
+  letter-spacing: -0.01em;
+  color: var(--mv-text);
+}
+
+.memory-heading p {
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--mv-muted);
+}
+
+.memory-algorithm-badge {
+  padding: 1px 6px;
+  border: 1px solid var(--mv-border);
+  border-radius: 4px;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  color: var(--mv-muted);
+}
+
+.memory-topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* 记忆模块里的次级按钮跟随主题，不用暖色描边 */
+.memory-view .secondary-button {
+  border-color: var(--mv-border);
+  background: var(--mv-surface);
+  color: var(--mv-text);
+}
+
+.memory-view .secondary-button:hover {
+  border-color: var(--mv-muted);
+  background: var(--mv-soft);
+  color: var(--mv-text);
+}
+
+/* 删除卡片：保留中性描边，只把文字染危险色。
+   直接沿用全局 .danger-button 会被上面的 .memory-view .secondary-button 覆盖成普通按钮。 */
+.memory-view .secondary-button.danger-button {
+  border-color: var(--mv-border);
+  color: var(--mv-danger);
+}
+
+.memory-view .secondary-button.danger-button:hover {
+  border-color: var(--mv-danger);
+  background: var(--mv-soft);
+  color: var(--mv-danger);
+}
+
+/* ---------- 统计：一行文本，不是五张卡片 ---------- */
+.memory-stats-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  row-gap: 4px;
+  margin-top: -4px;
+  font-size: 12.5px;
+  color: var(--mv-muted);
+}
+
+.memory-stat {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+}
+
+.memory-stat + .memory-stat::before {
+  content: "·";
+  margin: 0 9px;
+  opacity: 0.5;
+}
+
+.memory-stat strong {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--mv-text);
+  font-variant-numeric: tabular-nums;
+}
+
+.memory-stat.is-highlight strong,
+.memory-stat.is-highlight span {
+  color: var(--mv-accent);
+}
+
+/* ---------- 类型切换条 ---------- */
+.memory-type-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: -2px;
+}
+
+.memory-type-bar[hidden] {
+  display: none;
+}
+
+.memory-type-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 9px;
+  border: 1px solid var(--mv-border);
+  border-radius: 999px;
+  background: var(--mv-surface);
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--mv-muted);
+  cursor: pointer;
+  transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+}
+
+.memory-type-chip:hover {
+  border-color: var(--mv-muted);
+  color: var(--mv-text);
+}
+
+.memory-type-chip small {
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.7;
+}
+
+/* 选中态用内描边，和侧边栏列表的选中态保持同一套语言 */
+.memory-type-chip.is-active {
+  border-color: transparent;
+  background: var(--mv-accent-soft);
+  box-shadow: inset 0 0 0 1px var(--mv-accent);
+  color: var(--mv-text);
+}
+
+/* 编辑器里的已选类型：实心感更强，右侧挂 × */
+.memory-type-chip.is-selected {
+  border-color: var(--mv-border);
+  background: var(--mv-accent-soft);
+  color: var(--mv-text);
+  cursor: default;
+}
+
+.memory-type-chip.is-ghost {
+  border-style: dashed;
+  background: transparent;
+}
+
+.memory-type-chip-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 1;
+  color: var(--mv-muted);
+  cursor: pointer;
+}
+
+.memory-type-chip-remove:hover {
+  background: var(--mv-soft);
+  color: var(--mv-danger);
+}
+
+/* ---------- 面板 ---------- */
+.memory-panel {
+  border: 1px solid var(--mv-border);
+  border-radius: 14px;
+  background: var(--mv-surface);
+  padding: 22px 26px;
+}
+
+.memory-panel[hidden] {
+  display: none;
+}
+
+/* 学习面板只是定位容器，卡片本身浮在中间 */
+.memory-study-panel {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 0;
+  border: none;
+  background: none;
+}
+
+/* 卡片 + 历史作为一组垂直居中。内容超过可视高度时 safe center 退化成
+   顶部对齐并滚动，不会像纯 center 那样把上半截裁到看不见。 */
+.memory-study-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: safe center;
+  gap: 10px;
+  overflow: auto;
+  scrollbar-gutter: stable;
+}
+
+/* 高度随内容：只有一行问题时卡片就矮，不撑成一个装不满的大白框。
+   答案很长时到 max-height 为止，内部滚动。 */
+.memory-card-stage {
+  display: flex;
+  flex-direction: column;
+  max-height: min(62vh, 520px);
+  padding: 18px 28px 20px;
+  border: 1px solid var(--mv-border);
+  border-radius: 14px;
+  background: var(--mv-surface);
+}
+
+.memory-stage-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 11.5px;
+  letter-spacing: 0.02em;
+  color: var(--mv-muted);
+}
+
+.memory-stage-head-actions {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 10px;
+}
+
+/* 卡片带了类型后信息行会变长，超长用省略号，别把「编辑」挤出卡片 */
+.memory-card-meta {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.memory-stage-progress {
+  font-variant-numeric: tabular-nums;
+}
+
+/* 卡片信息行右侧的「编辑」：平时就是一枚小描边按钮，悬停才加深，不抢卡面注意力 */
+.memory-stage-edit {
+  padding: 2px 7px;
+  border: 1px solid var(--mv-border);
+  border-radius: 5px;
+  background: none;
+  font-family: inherit;
+  font-size: 11.5px;
+  letter-spacing: 0.02em;
+  color: var(--mv-muted);
+  cursor: pointer;
+  transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+}
+
+.memory-stage-edit:hover {
+  border-color: var(--mv-border);
+  background: var(--mv-soft);
+  color: var(--mv-text);
+}
+
+.memory-stage-edit:focus-visible {
+  outline: 2px solid var(--mv-accent);
+  outline-offset: 1px;
+}
+
+.memory-card-body {
+  flex: 0 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 24px 2px;
+  overflow: auto;
+  scrollbar-gutter: stable;
+}
+
+/* 居中用 margin:auto，不用 justify-content:center。
+   后者在内容高于容器时会向上、向下各溢出一半——上半截跑到卡片信息行
+   后面且永远滚不出来（长答案被「新卡 · 未开始」盖住就是这个原因）。 */
+.memory-card-inner {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  margin: auto 0;
+}
+
+.memory-card-front {
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 21px;
+  font-weight: 500;
+  line-height: 1.62;
+  color: var(--mv-text);
+}
+
+.memory-card-back {
+  white-space: pre-wrap;
+  word-break: break-word;
+  padding: 13px 16px 15px;
+  border-radius: 10px;
+  background: var(--mv-soft);
+  font-size: 15px;
+  line-height: 1.72;
+  color: var(--mv-text);
+}
+
+.memory-card-back[hidden] {
+  display: none;
+}
+
+.memory-card-back::before {
+  content: "答案";
+  display: block;
+  margin-bottom: 6px;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  color: var(--mv-muted);
+}
+
+.memory-stage-foot {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 10px;
+  padding-top: 14px;
+  flex: 0 0 auto;
+}
+
+.memory-reveal-button {
+  align-self: center;
+  min-width: 168px;
+  padding: 10px 24px;
+  border-radius: 8px;
+  font-size: 14px;
+}
+
+/* ---------- 四档评分：中性为主，只有「良好」用强调色 ---------- */
+.memory-rating-bar {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  width: 100%;
+}
+
+.memory-rating-bar[hidden] {
+  display: none;
+}
+
+.memory-rating-button {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  padding: 9px 6px 8px;
+  border: 1px solid var(--mv-border);
+  border-radius: 10px;
+  background: var(--mv-surface);
+  color: var(--mv-text);
+  line-height: 1.2;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.memory-rating-button span {
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.memory-rating-button small {
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--mv-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.memory-rating-button:hover {
+  border-color: var(--mv-muted);
+  background: var(--mv-soft);
+}
+
+.memory-rating-button:focus-visible {
+  outline: 2px solid var(--mv-accent);
+  outline-offset: 2px;
+}
+
+.memory-rating-button.is-good {
+  border-color: var(--mv-accent);
+  background: var(--mv-accent-soft);
+}
+
+.memory-rating-button.is-good span {
+  font-weight: 600;
+  color: var(--mv-accent);
+}
+
+/* ---------- 作答区：AI 判定的入口 ---------- */
+.memory-answer-zone {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.memory-answer-zone[hidden] {
+  display: none;
+}
+
+.memory-answer-input {
+  width: 100%;
+  min-height: 74px;
+  max-height: 180px;
+  padding: 10px 12px;
+  border: 1px solid var(--mv-border);
+  border-radius: 9px;
+  background: var(--mv-surface);
+  font-family: inherit;
+  font-size: 13.5px;
+  line-height: 1.66;
+  color: var(--mv-text);
+  resize: vertical;
+  transition: border-color 0.15s ease;
+}
+
+.memory-answer-input::placeholder {
+  color: var(--mv-muted);
+  opacity: 0.75;
+}
+
+.memory-answer-input:focus {
+  outline: none;
+  border-color: var(--mv-accent);
+}
+
+.memory-answer-input:disabled {
+  background: var(--mv-soft);
+  color: var(--mv-muted);
+  cursor: progress;
+}
+
+.memory-answer-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.memory-answer-hint {
+  min-width: 0;
+  font-size: 11.5px;
+  color: var(--mv-muted);
+}
+
+.memory-answer-hint[hidden] {
+  display: none;
+}
+
+.memory-answer-submit {
+  flex: 0 0 auto;
+  min-width: 106px;
+  padding: 8px 18px;
+  border-radius: 8px;
+  font-size: 13px;
+}
+
+.memory-answer-submit:disabled {
+  opacity: 0.6;
+  cursor: progress;
+}
+
+/* ---------- 判定结果：档位 + 理由 + 改判 / 下一张 ---------- */
+.memory-judge-result {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 10px 12px 10px 14px;
+  border: 1px solid var(--mv-border);
+  border-radius: 10px;
+  background: var(--mv-soft);
+}
+
+.memory-judge-result[hidden] {
+  display: none;
+}
+
+/* 判定失败：整条换成告警色，别让人以为模型已经判过了 */
+.memory-judge-result.is-error {
+  border-color: var(--mv-danger);
+}
+
+.memory-judge-result.is-error .memory-judge-reason {
+  color: var(--mv-danger);
+}
+
+.memory-judge-main {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+}
+
+.memory-judge-badge {
+  flex: 0 0 auto;
+  padding: 1px 9px;
+  border: 1px solid var(--mv-border);
+  border-radius: 999px;
+  background: var(--mv-surface);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.7;
+  color: var(--mv-text);
+}
+
+.memory-judge-badge[data-rating="good"],
+.memory-judge-badge[data-rating="easy"] {
+  border-color: var(--mv-accent);
+  background: var(--mv-accent-soft);
+  color: var(--mv-accent);
+}
+
+.memory-judge-badge[data-rating="again"] {
+  border-color: var(--mv-danger);
+  color: var(--mv-danger);
+}
+
+.memory-judge-reason {
+  min-width: 0;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--mv-muted);
+  /* 理由是一句话，超过两行就截断，别把结果条撑成一段话 */
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.memory-judge-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.memory-judge-next {
+  min-width: 78px;
+  padding: 7px 16px;
+  border-radius: 8px;
+  font-size: 13px;
+}
+
+.memory-judge-next:focus-visible {
+  outline: 2px solid var(--mv-accent);
+  outline-offset: 2px;
+}
+
+/* 改判时标出「当前是这一档」。不能用 is-good 那套强调色代替：
+   它代表推荐档位，和「已选中」是两件事，混在一起会误读。 */
+.memory-rating-button.is-current {
+  background: var(--mv-soft);
+  border-color: var(--mv-muted);
+}
+
+.memory-rating-button.is-current span::after {
+  content: " · 当前";
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--mv-muted);
+}
+
+/* 改判时把四档顶到结果条下面，视觉上是一件事的延续 */
+.memory-judge-result.is-override {
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+.memory-judge-result.is-override + .memory-rating-bar {
+  padding: 8px;
+  border: 1px solid var(--mv-border);
+  border-top: none;
+  border-radius: 0 0 10px 10px;
+  background: var(--mv-soft);
+}
+
+/* ---------- 作答历史 ---------- */
+.memory-answer-history {
+  flex: 0 0 auto;
+  border: 1px solid var(--mv-border);
+  border-radius: 12px;
+  background: var(--mv-surface);
+  overflow: hidden;
+}
+
+.memory-answer-history[hidden] {
+  display: none;
+}
+
+.memory-history-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 9px 14px;
+  border: none;
+  background: none;
+  font-family: inherit;
+  font-size: 12.5px;
+  color: var(--mv-muted);
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.memory-history-toggle:hover {
+  background: var(--mv-soft);
+  color: var(--mv-text);
+}
+
+.memory-history-toggle:focus-visible {
+  outline: 2px solid var(--mv-accent);
+  outline-offset: -2px;
+}
+
+.memory-history-title {
+  font-weight: 500;
+}
+
+.memory-history-count {
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.memory-history-chevron {
+  margin-left: auto;
+  font-size: 14px;
+  line-height: 1;
+  transition: transform 0.18s ease;
+}
+
+.memory-history-toggle.is-open .memory-history-chevron {
+  transform: rotate(90deg);
+}
+
+.memory-history-list {
+  margin: 0;
+  padding: 0 12px 12px;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 280px;
+  overflow: auto;
+  scrollbar-gutter: stable;
+}
+
+.memory-history-list[hidden] {
+  display: none;
+}
+
+.memory-history-item {
+  position: relative;
+  padding: 9px 12px 10px;
+  border: 1px solid var(--mv-border);
+  border-radius: 9px;
+  background: var(--mv-soft);
+}
+
+.memory-history-item-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-right: 46px;
+}
+
+.memory-history-badge {
+  flex: 0 0 auto;
+  padding: 0 8px;
+  border: 1px solid var(--mv-border);
+  border-radius: 999px;
+  background: var(--mv-surface);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.7;
+  color: var(--mv-text);
+}
+
+.memory-history-badge[data-rating="good"],
+.memory-history-badge[data-rating="easy"] {
+  border-color: var(--mv-accent);
+  color: var(--mv-accent);
+}
+
+.memory-history-badge[data-rating="again"] {
+  border-color: var(--mv-danger);
+  color: var(--mv-danger);
+}
+
+.memory-history-time {
+  font-size: 11px;
+  color: var(--mv-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.memory-history-edited {
+  padding: 0 4px;
+  border: 1px solid var(--mv-border);
+  border-radius: 4px;
+  font-size: 10.5px;
+  color: var(--mv-muted);
+}
+
+.memory-history-text {
+  margin: 6px 0 0;
+  font-size: 12.5px;
+  line-height: 1.62;
+  color: var(--mv-text);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.memory-history-reason {
+  margin: 3px 0 0;
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: var(--mv-muted);
+}
+
+.memory-history-reason:empty {
+  display: none;
+}
+
+/* 删除按钮平时弱化显示（让「可删」这件事看得见），悬停时变红 */
+.memory-history-remove {
+  position: absolute;
+  top: 7px;
+  right: 8px;
+  padding: 1px 6px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: none;
+  font-family: inherit;
+  font-size: 11px;
+  color: var(--mv-muted);
+  cursor: pointer;
+  opacity: 0.55;
+  transition: opacity 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+
+.memory-history-item:hover .memory-history-remove,
+.memory-history-remove:focus-visible {
+  opacity: 1;
+}
+
+.memory-history-remove:hover {
+  border-color: var(--mv-border);
+  color: var(--mv-danger);
+}
+
+.memory-hint {
+  margin: 0;
+  text-align: center;
+  font-size: 11.5px;
+  color: var(--mv-muted);
+}
+
+/* ---------- 新建 / 编辑卡片 ---------- */
+.memory-panel-heading h2 {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 600;
+  color: var(--mv-text);
+}
+
+.memory-panel-heading p {
+  margin: 5px 0 0;
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--mv-muted);
+}
+
+.memory-editor-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  margin-top: 16px;
+}
+
+.memory-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.memory-field-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--mv-muted);
+}
+
+.memory-field textarea {
+  resize: vertical;
+  min-height: 180px;
+  padding: 11px 13px;
+  border: 1px solid var(--mv-border);
+  border-radius: 9px;
+  background: var(--mv-surface);
+  color: var(--mv-text);
+  font-size: 14px;
+  line-height: 1.7;
+}
+
+.memory-field textarea::placeholder {
+  color: var(--mv-muted);
+  opacity: 0.7;
+}
+
+.memory-field textarea:focus {
+  outline: none;
+  border-color: var(--mv-accent);
+  box-shadow: 0 0 0 3px var(--mv-accent-soft);
+}
+
+/* ---------- 编辑器：类型 ---------- */
+.memory-type-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 16px;
+}
+
+/* 已选 chip 和输入框同排，整体看着像一个输入区 */
+.memory-type-editor {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-height: 40px;
+  padding: 7px 10px;
+  border: 1px solid var(--mv-border);
+  border-radius: 9px;
+  background: var(--mv-surface);
+}
+
+.memory-type-editor:focus-within {
+  border-color: var(--mv-accent);
+  box-shadow: 0 0 0 3px var(--mv-accent-soft);
+}
+
+.memory-type-input {
+  flex: 1 1 160px;
+  min-width: 140px;
+  padding: 2px 0;
+  border: none;
+  background: transparent;
+  font-family: inherit;
+  font-size: 13px;
+  color: var(--mv-text);
+}
+
+.memory-type-input:focus {
+  outline: none;
+}
+
+.memory-type-input::placeholder {
+  color: var(--mv-muted);
+  opacity: 0.7;
+}
+
+.memory-type-empty {
+  font-size: 12px;
+  color: var(--mv-muted);
+}
+
+.memory-type-suggestions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 2px;
+}
+
+.memory-type-suggestions[hidden] {
+  display: none;
+}
+
+.memory-type-suggestions-label {
+  font-size: 11.5px;
+  color: var(--mv-muted);
+}
+
+.memory-panel-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 18px;
+}
+
+.memory-panel-actions-spacer {
+  flex: 1;
+}
+
+/* ---------- 算法参数 ---------- */
+.memory-settings-group {
+  margin-top: 20px;
+}
+
+.memory-settings-group + .memory-settings-group {
+  padding-top: 14px;
+  border-top: 1px solid var(--mv-border);
+}
+
+.memory-settings-group h3 {
+  position: relative;
+  margin: 0 0 10px;
+  padding-left: 9px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--mv-muted);
+}
+
+.memory-settings-group h3::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 2px;
+  bottom: 2px;
+  width: 2px;
+  border-radius: 1px;
+  background: var(--mv-accent);
+  opacity: 0.55;
+}
+
+/* 固定三列：字段数不是 3 的整数倍时，最后一行的单个字段只占 1/3 宽，
+   不会被拉伸成一条通栏输入框（auto-fit 会）。 */
+.memory-settings-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px 16px;
+}
+
+.memory-setting-field {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.memory-setting-label {
+  font-size: 12.5px;
+  color: var(--mv-text);
+}
+
+.memory-setting-control {
+  display: flex;
+  align-items: center;
+  padding-right: 10px;
+  border: 1px solid var(--mv-border);
+  border-radius: 8px;
+  background: var(--mv-surface);
+}
+
+.memory-setting-control:focus-within {
+  border-color: var(--mv-accent);
+  box-shadow: 0 0 0 3px var(--mv-accent-soft);
+}
+
+.memory-setting-control input {
+  flex: 1;
+  min-width: 0;
+  padding: 7px 10px;
+  border: none;
+  background: transparent;
+  color: var(--mv-text);
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
+}
+
+.memory-setting-control input:focus {
+  outline: none;
+}
+
+.memory-setting-unit {
+  flex: 0 0 auto;
+  font-size: 11.5px;
+  color: var(--mv-muted);
+}
+
+.memory-setting-field small {
+  font-size: 11px;
+  line-height: 1.55;
+  color: var(--mv-muted);
+}
+
+/* ---------- 空状态 ---------- */
+.memory-empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 240px;
+  padding: 40px 24px;
+  border: 1px solid var(--mv-border);
+  border-radius: 14px;
+  background: var(--mv-surface);
+  text-align: center;
+}
+
+.memory-empty-state[hidden] {
+  display: none;
+}
+
+.memory-empty-state h2 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--mv-text);
+}
+
+.memory-empty-state p {
+  margin: 0 0 6px;
+  font-size: 12.5px;
+  color: var(--mv-muted);
+}
+
+/* ---------- 侧边栏记忆列表 ---------- */
+.memory-sidebar-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 4px 8px;
+  font-size: 12px;
+  color: var(--mv-muted, var(--theme-muted, var(--nn-ink-500)));
+}
+
+.memory-sidebar-header strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--theme-text, var(--nn-ink-700));
+}
+
+.memory-sidebar-header span {
+  flex: 0 0 auto;
+}
+
+.memory-sidebar-start {
+  width: 100%;
+  margin-bottom: 10px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  font-size: 13px;
+}
+
+.memory-sidebar-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.memory-sidebar-item {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  width: 100%;
+  padding: 8px 9px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.memory-sidebar-item:hover {
+  background: var(--theme-accent-soft, rgba(0, 0, 0, 0.04));
+}
+
+.memory-sidebar-item.is-active {
+  /* 悬停态是纯底色，选中态再加一圈内描边：两者不再长得一样，
+     点完能一眼看出高亮跟着卡面走了 */
+  background: var(--mv-accent-soft);
+  box-shadow: inset 0 0 0 1px var(--mv-accent);
+}
+
+.memory-sidebar-item-title {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12.5px;
+  color: var(--theme-text, var(--nn-ink-800));
+}
+
+.memory-sidebar-item-meta {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  color: var(--theme-muted, var(--nn-ink-450));
+}
+
+.memory-sidebar-empty {
+  padding: 16px 8px;
+  font-size: 12px;
+  color: var(--theme-muted, var(--nn-ink-450));
+  text-align: center;
+}
+
+@media (max-width: 1080px) {
+  .memory-settings-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+/* ---------- 窄窗口 ---------- */
+@media (max-width: 980px) {
+  .memory-view {
+    padding: 18px 16px 28px;
+  }
+  .memory-card-stage {
+    max-height: none;
+    padding: 16px 18px 18px;
+  }
+  .memory-rating-bar {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .memory-editor-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .memory-settings-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* ---- 设置：局域网同步 ---- */
+.settings-sync-status {
+  margin: 0;
+  color: var(--nn-ink-350);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.settings-sync-pair {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border: 1px dashed var(--nn-line-100);
+  border-radius: 10px;
+  padding: 10px 12px;
+}
+
+.settings-sync-pair-copy {
+  display: grid;
+  gap: 2px;
+}
+
+.settings-sync-pair-copy span {
+  font-size: 11px;
+  color: var(--nn-ink-350);
+}
+
+.settings-sync-code {
+  font-family: "Cascadia Code", Consolas, monospace;
+  font-size: 20px;
+  letter-spacing: 4px;
+  color: var(--nn-ink-700);
+}
+
+.settings-sync-devices {
+  display: grid;
+  gap: 6px;
+}
+
+.settings-sync-empty {
+  margin: 0;
+  font-size: 11px;
+  color: var(--nn-ink-250);
+}
+
+.settings-sync-device {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 12px;
+  color: var(--nn-ink-500);
+  border: 1px solid var(--nn-line-100);
+  border-radius: 8px;
+  padding: 6px 10px;
+}
+
+.settings-sync-device .secondary-button {
+  padding: 4px 10px;
+  font-size: 11px;
 }

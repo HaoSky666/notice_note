@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Notice Note Mobile</title>
-  <link rel="stylesheet" href="./styles.css?v=11">
+  <link rel="stylesheet" href="./styles.css?v=13">
 </head>
 <body>
   <main class="app-shell">
@@ -16,6 +16,7 @@
           </div>
           <div class="toolbar-actions">
             <button id="importPackageButton" class="refresh-button" type="button">导入文件</button>
+            <button id="msettingsButton" class="refresh-button" type="button" aria-label="设置">设置</button>
             <input id="packageFileInput" type="file" accept=".notice-note-mobile,application/octet-stream" hidden>
           </div>
         </div>
@@ -42,7 +43,59 @@
         </div>
       </article>
     </section>
+
+    <section id="calendarPanel" class="tab-panel" hidden></section>
+    <section id="reviewPanel" class="tab-panel" hidden></section>
+    <section id="memoryPanel" class="tab-panel" hidden></section>
   </main>
+
+  <nav id="tabBar" class="tab-bar" aria-label="主导航">
+    <button class="tab-item is-active" data-tab="notes" type="button" aria-current="page">
+      <span class="tab-icon" aria-hidden="true">📄</span>笔记
+    </button>
+    <button class="tab-item" data-tab="calendar" type="button">
+      <span class="tab-icon" aria-hidden="true">📅</span>日历
+    </button>
+    <button class="tab-item" data-tab="review" type="button">
+      <span class="tab-icon" aria-hidden="true">🔁</span>回顾
+    </button>
+    <button class="tab-item" data-tab="memory" type="button">
+      <span class="tab-icon" aria-hidden="true">🧠</span>记忆
+    </button>
+  </nav>
+
+  <dialog id="msettingsDialog" class="msettings-dialog" aria-label="设置">
+    <div class="msettings-head">
+      <h2>设置</h2>
+      <button id="closeMsettingsButton" class="image-lightbox-control" type="button" aria-label="关闭设置">×</button>
+    </div>
+
+    <section class="msettings-section">
+      <h3>AI 判定（记忆卡）</h3>
+      <label class="msettings-check">
+        <input id="msetAiEnabledInput" type="checkbox">
+        <span>作答后由 AI 自动判档（失败退回手动）</span>
+      </label>
+      <label class="msettings-field">
+        <span>API 地址（OpenAI 兼容）</span>
+        <input id="msetAiBaseUrlInput" type="url" placeholder="https://qianfan.baidubce.com/v2/tokenplan/personal" autocomplete="off">
+      </label>
+      <label class="msettings-field">
+        <span>模型</span>
+        <input id="msetAiModelInput" type="text" placeholder="deepseek-v4.1-flash" autocomplete="off">
+      </label>
+      <label class="msettings-field">
+        <span>API Key（只保存在手机本机）</span>
+        <input id="msetAiKeyInput" type="password" placeholder="填写你自己的 Key" autocomplete="off">
+      </label>
+      <div class="msettings-actions">
+        <button id="msetAiSaveButton" class="primary-action" type="button">保存 AI 配置</button>
+      </div>
+      <p id="msetAiStatus" class="msettings-status" role="status"></p>
+    </section>
+
+    <p class="msettings-note">离线包内容均为明文，密码目录在手机端没有密码保护。</p>
+  </dialog>
 
   <div id="imageLightbox" class="image-lightbox" role="dialog" aria-modal="true" aria-label="图片预览" hidden>
     <div class="image-lightbox-zoom-controls" aria-label="图片缩放">
@@ -55,7 +108,19 @@
     </div>
   </div>
 
-  <script src="./lib/mobile-utils.js?v=1"></script>
-  <script src="./app.js?v=12"></script>
+  <script src="./lib/mobile-utils.js?v=3"></script>
+  <script src="./lib/shared/date-utils.js?v=1"></script>
+  <script src="./lib/shared/memory-types.js?v=1"></script>
+  <script src="./lib/shared/sm2-scheduler.js?v=1"></script>
+  <script src="./lib/shared/memory-card-store.js?v=1"></script>
+  <script src="./lib/shared/ai-judge.js?v=1"></script>
+<script src="./lib/shared/review-queue.js?v=1"></script>
+<script src="./store.js?v=1"></script>
+<script src="./app.js?v=14"></script>
+  <script src="./calendar.js?v=2"></script>
+  <script src="./review.js?v=2"></script>
+  <script src="./memory.js?v=2"></script>
+  <script src="./msettings.js?v=1"></script>
+  <script src="./tabs.js?v=1"></script>
 </body>
 </html>

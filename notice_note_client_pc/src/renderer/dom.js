@@ -53,6 +53,14 @@ const exportMobilePackageButton = document.querySelector(
 const exportMobilePackageStatus = document.querySelector(
   "#exportMobilePackageStatus",
 );
+// 设置里的 AI 判定配置
+const aiJudgeEnabledInput = document.querySelector("#aiJudgeEnabledInput");
+const aiJudgeBaseUrlInput = document.querySelector("#aiJudgeBaseUrlInput");
+const aiJudgeModelInput = document.querySelector("#aiJudgeModelInput");
+const aiJudgeApiKeyInput = document.querySelector("#aiJudgeApiKeyInput");
+const testAiJudgeButton = document.querySelector("#testAiJudgeButton");
+const saveAiJudgeButton = document.querySelector("#saveAiJudgeButton");
+const aiJudgeStatus = document.querySelector("#aiJudgeStatus");
 const chooseStorageButton = document.querySelector("#chooseStorageButton");
 const resetStorageButton = document.querySelector("#resetStorageButton");
 const newMenuDropdown = document.querySelector("#newMenuDropdown");
@@ -150,3 +158,66 @@ const zoomOutImageLightboxButton = document.querySelector(
 const zoomInImageLightboxButton = document.querySelector(
   "#zoomInImageLightboxButton",
 );
+// 记忆卡视图（SM-2）
+const showMemoryButton = document.querySelector("#showMemoryButton");
+const memoryView = document.querySelector("#memoryView");
+const memorySubtitle = document.querySelector("#memorySubtitle");
+const memorySettingsButton = document.querySelector("#memorySettingsButton");
+const memoryNewCardButton = document.querySelector("#memoryNewCardButton");
+const memoryStatsBar = document.querySelector("#memoryStatsBar");
+const memoryTypeBar = document.querySelector("#memoryTypeBar");
+const memoryStudyPanel = document.querySelector("#memoryStudyPanel");
+const memoryCardMeta = document.querySelector("#memoryCardMeta");
+const memoryStageProgress = document.querySelector("#memoryStageProgress");
+const memoryEditCardButton = document.querySelector("#memoryEditCardButton");
+const memoryCardFront = document.querySelector("#memoryCardFront");
+const memoryCardBack = document.querySelector("#memoryCardBack");
+const memoryRevealButton = document.querySelector("#memoryRevealButton");
+const memoryRatingBar = document.querySelector("#memoryRatingBar");
+const memoryPreviewAgain = document.querySelector("#memoryPreviewAgain");
+const memoryPreviewHard = document.querySelector("#memoryPreviewHard");
+const memoryPreviewGood = document.querySelector("#memoryPreviewGood");
+const memoryPreviewEasy = document.querySelector("#memoryPreviewEasy");
+// AI 判定：作答输入、判定结果条、作答历史
+const memoryAnswerZone = document.querySelector("#memoryAnswerZone");
+const memoryAnswerInput = document.querySelector("#memoryAnswerInput");
+const memoryAnswerHint = document.querySelector("#memoryAnswerHint");
+const memoryAnswerSubmitButton = document.querySelector("#memoryAnswerSubmitButton");
+// 注意与 state 里的 memoryJudgeResult 区分：那个是数据，这个是结果条元素。
+const memoryJudgeResultBar = document.querySelector("#memoryJudgeResult");
+const memoryJudgeBadge = document.querySelector("#memoryJudgeBadge");
+const memoryJudgeReason = document.querySelector("#memoryJudgeReason");
+const memoryJudgeOverrideButton = document.querySelector("#memoryJudgeOverrideButton");
+const memoryJudgeNextButton = document.querySelector("#memoryJudgeNextButton");
+const memoryAnswerHistory = document.querySelector("#memoryAnswerHistory");
+const memoryAnswerHistoryToggle = document.querySelector("#memoryAnswerHistoryToggle");
+const memoryAnswerHistoryCount = document.querySelector("#memoryAnswerHistoryCount");
+const memoryAnswerHistoryList = document.querySelector("#memoryAnswerHistoryList");
+const memoryStudyHint = document.querySelector("#memoryStudyHint");
+const memoryEditorPanel = document.querySelector("#memoryEditorPanel");
+const memoryEditorTitle = document.querySelector("#memoryEditorTitle");
+const memoryFrontInput = document.querySelector("#memoryFrontInput");
+const memoryBackInput = document.querySelector("#memoryBackInput");
+const memoryDeleteCardButton = document.querySelector("#memoryDeleteCardButton");
+const memoryTypeChips = document.querySelector("#memoryTypeChips");
+const memoryTypeInput = document.querySelector("#memoryTypeInput");
+const memoryTypeSuggestions = document.querySelector("#memoryTypeSuggestions");
+const memoryCancelEditButton = document.querySelector("#memoryCancelEditButton");
+const memorySaveCardButton = document.querySelector("#memorySaveCardButton");
+const memorySettingsPanel = document.querySelector("#memorySettingsPanel");
+const memorySettingLearningSteps = document.querySelector("#memorySettingLearningSteps");
+const memorySettingGraduatingInterval = document.querySelector("#memorySettingGraduatingInterval");
+const memorySettingEasyInterval = document.querySelector("#memorySettingEasyInterval");
+const memorySettingStartingEase = document.querySelector("#memorySettingStartingEase");
+const memorySettingMaximumInterval = document.querySelector("#memorySettingMaximumInterval");
+const memorySettingEasyBonus = document.querySelector("#memorySettingEasyBonus");
+const memorySettingIntervalModifier = document.querySelector("#memorySettingIntervalModifier");
+const memorySettingRelearningSteps = document.querySelector("#memorySettingRelearningSteps");
+const memorySettingNewInterval = document.querySelector("#memorySettingNewInterval");
+const memorySettingMinimumInterval = document.querySelector("#memorySettingMinimumInterval");
+const memorySettingNewCardsPerDay = document.querySelector("#memorySettingNewCardsPerDay");
+const memoryResetSettingsButton = document.querySelector("#memoryResetSettingsButton");
+const memoryCancelSettingsButton = document.querySelector("#memoryCancelSettingsButton");
+const memorySaveSettingsButton = document.querySelector("#memorySaveSettingsButton");
+const memoryEmptyState = document.querySelector("#memoryEmptyState");
+const memoryEmptyCreateButton = document.querySelector("#memoryEmptyCreateButton");

@@ -54,6 +54,21 @@ contextBridge.exposeInMainWorld('noticeNote', {
   updateDayReminderDate: (id, date) => ipcRenderer.invoke('day-reminders:update-date', id, date),
   removeDayReminder: (id) => ipcRenderer.invoke('day-reminders:remove', id),
   autoScheduleDayReminders: (dayKey) => ipcRenderer.invoke('day-reminders:auto', dayKey),
+  listMemoryCards: () => ipcRenderer.invoke('memory:list'),
+  createMemoryCard: (payload) => ipcRenderer.invoke('memory:create', payload),
+  updateMemoryCard: (payload) => ipcRenderer.invoke('memory:update', payload),
+  deleteMemoryCard: (cardId) => ipcRenderer.invoke('memory:delete', cardId),
+  reviewMemoryCard: (payload) => ipcRenderer.invoke('memory:review', payload),
+  filterMemoryCards: (payload) => ipcRenderer.invoke('memory:filter', payload),
+  updateMemorySettings: (settings) => ipcRenderer.invoke('memory:settings:update', settings),
+  // AI 判定：提交作答文本，主进程判档并直接落盘调度
+  judgeMemoryAnswer: (payload) => ipcRenderer.invoke('memory:judge', payload),
+  rejudgeMemoryAnswer: (payload) => ipcRenderer.invoke('memory:rejudge', payload),
+  listMemoryAnswers: (cardId) => ipcRenderer.invoke('memory:answers:list', cardId),
+  deleteMemoryAnswer: (payload) => ipcRenderer.invoke('memory:answers:delete', payload),
+  getAiJudgeSettings: () => ipcRenderer.invoke('memory:ai:get'),
+  updateAiJudgeSettings: (settings) => ipcRenderer.invoke('memory:ai:update', settings),
+  testAiJudge: () => ipcRenderer.invoke('memory:ai:test'),
   onNotesChanged: (callback) => {
     const listener = (_event, notes) => callback(notes);
     ipcRenderer.on('notes:changed', listener);
@@ -95,5 +110,10 @@ contextBridge.exposeInMainWorld('noticeNote', {
     const listener = (_event, list) => callback(list);
     ipcRenderer.on('day-reminders:changed', listener);
     return () => ipcRenderer.removeListener('day-reminders:changed', listener);
+  },
+  onMemoryChanged: (callback) => {
+    const listener = (_event, snapshot) => callback(snapshot);
+    ipcRenderer.on('memory:changed', listener);
+    return () => ipcRenderer.removeListener('memory:changed', listener);
   }
 });

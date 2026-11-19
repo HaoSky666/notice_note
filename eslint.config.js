@@ -117,7 +117,7 @@ module.exports = [
   {
     files: [
       'notice_note_client_pc/src/renderer/**/*.js',
-      'notice_note_client_app/src/app.js'
+      'notice_note_client_app/src/*.js'
     ],
     languageOptions: {
       ecmaVersion: 2022,

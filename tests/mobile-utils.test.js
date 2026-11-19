@@ -72,6 +72,12 @@ test('P1-7 回归：离线包中的密码目录一律标成未解锁/明文', ()
   assert.equal(normalizeMobileFolder({ id: 'f2' }).isPlaintextExport, false);
 });
 
+test('归一化保留回顾目录标志：浏览层靠它镜像 PC 隐藏 .study_notice', () => {
+  const review = normalizeMobileFolder({ id: 'rv', name: '.study_notice', isReviewFolder: true });
+  assert.equal(review.isReviewFolder, true, 'isReviewFolder 不能在归一化时被白名单丢掉');
+  assert.equal(normalizeMobileFolder({ id: 'f3', name: '公司' }).isReviewFolder, false);
+});
+
 test('P1-11 回归：{{ }} 糊住解析与 PC 语义一致，且不跨行', () => {
   assert.deepEqual(splitClozeSegments('前{{答案}}后'), [
     { type: 'text', value: '前' },

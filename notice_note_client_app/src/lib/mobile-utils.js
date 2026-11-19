@@ -93,6 +93,9 @@
       parentId: folder.parentId || null,
       path: folder.path,
       isProtected: Boolean(folder.isProtected),
+      // 回顾目录隐藏标志必须保留：浏览层靠它镜像 PC 侧边栏藏起 .study_notice。
+      // 早前白名单漏了这字段，导致同步清单带了标志也在读快照时被丢掉。
+      isReviewFolder: Boolean(folder.isReviewFolder),
       isUnlocked: false,
       isPlaintextExport: Boolean(folder.isProtected),
       noteCount: Number(folder.noteCount) || 0

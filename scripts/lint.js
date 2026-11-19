@@ -7,15 +7,24 @@ const path = require('node:path');
 const ROOT = path.resolve(__dirname, '..');
 const syntaxOnly = process.argv.includes('--syntax-only');
 const PC_SRC = path.join(ROOT, 'notice_note_client_pc/src');
+const APP_SRC = path.join(ROOT, 'notice_note_client_app/src');
+
+// 手机端页面脚本（经典脚本，共享全局）；lib 下的 UMD 不参与重名检查
+const APP_CLASSIC_SCRIPTS = [
+  'app.js', 'store.js', 'calendar.js',
+  'review.js', 'memory.js', 'msettings.js', 'tabs.js'
+];
 
 const TARGETS = [
   'notice_note_client_pc/src/main.js',
   'notice_note_client_pc/src/preload.js',
-  'notice_note_client_app/src/app.js',
   'notice_note_client_app/src/lib/mobile-utils.js',
+  ...APP_CLASSIC_SCRIPTS.map((name) => `notice_note_client_app/src/${name}`),
+  ...fs.readdirSync(path.join(APP_SRC, 'lib/shared')).map((f) => `notice_note_client_app/src/lib/shared/${f}`),
   ...fs.readdirSync(path.join(PC_SRC, 'lib')).map((f) => `notice_note_client_pc/src/lib/${f}`),
   ...fs.readdirSync(path.join(PC_SRC, 'ipc')).map((f) => `notice_note_client_pc/src/ipc/${f}`),
-  ...fs.readdirSync(path.join(PC_SRC, 'renderer')).map((f) => `notice_note_client_pc/src/renderer/${f}`)
+  ...fs.readdirSync(path.join(PC_SRC, 'renderer')).map((f) => `notice_note_client_pc/src/renderer/${f}`),
+  ...fs.readdirSync(path.join(ROOT, 'scripts')).filter((f) => f.endsWith('.js')).map((f) => `scripts/${f}`)
 ].filter((rel) => rel.endsWith('.js'));
 
 let failed = 0;
@@ -80,6 +89,39 @@ if (!syntaxOnly) {
     failed += 1;
   } else {
     console.log(`页面脚本检查：${scripts.length} 个引用全部存在`);
+  }
+
+  // 手机端同样是经典脚本共享全局，重名会白屏；页面脚本引用也要完整。
+  const appOwners = new Map();
+  const appDuplicates = [];
+  for (const name of APP_CLASSIC_SCRIPTS) {
+    for (const declared of collectTopLevelDeclarations(path.join(APP_SRC, name))) {
+      const previous = appOwners.get(declared);
+      if (previous && previous !== name) {
+        appDuplicates.push(`${declared}: ${previous} / ${name}`);
+      } else {
+        appOwners.set(declared, name);
+      }
+    }
+  }
+  if (appDuplicates.length > 0) {
+    console.log('FAIL 手机端顶层声明重名:');
+    for (const item of appDuplicates) {
+      console.log(`  ${item}`);
+    }
+    failed += 1;
+  } else {
+    console.log(`手机端声明检查：${APP_CLASSIC_SCRIPTS.length} 个经典脚本，${appOwners.size} 个全局名，无重名`);
+  }
+
+  const appHtml = fs.readFileSync(path.join(APP_SRC, 'index.html'), 'utf8');
+  const appScripts = [...appHtml.matchAll(/<script\s+src="\.\/([^"?]+)/g)].map((match) => match[1]);
+  const appMissing = appScripts.filter((rel) => !fs.existsSync(path.join(APP_SRC, rel)));
+  if (appMissing.length > 0) {
+    console.log('FAIL 手机端 index.html 引用了不存在的脚本:', appMissing.join(', '));
+    failed += 1;
+  } else {
+    console.log(`手机端页面脚本检查：${appScripts.length} 个引用全部存在`);
   }
 }
 

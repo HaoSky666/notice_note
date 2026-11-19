@@ -57,7 +57,36 @@ const appState = {
   viewerSearchMatches: [],
   activeViewerSearchIndex: -1,
   imageLightboxPreviousFocus: null,
-  imageLightboxZoom: 1
+  imageLightboxZoom: 1,
+  // 记忆卡：最近一次 IPC 快照、当前面板、正在学的卡、是否已翻面。
+  memorySnapshot: null,
+  memoryViewMode: "study",
+  memoryCurrentCardId: null,
+  memoryEditingCardId: null,
+  memoryRevealed: false,
+  // 编辑会话号：显式打开编辑器才 +1，用来区分「新一次编辑」和「后台重渲染」，
+  // 后者不能把输入框写回快照值（否则切窗口回来草稿就没了）。
+  memoryEditorSession: 0,
+  memoryEditorRenderedSession: 0,
+  // 按类型学习的当前筛选（null = 全部）。由主进程快照回传，渲染层只做镜像。
+  memoryTypeFilter: null,
+  // 编辑器里正在编辑的类型列表，保存时随卡面一起提交。
+  memoryEditorTypes: [],
+  // AI 判定：作答草稿、判定状态机、最近一次判定结果、当前卡的作答历史。
+  // 草稿带 cardId：切卡才清空，后台重渲染不能把正在敲的内容冲掉。
+  memoryAnswerDraft: "",
+  memoryAnswerDraftCardId: null,
+  // idle（还没作答）| judging（等待模型）| result（已出结果，等下一张）| error（判定失败，退回手动）| override（改判中）
+  memoryJudgeState: "idle",
+  memoryJudgeResult: null,
+  memoryJudgeError: "",
+  memoryAnswers: [],
+  memoryAnswersCardId: null,
+  memoryAnswersExpanded: false,
+  // 历史请求序号：快速切卡时丢弃后到的旧响应。
+  memoryAnswersSeq: 0,
+  // 设置弹窗里的 AI 判定配置（含 apiKey，只在主进程与设置页之间流转）。
+  aiJudgeSettings: null
 };
 
 const appStateConstants = {
