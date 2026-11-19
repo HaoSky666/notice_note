@@ -571,6 +571,21 @@ test('新增的作答区与历史样式同样跟主题走，不写死颜色', ()
   assert.match(block, /\.memory-judge-badge \{[\s\S]{0,240}background: var\(--mv-surface\)/);
 });
 
+test('局域网同步：附件白名单放行笔记内嵌图片，其余内部目录仍拒绝', () => {
+  const main = pc('main.js');
+  const start = main.indexOf('function resolveSyncAsset(');
+  assert.ok(start > 0, 'resolveSyncAsset 必须存在');
+  const end = main.indexOf('\n}', start);
+  const block = main.slice(start, end > start ? end : undefined);
+  // 内嵌图片在内部元数据目录的 notice_note_images 子目录，属于内容，必须单独放行
+  assert.match(block, /IMAGE_ASSET_DIR_NAME/, '图片子目录白名单不能丢');
+  assert.match(block, /isPathInside\(imageRoot, absolute\)/);
+  // 其余内部目录（密码哈希、卡片落盘等）仍然拒绝
+  assert.match(block, /isInternalDirectory\(segment\)/);
+  // 清单与下载走同一份快照资产集合，避免「清单有、下载 404」的契约错位
+  assert.match(main, /assets: snapshot\.assets/);
+});
+
 test('手机端 hidden 兜底：自定义 display 的面板/遮罩必须能被 hidden 隐藏', () => {
   const css = app('styles.css');
   assert.match(css, /\[hidden\]\s*\{\s*display: none !important;\s*\}/);

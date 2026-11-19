@@ -98,6 +98,7 @@ const registerImagesIpc = require('./ipc/images');
 const registerStorageIpc = require('./ipc/storage');
 const registerLibraryIpc = require('./ipc/library');
 const registerMemoryIpc = require('./ipc/memory-cards');
+const registerSyncIpc = require('./ipc/sync');
 const {
   createCard: createMemoryCardRecord,
   scheduleCard: scheduleMemoryCard
@@ -133,6 +134,18 @@ const {
   truncateAnswer,
   VALID_RATINGS
 } = require('./lib/ai-judge');
+const {
+  SYNC_SERVER_PORT,
+  createPairCode,
+  listLanAddresses,
+  createSyncServer
+} = require('./lib/sync-server');
+const {
+  mergeMemoryCards,
+  mergeAnswerEntries,
+  mergeReviewHistory,
+  mergeReviewLog
+} = require('./lib/sync-merge');
 
 const NOTES_DIR_NAME = 'notes';
 const OLD_NOTE_FILE_NAME = 'notes.json';
@@ -221,6 +234,12 @@ const unlockedFolderIds = new Set();
 let missedReminderNoticeDate = null;
 let pendingMissedReminderNotice = null;
 let quitCheckInProgress = false;
+// 局域网同步：配对码只存内存（每次生成新的），已配对 token 持久化到 config.json。
+// 服务默认关闭，用户在设置里显式开启后才监听端口。
+let syncEnabled = false;
+let syncTokens = [];
+let syncPairCode = '';
+let syncServer = null;
 
 if (process.platform === 'win32') {
   app.setAppUserModelId('com.notice-note.app');
@@ -849,6 +868,13 @@ async function loadConfig() {
       notesPath = getDefaultNotesPath();
     }
     aiJudgeConfig = normalizeAiJudgeConfig(config.aiJudge);
+    const syncConfig = config.sync && typeof config.sync === 'object' && !Array.isArray(config.sync)
+      ? config.sync
+      : {};
+    syncEnabled = syncConfig.enabled === true;
+    syncTokens = Array.isArray(syncConfig.tokens)
+      ? syncConfig.tokens.filter((item) => item && typeof item.token === 'string' && item.token)
+      : [];
   } else {
     notesPath = getDefaultNotesPath();
     dailyReviewEnabled = true;
@@ -866,6 +892,8 @@ async function loadConfig() {
     missedReminderNoticeDate = null;
     pendingMissedReminderNotice = null;
     aiJudgeConfig = normalizeAiJudgeConfig({});
+    syncEnabled = false;
+    syncTokens = [];
   }
 }
 
@@ -887,7 +915,9 @@ async function saveConfig() {
     dayReviewLog,
     missedReminderNoticeDate,
     pendingMissedReminderNotice,
-    aiJudge: aiJudgeConfig
+    aiJudge: aiJudgeConfig,
+    // 配对码不落盘：重启后必须重新生成，避免旧码长期有效
+    sync: { enabled: syncEnabled, tokens: syncTokens }
   });
 }
 
@@ -1730,6 +1760,227 @@ async function exportMobilePackage() {
     assetCount: assetFiles.length,
     size: packageSize
   };
+}
+
+// ---- 局域网同步 ----------------------------------------------------------
+// 手机在同一 WiFi 下直连本机拉数据。传输层在 lib/sync-server.js，这里只提供
+// 业务回调：清单 / 正文 / 附件解析 / 合并回传。合并规则见 lib/sync-merge.js。
+
+function sendSyncChanged() {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('sync:changed', getSyncStatus());
+  }
+}
+
+function getSyncStatus() {
+  return {
+    enabled: syncEnabled,
+    running: Boolean(syncServer && syncServer.isRunning()),
+    port: (syncServer && syncServer.getPort()) || SYNC_SERVER_PORT,
+    addresses: listLanAddresses().map((item) => item.address),
+    pairCode: syncPairCode,
+    devices: syncTokens.map((item) => ({
+      token: item.token,
+      device: item.device || '手机',
+      pairedAt: item.pairedAt || null
+    }))
+  };
+}
+
+async function addSyncToken(token, device) {
+  syncTokens = [...syncTokens, { token, device, pairedAt: new Date().toISOString() }];
+  await saveConfig();
+  sendSyncChanged();
+}
+
+async function removeSyncDevice(token) {
+  const id = String(token || '');
+  const next = syncTokens.filter((item) => item.token !== id);
+  if (next.length === syncTokens.length) {
+    throw new Error('设备不存在或已被移除');
+  }
+  syncTokens = next;
+  await saveConfig();
+  sendSyncChanged();
+  return getSyncStatus();
+}
+
+function createSyncPairCode() {
+  syncPairCode = createPairCode();
+  sendSyncChanged();
+  return getSyncStatus();
+}
+
+// 清单 = 离线包快照去掉正文 + 回顾/记忆卡数据。正文走 /api/notes 按需拉，
+// 附件走 /api/asset 按 Range 拉，清单本身保持轻量。
+async function buildSyncManifest() {
+  await ensureMemoryCardsLoaded();
+  const snapshot = await createMobileExportSnapshot();
+  const noteById = new Map(notes.map((note) => [note.id, note]));
+  const resourceById = new Map(resourceFiles.map((file) => [file.id, file]));
+  return {
+    version: 1,
+    app: snapshot.app,
+    folders: snapshot.folders,
+    notes: snapshot.notes.map((summary) => ({
+      ...summary,
+      dayKey: getNoteReviewDayKey(noteById.get(summary.id) || summary)
+    })),
+    resources: snapshot.resources.map((summary) => ({
+      ...summary,
+      dayKey: getResourceReviewDayKey(resourceById.get(summary.id) || summary)
+    })),
+    assets: snapshot.assets,
+    review: {
+      enabled: dailyReviewEnabled,
+      reminders: dayReminders,
+      history: dailyReviewHistory,
+      log: getDayReviewLog(),
+      order: dailyReviewOrder
+    },
+    memory: {
+      cards: memoryCards,
+      settings: memorySettings
+    }
+  };
+}
+
+async function getSyncNotesContent(query = {}) {
+  const ids = Array.isArray(query.ids) ? query.ids : [];
+  const since = typeof query.since === 'string' ? query.since : '';
+  let list = getVisibleNotes();
+  if (ids.length > 0) {
+    const wanted = new Set(ids);
+    list = list.filter((note) => wanted.has(note.id));
+  } else if (since) {
+    list = list.filter((note) => String(note.updatedAt || '') > since);
+  }
+  return {
+    notes: list.map((note) => ({
+      id: note.id,
+      updatedAt: note.updatedAt,
+      content: convertNoteImages(note.content || '', noteFileMap.get(note.id))
+    }))
+  };
+}
+
+// 附件只允许笔记库内的笔记资源，内部元数据目录（密码哈希、卡片落盘等）不暴露。
+// 例外：笔记内嵌图片存在内部目录的 notice_note_images 子目录里，属于内容而非元数据，单独放行。
+function resolveSyncAsset(relPath) {
+  if (typeof relPath !== 'string' || !relPath) {
+    return null;
+  }
+  const root = path.resolve(getNotesPath());
+  const absolute = path.resolve(root, relPath);
+  if (!isPathInside(root, absolute)) {
+    return null;
+  }
+  const imageRoot = path.resolve(getAppDataPath(), IMAGE_ASSET_DIR_NAME);
+  if (isPathInside(imageRoot, absolute)) {
+    return absolute;
+  }
+  const segments = path.relative(root, absolute).split(/[\\/]/);
+  if (segments.some((segment) => isInternalDirectory(segment))) {
+    return null;
+  }
+  return absolute;
+}
+
+// 手机回传：卡片调度 + 作答历史 + 回顾状态。合并只在这里跑一次，
+// 手机随后拉清单照单全收，两端不会各算各的。
+async function applySyncMerge(payload = {}) {
+  await ensureMemoryCardsLoaded();
+  await ensureMemoryAnswersLoaded();
+  const result = { ok: true };
+
+  const cardMerge = mergeMemoryCards(memoryCards, payload.cards);
+  if (cardMerge.stats.adoptedFromPhone > 0) {
+    memoryCards = cardMerge.cards;
+    await saveMemoryCards();
+    sendMemoryChanged();
+  }
+  result.cards = cardMerge.stats;
+
+  const answerMerge = mergeAnswerEntries(memoryAnswers.entries, payload.answers);
+  if (answerMerge.stats.addedFromPhone > 0) {
+    memoryAnswers = normalizeAnswerLog(answerMerge.entries, {
+      ratingValidator: (value) => (VALID_RATINGS.includes(value) ? value : null)
+    });
+    await saveMemoryAnswers();
+    sendMemoryChanged();
+  }
+  result.answers = answerMerge.stats;
+
+  const reviewPayload = payload.review && typeof payload.review === 'object' && !Array.isArray(payload.review)
+    ? payload.review
+    : {};
+  const historyMerge = mergeReviewHistory(dailyReviewHistory, reviewPayload.history);
+  const logMerge = mergeReviewLog(dayReviewLog, reviewPayload.log);
+  if (historyMerge.adoptedDayKeys.length > 0 || logMerge.stats.addedFromPhone > 0) {
+    dailyReviewHistory = historyMerge.history;
+    dayReviewLog = logMerge.log.slice(-DAY_REVIEW_LOG_LIMIT);
+    // 与 PC 端「完成回顾」同语义：完成过的套不占手动顺序位置
+    for (const dayKey of historyMerge.adoptedDayKeys) {
+      dailyReviewOrder = dailyReviewOrder.filter((key) => key !== dayKey);
+    }
+    updateDailyReviewSelection();
+    await saveConfig();
+    sendNotesChanged();
+    sendPdfFilesChanged();
+    sendDayRemindersChanged();
+  }
+  result.review = {
+    adoptedDays: historyMerge.adoptedDayKeys,
+    addedLog: logMerge.stats.addedFromPhone
+  };
+  return result;
+}
+
+async function startSyncServer() {
+  if (syncServer && syncServer.isRunning()) {
+    return getSyncStatus();
+  }
+  const server = createSyncServer({
+    port: SYNC_SERVER_PORT,
+    getPairCode: () => syncPairCode,
+    getTokens: () => syncTokens.map((item) => item.token),
+    addToken: addSyncToken,
+    getManifest: buildSyncManifest,
+    getNotesContent: getSyncNotesContent,
+    resolveAsset: resolveSyncAsset,
+    applyMerge: applySyncMerge
+  });
+  await server.start();
+  syncServer = server;
+  return getSyncStatus();
+}
+
+async function stopSyncServer() {
+  if (!syncServer) {
+    return;
+  }
+  const server = syncServer;
+  syncServer = null;
+  await server.stop();
+}
+
+async function setSyncEnabled(enabled) {
+  syncEnabled = Boolean(enabled);
+  if (syncEnabled) {
+    try {
+      await startSyncServer();
+    } catch (error) {
+      syncEnabled = false;
+      await saveConfig();
+      throw new Error(`同步服务启动失败：${error.message}（端口 ${SYNC_SERVER_PORT} 可能被占用）`);
+    }
+  } else {
+    await stopSyncServer();
+    syncPairCode = '';
+  }
+  await saveConfig();
+  sendSyncChanged();
+  return getSyncStatus();
 }
 
 function writeStreamChunk(stream, chunk) {
@@ -4257,6 +4508,12 @@ app.whenReady().then(async () => {
   await migrateRemindersToDays();
   // 启动时先结算过期提醒，保证渲染进程第一次拉列表时状态就是对的。
   await settleExpiredReminders();
+  // 局域网同步按上次的开关自动恢复；失败只记日志，不阻塞应用启动。
+  if (syncEnabled) {
+    startSyncServer().catch((error) => {
+      console.error('局域网同步自动启动失败:', error);
+    });
+  }
   // 自动清理无法看见渲染进程中的未落盘草稿，停用后避免误删草稿图片。
 
   // IPC 传输层：handler 已按域抽取到 src/ipc/，此处组装依赖上下文并注册。
@@ -4366,7 +4623,12 @@ app.whenReady().then(async () => {
     deleteMemoryAnswer,
     getAiJudgeSettings,
     updateAiJudgeSettings,
-    testAiJudgeConnection
+    testAiJudgeConnection,
+    // 局域网同步
+    getSyncStatus,
+    setSyncEnabled,
+    createSyncPairCode,
+    removeSyncDevice
   };
   registerNotesIpc(ipcContext);
   registerFoldersIpc(ipcContext);
@@ -4375,6 +4637,7 @@ app.whenReady().then(async () => {
   registerStorageIpc(ipcContext);
   registerLibraryIpc(ipcContext);
   registerMemoryIpc(ipcContext);
+  registerSyncIpc(ipcContext);
 
   Menu.setApplicationMenu(null);
   // 渲染层 boot 完成后主动拉取待发通知，成功后 ack 清空；主进程不再靠
@@ -4426,4 +4689,5 @@ app.on('before-quit', (event) => {
   clearTimeout(noteReloadTimer);
   clearTimeout(folderReloadTimer);
   pdfWatcher?.close();
+  stopSyncServer().catch(() => {});
 });

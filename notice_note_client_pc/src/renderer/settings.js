@@ -1,5 +1,66 @@
 // 设置弹窗
 // 注意：本文件为经典脚本，顶层 const/let 处于页面全局词法环境，跨文件共享；请勿重复声明同名标识符。
+let syncStatus = null;
+
+function renderSyncSettings() {
+  if (!syncEnabledInput) {
+    return;
+  }
+  const status = syncStatus || {};
+  syncEnabledInput.checked = Boolean(status.enabled);
+  if (syncStatusText) {
+    syncStatusText.textContent = status.running
+      ? `运行中 · 端口 ${status.port} · 内网 IP：${(status.addresses || []).join(" / ") || "未知"}`
+      : (status.enabled
+        ? "已开启但未运行，端口可能被占用，请关闭后重试"
+        : "未开启。开启后手机在同一 WiFi 下输入本机 IP 与配对码即可同步");
+  }
+  if (syncPairCodeDisplay) {
+    syncPairCodeDisplay.textContent = status.pairCode || "未生成";
+  }
+  if (createSyncPairCodeButton) {
+    createSyncPairCodeButton.disabled = !status.running;
+  }
+  renderSyncDevices();
+}
+
+function renderSyncDevices() {
+  if (!syncDeviceList) {
+    return;
+  }
+  syncDeviceList.innerHTML = "";
+  const devices = syncStatus?.devices || [];
+  if (devices.length === 0) {
+    const empty = document.createElement("p");
+    empty.className = "settings-sync-empty";
+    empty.textContent = "还没有已配对设备";
+    syncDeviceList.append(empty);
+    return;
+  }
+  for (const device of devices) {
+    const row = document.createElement("div");
+    row.className = "settings-sync-device";
+    const info = document.createElement("span");
+    const pairedAt = String(device.pairedAt || "").slice(0, 16).replace("T", " ");
+    info.textContent = `${device.device}${pairedAt ? ` · 配对于 ${pairedAt}` : ""}`;
+    const removeButton = document.createElement("button");
+    removeButton.type = "button";
+    removeButton.className = "secondary-button danger-button";
+    removeButton.textContent = "移除";
+    removeButton.addEventListener("click", async () => {
+      removeButton.disabled = true;
+      try {
+        syncStatus = await window.noticeNote.removeSyncDevice(device.token);
+        renderSyncSettings();
+      } catch (error) {
+        window.showErrorToast?.(error, "移除设备失败");
+        removeButton.disabled = false;
+      }
+    });
+    row.append(info, removeButton);
+    syncDeviceList.append(row);
+  }
+}
 
 function renderStorageInfo() {
   if (!storageInfo) {
@@ -91,6 +152,7 @@ function renderSettings() {
     appSettings?.dailyReviewTitle || "今天暂无可回顾文件";
   renderStorageInfo();
   renderAiJudgeSettings();
+  renderSyncSettings();
 }
 async function openSettings() {
   if (settingsMainView) settingsMainView.hidden = false;
@@ -98,6 +160,7 @@ async function openSettings() {
   if (settingsDialog) settingsDialog.classList.remove("is-picker-view");
   appSettings = await window.noticeNote.getSettings();
   aiJudgeSettings = await window.noticeNote.getAiJudgeSettings();
+  syncStatus = await window.noticeNote.getSyncStatus();
   renderSettings();
   settingsDialog.showModal();
 }

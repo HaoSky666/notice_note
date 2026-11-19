@@ -1,6 +1,7 @@
 const contentPanel = document.querySelector('#contentPanel');
 const importPackageButton = document.querySelector('#importPackageButton');
 const packageFileInput = document.querySelector('#packageFileInput');
+const syncButton = document.querySelector('#syncButton');
 const msettingsButton = document.querySelector('#msettingsButton');
 const searchInput = document.querySelector('#searchInput');
 const pathBar = document.querySelector('#pathBar');

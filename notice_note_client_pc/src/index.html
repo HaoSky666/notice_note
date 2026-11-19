@@ -566,6 +566,27 @@
             <div class="settings-storage-card">
               <div class="settings-storage-heading">
                 <div>
+                  <strong id="syncEnabledLabel">局域网同步</strong>
+                  <p>手机 App 在同一 WiFi 下直连本机，同步笔记、回顾与记忆卡；开启后需在防火墙放行 47820 端口。密码目录锁定时不参与同步，同步到手机的内容是明文</p>
+                </div>
+                <label class="settings-switch" title="启用局域网同步">
+                  <input id="syncEnabledInput" type="checkbox" aria-labelledby="syncEnabledLabel">
+                  <span></span>
+                </label>
+              </div>
+              <p id="syncStatusText" class="settings-sync-status" role="status"></p>
+              <div class="settings-sync-pair">
+                <div class="settings-sync-pair-copy">
+                  <span>配对码</span>
+                  <strong id="syncPairCodeDisplay" class="settings-sync-code">未生成</strong>
+                </div>
+                <button id="createSyncPairCodeButton" class="secondary-button" type="button">生成配对码</button>
+              </div>
+              <div id="syncDeviceList" class="settings-sync-devices"></div>
+            </div>
+            <div class="settings-storage-card">
+              <div class="settings-storage-heading">
+                <div>
                   <strong id="aiJudgeEnabledLabel">记忆卡 AI 判定</strong>
                   <p>答题后由模型判断掌握程度，不再自己选四档；没配 Key 时自动退回手动评分</p>
                 </div>

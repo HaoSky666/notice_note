@@ -69,6 +69,16 @@ contextBridge.exposeInMainWorld('noticeNote', {
   getAiJudgeSettings: () => ipcRenderer.invoke('memory:ai:get'),
   updateAiJudgeSettings: (settings) => ipcRenderer.invoke('memory:ai:update', settings),
   testAiJudge: () => ipcRenderer.invoke('memory:ai:test'),
+  // 局域网同步
+  getSyncStatus: () => ipcRenderer.invoke('sync:get-status'),
+  setSyncEnabled: (enabled) => ipcRenderer.invoke('sync:set-enabled', enabled),
+  createSyncPairCode: () => ipcRenderer.invoke('sync:create-pair-code'),
+  removeSyncDevice: (token) => ipcRenderer.invoke('sync:remove-device', token),
+  onSyncChanged: (callback) => {
+    const listener = (_event, status) => callback(status);
+    ipcRenderer.on('sync:changed', listener);
+    return () => ipcRenderer.removeListener('sync:changed', listener);
+  },
   onNotesChanged: (callback) => {
     const listener = (_event, notes) => callback(notes);
     ipcRenderer.on('notes:changed', listener);

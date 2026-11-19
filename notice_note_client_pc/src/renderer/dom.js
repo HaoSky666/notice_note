@@ -61,6 +61,12 @@ const aiJudgeApiKeyInput = document.querySelector("#aiJudgeApiKeyInput");
 const testAiJudgeButton = document.querySelector("#testAiJudgeButton");
 const saveAiJudgeButton = document.querySelector("#saveAiJudgeButton");
 const aiJudgeStatus = document.querySelector("#aiJudgeStatus");
+// 设置里的局域网同步
+const syncEnabledInput = document.querySelector("#syncEnabledInput");
+const syncStatusText = document.querySelector("#syncStatusText");
+const syncPairCodeDisplay = document.querySelector("#syncPairCodeDisplay");
+const createSyncPairCodeButton = document.querySelector("#createSyncPairCodeButton");
+const syncDeviceList = document.querySelector("#syncDeviceList");
 const chooseStorageButton = document.querySelector("#chooseStorageButton");
 const resetStorageButton = document.querySelector("#resetStorageButton");
 const newMenuDropdown = document.querySelector("#newMenuDropdown");

@@ -14,7 +14,8 @@ const SHARED_LIBS = [
   'sm2-scheduler.js',
   'memory-card-store.js',
   'ai-judge.js',
-  'review-queue.js'
+  'review-queue.js',
+  'sync-merge.js'
 ];
 
 fs.mkdirSync(TARGET_DIR, { recursive: true });

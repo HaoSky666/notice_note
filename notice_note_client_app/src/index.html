@@ -15,6 +15,7 @@
             <h1>Notice Note</h1>
           </div>
           <div class="toolbar-actions">
+            <button id="syncButton" class="refresh-button" type="button">同步</button>
             <button id="importPackageButton" class="refresh-button" type="button">导入文件</button>
             <button id="msettingsButton" class="refresh-button" type="button" aria-label="设置">设置</button>
             <input id="packageFileInput" type="file" accept=".notice-note-mobile,application/octet-stream" hidden>
@@ -71,6 +72,24 @@
     </div>
 
     <section class="msettings-section">
+      <h3>局域网同步</h3>
+      <p id="msetSyncStatus" class="msettings-status" role="status"></p>
+      <label class="msettings-field">
+        <span>电脑内网 IP</span>
+        <input id="msetHostInput" type="text" inputmode="decimal" placeholder="如 192.168.1.23（端口 47820）" autocomplete="off">
+      </label>
+      <label class="msettings-field">
+        <span>配对码（电脑端设置里生成）</span>
+        <input id="msetCodeInput" type="text" maxlength="6" placeholder="6 位配对码" autocomplete="off">
+      </label>
+      <div class="msettings-actions">
+        <button id="msetPairButton" class="primary-action" type="button">配对</button>
+        <button id="msetSyncButton" class="primary-action" type="button">立即同步</button>
+        <button id="msetUnpairButton" class="secondary-action" type="button" hidden>断开配对</button>
+      </div>
+    </section>
+
+    <section class="msettings-section">
       <h3>AI 判定（记忆卡）</h3>
       <label class="msettings-check">
         <input id="msetAiEnabledInput" type="checkbox">
@@ -94,8 +113,15 @@
       <p id="msetAiStatus" class="msettings-status" role="status"></p>
     </section>
 
-    <p class="msettings-note">离线包内容均为明文，密码目录在手机端没有密码保护。</p>
+    <p class="msettings-note">同步与离线包内容均为明文，密码目录在手机端没有密码保护。</p>
   </dialog>
+
+  <div id="syncProgress" class="sync-progress" role="status" aria-live="polite" hidden>
+    <div class="sync-progress-card">
+      <p id="syncProgressText">正在同步...</p>
+      <button id="syncProgressCloseButton" class="secondary-action" type="button" hidden>关闭</button>
+    </div>
+  </div>
 
   <div id="imageLightbox" class="image-lightbox" role="dialog" aria-modal="true" aria-label="图片预览" hidden>
     <div class="image-lightbox-zoom-controls" aria-label="图片缩放">
@@ -114,9 +140,12 @@
   <script src="./lib/shared/sm2-scheduler.js?v=1"></script>
   <script src="./lib/shared/memory-card-store.js?v=1"></script>
   <script src="./lib/shared/ai-judge.js?v=1"></script>
-<script src="./lib/shared/review-queue.js?v=1"></script>
-<script src="./store.js?v=1"></script>
-<script src="./app.js?v=14"></script>
+  <script src="./lib/shared/review-queue.js?v=1"></script>
+  <script src="./lib/shared/sync-merge.js?v=1"></script>
+  <script src="./lib/sync-plan.js?v=1"></script>
+  <script src="./store.js?v=1"></script>
+  <script src="./sync-client.js?v=1"></script>
+  <script src="./app.js?v=14"></script>
   <script src="./calendar.js?v=2"></script>
   <script src="./review.js?v=2"></script>
   <script src="./memory.js?v=2"></script>

@@ -11,7 +11,7 @@ const APP_SRC = path.join(ROOT, 'notice_note_client_app/src');
 
 // 手机端页面脚本（经典脚本，共享全局）；lib 下的 UMD 不参与重名检查
 const APP_CLASSIC_SCRIPTS = [
-  'app.js', 'store.js', 'calendar.js',
+  'app.js', 'store.js', 'sync-client.js', 'calendar.js',
   'review.js', 'memory.js', 'msettings.js', 'tabs.js'
 ];
 
@@ -19,6 +19,7 @@ const TARGETS = [
   'notice_note_client_pc/src/main.js',
   'notice_note_client_pc/src/preload.js',
   'notice_note_client_app/src/lib/mobile-utils.js',
+  'notice_note_client_app/src/lib/sync-plan.js',
   ...APP_CLASSIC_SCRIPTS.map((name) => `notice_note_client_app/src/${name}`),
   ...fs.readdirSync(path.join(APP_SRC, 'lib/shared')).map((f) => `notice_note_client_app/src/lib/shared/${f}`),
   ...fs.readdirSync(path.join(PC_SRC, 'lib')).map((f) => `notice_note_client_pc/src/lib/${f}`),

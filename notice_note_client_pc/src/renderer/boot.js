@@ -388,6 +388,33 @@ saveAiJudgeButton?.addEventListener("click", () => {
 testAiJudgeButton?.addEventListener("click", () => {
   testAiJudgeConnection().catch((error) => window.showErrorToast?.(error, "测试失败"));
 });
+syncEnabledInput?.addEventListener("change", async () => {
+  syncEnabledInput.disabled = true;
+  try {
+    syncStatus = await window.noticeNote.setSyncEnabled(syncEnabledInput.checked);
+    renderSyncSettings();
+  } catch (error) {
+    window.showErrorToast?.(error, "同步开关切换失败");
+    syncEnabledInput.checked = Boolean(syncStatus?.enabled);
+  } finally {
+    syncEnabledInput.disabled = false;
+  }
+});
+createSyncPairCodeButton?.addEventListener("click", async () => {
+  try {
+    syncStatus = await window.noticeNote.createSyncPairCode();
+    renderSyncSettings();
+  } catch (error) {
+    window.showErrorToast?.(error, "生成配对码失败");
+  }
+});
+// 手机配对成功 / 设备被移除时主进程会广播；设置弹窗开着就即时刷新
+window.noticeNote.onSyncChanged?.((status) => {
+  syncStatus = status;
+  if (settingsDialog?.open) {
+    renderSyncSettings();
+  }
+});
 exportMobilePackageButton.addEventListener("click", async () => {
   exportMobilePackageButton.disabled = true;
   try {
