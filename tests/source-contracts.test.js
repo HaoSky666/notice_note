@@ -167,7 +167,14 @@ test('P2-19/20/29 测试、lint、CI 与打包配置', () => {
   assert.ok(!pkg.dependencies['@capacitor/core'], 'Android 依赖不能进 PC 安装包');
   assert.ok(pkg.devDependencies['@capacitor/core']);
   assert.ok(fs.existsSync(path.join(ROOT, '.github/workflows/ci.yml')));
-  assert.match(read('notice_note_client_app/android/app/build.gradle'), /versionName "0\.1\.0"/);
+  // APK 的 versionName 必须和根 package.json 对齐，否则发布页写的版本和装上的不是一回事。
+  // 不写死具体版本号：每次发版只改两处，不再让这条断言跟着蹦。
+  const versionName = pkg.version.replace(/\./g, '\\.');
+  assert.match(
+    read('notice_note_client_app/android/app/build.gradle'),
+    new RegExp(`versionName "${versionName}"`),
+    'Android versionName 要和根 package.json 一致',
+  );
 });
 
 test('第二轮 R2/R3/R6/R7/R8/R9/R10/R16/R17/R18 接线都在', () => {
@@ -378,6 +385,15 @@ test('记忆卡模块：SM-2 调度与 .memory_card 落盘接线', () => {
   assert.match(memory, /item\.dataset\.memoryCardId = card\.id;/);
   assert.match(memory, /function syncMemorySidebarActive\(\)/);
   assert.match(memory, /item\.classList\.toggle\("is-active", item\.dataset\.memoryCardId === memoryCurrentCardId\);/);
+
+  // 笔记右键快速建卡：菜单项只对笔记出现，弹框状态与编辑器的 memoryEditorTypes 分开持有
+  assert.match(index, /id="memoryQuickDialog"/);
+  assert.match(index, /id="memoryQuickTypeChips"/);
+  assert.match(pc('renderer/dom.js'), /const memoryQuickDialog = document\.querySelector\("#memoryQuickDialog"\);/);
+  assert.match(pc('renderer/context-menu.js'), /if \(entry\.type === "note"\) \{\s*\n\s*contextMenu\.append\(\s*\n\s*createContextMenuItem\("制作成记忆卡片"/);
+  assert.match(memory, /async function openMemoryQuickCreate\(noteId\)/);
+  assert.match(memory, /memoryQuickTypes = \[\];/);
+  assert.match(memory, /await window\.noticeNote\.createMemoryCard\(\{ front, back, types \}\);/);
 });
 
 test('记忆卡类型：多类型落盘、按类型学习、筛选由主进程统一持有', () => {
@@ -555,6 +571,41 @@ test('作答必须发生在看不见答案的时候：输入框只在问题面',
   }
 });
 
+test('AI 判定以机制覆盖为准，示例数值不作为扣分点', () => {
+  const judge = pc('lib/ai-judge.js');
+  // 阈值、窗口、比例都是可配参数。用户答「失败率超过阈值」即算覆盖，
+  // 不能因为没背出 50% / 1s 就扣分——那是把配置项当知识点考。
+  assert.match(judge, /评分依据是「机制是否覆盖」，不是「数值是否背对」/, '判定标准要写明机制优先');
+  assert.match(judge, /标为「举例」「示例」或写在括号里的参数，一律不作为评分点/);
+  assert.match(judge, /只报数值不说机制/, '反例也要写明：背数字不说机制才算没掌握');
+  // 手机端跑同一份共享库，漏同步会让两端判定不一致
+  assert.match(
+    app('lib/shared/ai-judge.js'),
+    /评分依据是「机制是否覆盖」，不是「数值是否背对」/,
+    '手机端共享库要跟着同步（npm run sync:libs）'
+  );
+});
+
+test('作答框要放得下长答案：PC 与手机都不小于 6 行', () => {
+  // 3 行写三五个要点的答案要一直滚，看不见自己写了什么
+  assert.match(
+    pc('styles.css'),
+    /\.memory-answer-input \{[\s\S]{0,240}min-height: 126px/,
+    'PC 作答框最小高度'
+  );
+  assert.match(
+    read('notice_note_client_pc/src/index.html'),
+    /id="memoryAnswerInput"[^>]*rows="6"/,
+    'PC 初始行数'
+  );
+  assert.match(
+    app('styles.css'),
+    /\.mem-answer-input \{[\s\S]{0,240}min-height: 132px/,
+    '手机作答框最小高度'
+  );
+  assert.match(app('memory.js'), /textarea\.rows = 6;/, '手机初始行数');
+});
+
 test('新增的作答区与历史样式同样跟主题走，不写死颜色', () => {
   const css = pc('styles.css');
   const start = css.indexOf('作答区：AI 判定的入口');
@@ -625,18 +676,201 @@ test('手机端镜像 PC 可见性：浏览藏回顾文件夹，回顾/日历只
   );
   assert.match(filteredResources, /file\.isReviewFile/, '浏览/搜索不展示复习资料');
 
-  // 回顾候选镜像 getDailyReviewCandidates：只收 isReviewFile
+  // 回顾面板镜像 PC getReviewDayMap：内容天走共享 day-index，不在手机端再攒一套候选。
+  // 队列已从手机端移除（2026-11-19），所以这里锁的是「用共享索引」而不是旧的 rvGetCandidates。
   const review = app('review.js');
-  const candidates = review.slice(
-    review.indexOf('function rvGetCandidates('),
-    review.indexOf('function rvGetSortedQueue('),
+  assert.match(
+    review,
+    /toReviewDayMap\(buildDayIndex\(/,
+    '回顾面板要走共享索引 buildDayIndex + toReviewDayMap'
   );
-  assert.match(candidates, /!item\.isReviewFile/, '回顾不能拿全库笔记当候选');
-  // 日历内容天镜像 getReviewDayContent：同样只收 isReviewFile
+  assert.doesNotMatch(review, /!item\.isReviewFile/, '不要在手机端重复实现复习文件过滤');
+  assert.doesNotMatch(review, /textContent = ['"]回顾队列['"]/, '手机端不再展示回顾队列');
+  assert.match(review, /isProtected/, '密码保护目录的内容不上回顾面板');
+  // 日历内容天与安排条目都走共享 day-index（与 PC 提醒日历同一口径），
+  // 手机端不再自己 filter isReviewFile / 自己读 reminders，否则就是第四套口径。
   const calendar = app('calendar.js');
-  const dayMap = calendar.slice(
-    calendar.indexOf('function calGetDayMap('),
-    calendar.indexOf('function calRender('),
+  assert.match(
+    calendar,
+    /toReviewDayMap\(buildDayIndex\(/,
+    '日历内容天要走共享索引 buildDayIndex + toReviewDayMap'
   );
-  assert.match(dayMap, /!item\.isReviewFile/, '日历内容天不能拿全库笔记');
+  assert.match(calendar, /buildCalendarEntries\(/, '日历安排条目要走共享 buildCalendarEntries');
+  assert.doesNotMatch(calendar, /!item\.isReviewFile/, '不要在手机端重复实现复习文件过滤');
+  assert.doesNotMatch(
+    calendar,
+    /item\.dayKey === dayKey/,
+    '提醒条目要按 date 匹配选中日，dayKey 是内容天'
+  );
+});
+
+test('回到前台的刷新不能改变当前 Tab 的视图', () => {
+  const appSource = app('app.js');
+  const tabs = app('tabs.js');
+
+  // showContentPanel 被 resume / 同步刷新复用，必须按当前 Tab 让位
+  const showPanel = appSource.slice(
+    appSource.indexOf('function showContentPanel('),
+    appSource.indexOf('function showNoteDetailPanel('),
+  );
+  assert.match(showPanel, /isNotesTabActive\(\)/, 'showContentPanel 要识别当前 Tab');
+  assert.match(appSource, /document\.body\.dataset\.activeTab/, 'app.js 要读 body[data-active-tab]');
+
+  // loadLibrary 是「重新读数据」，不是「切回笔记列表」：详情页也不能被收起
+  const loadLibrary = appSource.slice(
+    appSource.indexOf('async function loadLibrary('),
+    appSource.indexOf('installNavigationHistory();'),
+  );
+  assert.match(loadLibrary, /ensureNotesPanelVisible\(\)/, '后台刷新只能保证列表可见');
+  assert.doesNotMatch(loadLibrary, /^\s*showContentPanel\(\);$/m, 'loadLibrary 不能强行切回笔记列表');
+
+  assert.match(tabs, /document\.body\.dataset\.activeTab = name/, 'switchTab 必须写 Tab 标记');
+  assert.match(tabs, /function restoreActivePanel/, '回到前台要有兜底对齐');
+  assert.match(tabs, /addEventListener\('visibilitychange'/, '可见性恢复要重新对齐面板');
+});
+
+test('手机日历点条目是原地展开抽屉，不切月份', () => {
+  const calendar = app('calendar.js');
+  const createEntry = calendar.slice(
+    calendar.indexOf('function calCreateEntry('),
+    calendar.indexOf('function calRenderEntryDrawer('),
+  );
+  assert.match(createEntry, /calExpandedEntry = isOpen \? '' : entryId/, '再点一次要收起');
+  assert.doesNotMatch(createEntry, /calMonth\s*=/, '点条目不该切走当前月份');
+  assert.match(calendar, /cal-entry-drawer/, '抽屉容器不能删');
+  assert.match(calendar, /rvCompleteDay\(entry\.dayKey\)/, '抽屉里的标记按钮作用于这一套的 dayKey');
+});
+
+test('PC 提醒日历点条目也是原地展开抽屉，不切回顾面板', () => {
+  const sidebar = pc('renderer/sidebar.js');
+  const createEntry = sidebar.slice(
+    sidebar.indexOf('function createReminderEntry('),
+    sidebar.indexOf('function createReminderEntryDrawer('),
+  );
+  assert.match(createEntry, /reminderExpandedEntry = isOpen \? "" : entryId/, '再点一次要收起');
+  assert.doesNotMatch(createEntry, /activateReviewBrowser\(/, '点条目不该切走侧边栏视图');
+  assert.doesNotMatch(createEntry, /selectReviewDay\(/, '点条目不该跳天');
+
+  // 抽屉内容必须来自共享 dayIndex（getReviewDayMap），不能自己再算一套
+  const drawer = sidebar.slice(
+    sidebar.indexOf('function createReminderEntryDrawer('),
+    sidebar.indexOf('function revealExpandedReminderEntry('),
+  );
+  assert.match(drawer, /dayMap\.get\(entry\.dayKey\)/, '抽屉内容要按 dayKey 取');
+  assert.match(drawer, /handleDailyReview\(entry\.dayKey, "complete"\)/, '标记按钮作用于这一套的 dayKey');
+
+  // 状态收在 appState 里，不新增顶层 let
+  assert.match(pc('renderer/state.js'), /reminderExpandedEntry:/, '展开态要进 appState');
+  assert.doesNotMatch(sidebar, /^let reminderExpandedEntry/m, '不要新增顶层 let');
+});
+
+test('手机端从日历/回顾打开文章，返回要回到来源 Tab', () => {
+  const appSource = app('app.js');
+  const tabs = app('tabs.js');
+
+  // openNoteFromTab 必须记住来源 Tab 再切笔记：详情页返回据此回到原处
+  assert.match(tabs, /const originTab = activeTab;/, '打开详情前要先记住来源 Tab');
+  assert.match(tabs, /openNote\(noteId, \{ originTab \}\)/, '来源 Tab 要传给 openNote');
+
+  // 关详情统一走 closeNoteDetail：来源不是笔记就切回原 Tab，而不是一律落回列表
+  const close = appSource.slice(
+    appSource.indexOf('function closeNoteDetail('),
+    appSource.indexOf('function ensureNotesPanelVisible('),
+  );
+  assert.match(close, /originTab !== 'notes'/, '来源不是笔记时要切回原 Tab');
+  assert.match(close, /window\.NoticeNoteTabs\.switchTab\(originTab\)/);
+
+  // 「← 返回」与安卓物理返回键两条路径都要走同一个函数
+  assert.match(appSource, /if \(!noteDetailPanel\.hidden\) \{\s*closeNoteDetail\(\);/, '系统返回键要走 closeNoteDetail');
+  assert.match(appSource, /noteBackButton\.addEventListener\('click', \(\) => \{\s*closeNoteDetail\(\);/, '返回按钮要走 closeNoteDetail');
+
+  // 经典脚本顶层的 const 不会挂到 window；app.js 用的是 window.NoticeNoteTabs，必须显式挂
+  assert.match(tabs, /window\.NoticeNoteTabs = api;/, 'tabs.js 要显式挂 window，否则 app.js 里的 window 调用全是 undefined');
+});
+
+test('手机端界面主题：6 套极简主题与 PC 同 id，颜色只能走令牌', () => {
+  const html = app('index.html');
+  // 主题脚本必须在 head 里先跑，否则首屏会先渲染默认纸色再跳
+  assert.match(html, /<head>[\s\S]*?themes\.js/, 'themes.js 要在 head 里引入');
+  assert.match(html, /id="msetThemeList"/, '设置面板要有主题列表容器');
+
+  const themes = app('themes.js');
+  assert.match(themes, /notice-note-mobile-theme/, '主题要落 localStorage');
+  assert.match(themes, /document\.documentElement\.dataset\.theme/, '主题挂 <html data-theme>');
+  assert.doesNotMatch(themes, /document\.body\.dataset\.theme/, '不要挂 body，html 上才能让 :root 背景一起换');
+
+  // 与 PC renderer/themes.js 的 minimal 分类逐个对齐，PC 加主题时这里会提醒补
+  const pcThemes = pc('renderer/themes.js');
+  const pcMinimal = [...pcThemes.matchAll(/id:\s*"([a-z_]+)",\s*name:\s*"[^"]+",\s*category:\s*"minimal"/g)].map((m) => m[1]);
+  const appIds = [...themes.matchAll(/id:\s*'([a-z_]+)'/g)].map((m) => m[1]);
+  assert.deepEqual(appIds, pcMinimal, '手机端主题 id 要与 PC 极简日常一致');
+
+  const css = app('styles.css');
+  for (const id of pcMinimal) {
+    assert.match(css, new RegExp(`html\\[data-theme="${id}"\\]\\s*\\{`), `缺 ${id} 主题变量块`);
+  }
+
+  // 去掉 :root 与主题块后，组件样式里不许再写死暖米色（否则深色主题会白一块黑一块）
+  const withoutTokens = css.replace(/(:root|html\[data-theme="[^\]]+"\])\s*\{[^}]*\}/g, '');
+  assert.doesNotMatch(withoutTokens, /#f5c56b/i, '组件样式里还有硬编码的暖黄');
+  assert.doesNotMatch(withoutTokens, /rgba\(245,\s*197,\s*107/i, '组件样式里还有硬编码的暖黄');
+  assert.doesNotMatch(withoutTokens, /rgba\(255,\s*250,\s*243/i, '组件样式里还有硬编码的纸白');
+  assert.doesNotMatch(withoutTokens, /#fffaf3/i, '组件样式里还有硬编码的纸白');
+  assert.doesNotMatch(withoutTokens, /#2f241b/i, '组件样式里还有硬编码的墨色');
+
+  // 组件颜色必须引用令牌（抽查几个改动过的位置）
+  assert.match(css, /\.content-tools\s*\{[\s\S]{0,260}background: var\(--paper-veil\)/);
+  assert.match(css, /\.msettings-field input\s*\{[\s\S]{0,200}background: var\(--surface-input\)/);
+  assert.match(css, /\.msettings-dialog::backdrop\s*\{\s*background: var\(--overlay\)/);
+
+  // 设置面板要真的渲染主题列表
+  assert.match(app('msettings.js'), /NoticeNoteThemes\.renderPicker\(msetThemeList\)/);
+});
+
+test('手机端键盘弹出时底部 Tab 要让位，不能顶在键盘上沿', () => {
+  const appSource = app('app.js');
+  const css = app('styles.css');
+
+  // Android WebView 走 adjustResize：键盘弹出后 window.innerHeight 直接变小，
+  // position:fixed; bottom:0 的 Tab 会跟着弹到键盘上沿，正好压在作答按钮上面。
+  assert.match(appSource, /const KEYBOARD_SHRINK_THRESHOLD = \d+;/, '要有视口缩水阈值');
+  assert.match(appSource, /document\.body\.classList\.toggle\('is-keyboard-open', open\)/, '要打键盘态标记');
+  assert.match(appSource, /window\.addEventListener\('resize', syncKeyboardLayout\)/, '视口变化要重算');
+  assert.match(appSource, /function isTextEntryFocused\(\)/, '要区分输入框和按钮，点按钮不弹键盘');
+
+  // 没聚焦输入框时缩窗口（桌面拖窗口大小）不能误判成键盘弹出
+  assert.match(
+    appSource,
+    /const open = shrinking && \(keyboardOpen \|\| isTextEntryFocused\(\)\)/,
+    '键盘态必须和输入框焦点绑定',
+  );
+
+  assert.match(css, /body\.is-keyboard-open \.tab-bar\s*\{\s*display: none;/, '键盘态下 Tab 要隐藏');
+  assert.match(
+    css,
+    /body\.is-keyboard-open \.app-shell\s*\{\s*padding-bottom: 16px;/,
+    'Tab 藏了要把 84px 下边距收掉，否则键盘上方多一条空白',
+  );
+});
+
+test('PC 作答框：Enter 换行，Shift + Enter 才提交', () => {
+  const memory = pc('renderer/memory.js');
+  const html = pc('index.html');
+
+  // 写长答案时回车几乎都是想换行；只用 Enter 提交会边写边误提交。
+  assert.match(
+    memory,
+    /if \(event\.key === "Enter" && event\.shiftKey\) \{\s*event\.preventDefault\(\);\s*submitMemoryAnswer\(\);/,
+    'Shift + Enter 要提交',
+  );
+  assert.doesNotMatch(
+    memory,
+    /event\.key === "Enter" && !event\.shiftKey\) \{\s*event\.preventDefault\(\);\s*submitMemoryAnswer\(\);/,
+    '光回车不能再提交',
+  );
+
+  // 提示文案必须和实际按键一致，否则用户按提示操作会当场踩坑
+  assert.match(html, /Shift \+ Enter 提交 · Enter 换行/, 'index.html 的提示要更新');
+  assert.match(memory, /"Shift \+ Enter 提交 · Enter 换行 · 完全不会就写「不会」"/, '渲染时的提示也要更新');
+  assert.doesNotMatch(html, /回车提交后才会看到答案/, '占位文案不能还写「回车提交」');
 });
