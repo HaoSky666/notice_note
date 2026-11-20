@@ -46,6 +46,10 @@ let isApplyingNavigationState = false;
 let exitPromptExpiresAt = 0;
 let exitPromptTimer = null;
 let activeNote = null;
+// 从哪个 Tab 打开的笔记详情：日历 / 回顾里点文章，返回要回到原 Tab，而不是笔记列表。
+let noteOriginTab = 'notes';
+// 打开前的滚动位置，返回时还原（回顾页没有展开态，靠它停在原处）。
+let noteOriginScrollY = 0;
 let isHandlingSystemBack = false;
 let hasQueuedSystemBack = false;
 let isMobileSessionSuspended = false;
@@ -165,7 +169,20 @@ async function loadOfflineSnapshot() {
 
 // 离线包格式常量与 validateMobilePackage 已迁移到 lib/mobile-utils.js（见文件顶部解构）。
 
+// 当前停在哪个 Tab。tabs.js 每次切换都会写 body[data-active-tab]；
+// app.js 比 tabs.js 先加载（启动时的 loadLibrary 会走到下面），此时按笔记页处理。
+function isNotesTabActive() {
+  const active = document.body.dataset.activeTab;
+  return !active || active === 'notes';
+}
+
 function showContentPanel() {
+  // 回到前台（resumeMobileSession）、同步落库后的刷新都会走这里。
+  // 非笔记 Tab 时必须让位：contentPanel 在 DOM 里排在日历/回顾/记忆面板之前，
+  // 一旦被重新显示就会把当前 Tab 的内容顶走（底栏高亮还是原来那个 Tab）。
+  if (!isNotesTabActive()) {
+    return;
+  }
   contentPanel.hidden = false;
   noteDetailPanel.hidden = true;
 }
@@ -173,6 +190,39 @@ function showContentPanel() {
 function showNoteDetailPanel() {
   contentPanel.hidden = true;
   noteDetailPanel.hidden = false;
+}
+
+// 关闭笔记详情：回到打开它的那个 Tab（笔记列表 / 日历 / 回顾），而不是一律落回笔记列表。
+// 「← 返回」按钮、安卓物理返回键、浏览器后退都走这里。
+function closeNoteDetail() {
+  activeNote = null;
+  const originTab = noteOriginTab;
+  const scrollY = noteOriginScrollY;
+  noteOriginTab = 'notes';
+  noteOriginScrollY = 0;
+
+  if (originTab !== 'notes' && window.NoticeNoteTabs?.switchTab) {
+    // switchTab 会重绘来源面板并把它显示出来，同时收起笔记列表与详情
+    window.NoticeNoteTabs.switchTab(originTab);
+    // 日历抽屉会在自己的 rAF 里滚到展开项；这里先还原，回顾页就能停在原处
+    if (scrollY > 0) {
+      window.scrollTo({ top: scrollY, behavior: 'auto' });
+    }
+  } else {
+    showContentPanel();
+  }
+
+  renderLibrary();
+  replaceNavigationState(createListNavigationState());
+}
+
+// 后台刷新（回到前台 resume、搜索联动、导航状态回放）只负责数据，不该改变当前视图：
+// 非笔记 Tab 交给 tabs.js 管；笔记详情页也不能因为重读一次数据被收起。
+function ensureNotesPanelVisible() {
+  if (!isNotesTabActive() || !noteDetailPanel.hidden) {
+    return;
+  }
+  contentPanel.hidden = false;
 }
 
 async function readMobilePackageManifest(file) {
@@ -260,7 +310,9 @@ function createNoteNavigationState(noteId) {
     key: NAVIGATION_STATE_KEY,
     view: 'note',
     folderId: currentFolderId,
-    noteId
+    noteId,
+    // 历史回放时也要知道这篇文章是从哪个 Tab 点进来的
+    originTab: noteOriginTab
   };
 }
 
@@ -339,10 +391,7 @@ async function performMobileSystemBack() {
   }
 
   if (!noteDetailPanel.hidden) {
-    activeNote = null;
-    showContentPanel();
-    renderLibrary();
-    replaceNavigationState(createListNavigationState());
+    closeNoteDetail();
     return;
   }
 
@@ -466,6 +515,8 @@ function applyNavigationState(state) {
       leaveAppOrPage();
       return;
     }
+    noteOriginTab = 'notes';
+    noteOriginScrollY = 0;
     showContentPanel();
     currentFolderId = null;
     searchInput.value = '';
@@ -480,12 +531,25 @@ function applyNavigationState(state) {
   isApplyingNavigationState = true;
   if (state.view === 'note' && state.noteId) {
     currentFolderId = state.folderId || null;
-    openNote(state.noteId, { pushHistory: false }).catch((error) => {
+    openNote(state.noteId, {
+      pushHistory: false,
+      originTab: state.originTab || 'notes'
+    }).catch((error) => {
       showContentPanel();
       statusText.textContent = error.message || '读取本地文件失败';
     }).finally(() => {
       isApplyingNavigationState = false;
     });
+    return;
+  }
+
+  // 从日历/回顾打开的笔记，历史回退也回到来源 Tab，而不是笔记列表
+  if (noteOriginTab !== 'notes') {
+    const originTab = noteOriginTab;
+    noteOriginTab = 'notes';
+    noteOriginScrollY = 0;
+    window.NoticeNoteTabs?.switchTab?.(originTab);
+    isApplyingNavigationState = false;
     return;
   }
 
@@ -1064,7 +1128,12 @@ function renderOpenedNote(note, saved = false) {
 }
 
 async function openNote(noteId, options = {}) {
-  const { pushHistory = true } = options;
+  const { pushHistory = true, originTab = 'notes' } = options;
+  noteOriginTab = originTab;
+  // 只有用户从别的 Tab 主动点进来时才记滚动位置；历史回放不该覆盖它
+  if (pushHistory) {
+    noteOriginScrollY = originTab === 'notes' ? 0 : window.scrollY;
+  }
   const note = (library?.notes || []).find((item) => item.id === noteId);
   if (!note) {
     throw new Error('手机本地没有这个文件，请重新导入离线包');
@@ -1080,7 +1149,9 @@ async function openNote(noteId, options = {}) {
 
 async function loadLibrary() {
   const requestId = ++libraryRequestId;
-  showContentPanel();
+  // 以前这里是 showContentPanel()：回到前台重新读库会把日历 Tab 顶成笔记列表，
+  // 也会把正在看的笔记详情页收掉。改为只保证笔记列表可见，不越权切视图。
+  ensureNotesPanelVisible();
   const nextLibrary = NoticeNoteStore.getLibrary() || library || await loadOfflineSnapshot();
   if (requestId !== libraryRequestId) {
     return;
@@ -1112,10 +1183,7 @@ packageFileInput.addEventListener('change', () => {
 });
 
 noteBackButton.addEventListener('click', () => {
-  activeNote = null;
-  showContentPanel();
-  renderLibrary();
-  replaceNavigationState(createListNavigationState());
+  closeNoteDetail();
 });
 
 searchInput.addEventListener('input', () => {
@@ -1223,6 +1291,55 @@ document.addEventListener('keydown', (event) => {
     closeImageLightbox();
   }
 });
+
+// ---- 键盘避让 ----
+// Android WebView 走 adjustResize：键盘弹出时 window.innerHeight 直接变小。
+// 底部 Tab 是 position:fixed; bottom:0，会跟着弹到键盘上沿，
+// 白占一截还把作答框和「提交判定」按钮挤到键盘边上。这里检测高度缩水后让 Tab 让位。
+// 阈值取 150：手机键盘一般占 250~300px，留足余量；
+// 又高于横竖屏切换造成的视口差（约 120px），避免转屏后误判成键盘。
+const KEYBOARD_SHRINK_THRESHOLD = 150;
+let viewportBaseline = window.innerHeight;
+let keyboardOpen = false;
+
+function isTextEntryFocused() {
+  const el = document.activeElement;
+  if (!el) return false;
+  if (el.tagName === 'TEXTAREA') return true;
+  if (el.tagName !== 'INPUT') return false;
+  // 点按钮 / 文件选择不会弹键盘，别把它们当输入
+  return !['button', 'checkbox', 'radio', 'file', 'range', 'submit', 'color'].includes(el.type);
+}
+
+function syncKeyboardLayout() {
+  const shrinking = viewportBaseline - window.innerHeight > KEYBOARD_SHRINK_THRESHOLD;
+  // 只有在输入框聚焦时才认为键盘弹了，桌面拖动窗口大小不会误触发
+  const open = shrinking && (keyboardOpen || isTextEntryFocused());
+  if (!open && !isTextEntryFocused()) {
+    // 键盘关着、也没有焦点时，当前高度才是可信基线（转屏、切 Tab 都会变）
+    viewportBaseline = window.innerHeight;
+  }
+  if (open === keyboardOpen) return;
+  keyboardOpen = open;
+  document.body.classList.toggle('is-keyboard-open', open);
+  if (!open) return;
+  // 键盘动画结束后再滚，否则量到的还是旧高度
+  const el = document.activeElement;
+  if (el && typeof el.scrollIntoView === 'function') {
+    setTimeout(() => el.scrollIntoView({ block: 'nearest' }), 180);
+  }
+}
+
+window.addEventListener('resize', syncKeyboardLayout);
+window.addEventListener('orientationchange', () => {
+  setTimeout(() => {
+    viewportBaseline = window.innerHeight;
+    keyboardOpen = false;
+    document.body.classList.remove('is-keyboard-open');
+  }, 300);
+});
+document.addEventListener('focusin', () => setTimeout(syncKeyboardLayout, 120));
+document.addEventListener('focusout', () => setTimeout(syncKeyboardLayout, 180));
 
 // 同步客户端落库后广播：笔记 Tab 刷新列表（其他 Tab 各自监听同一事件）。
 window.addEventListener('nn-library-changed', () => {

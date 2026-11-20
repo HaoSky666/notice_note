@@ -1,63 +1,59 @@
 // 回顾 Tab（经典脚本，全局函数以 rv 开头）。
-// 语义与 PC 每日回顾一致：候选 = 复习文件按天分套，密码目录与挂着未完成提醒的天不参与自动回顾；
-// 排序 = 手动顺序优先，其余按「最久没看过」；周末不自动推（可去日历手动标记）。
+// 口径与 PC 回顾面板一致：月历选天 → 只看这一天归档了哪些笔记和资料 → 当天可标记已看过。
+// 手机上不再展示「回顾队列」和提醒列表（2026-11-19 按用户反馈移除）：
+// 这一页只回答「哪天添加了哪些文件」，排期/提醒归日历 Tab 管。
 // 完成/标记已看过 = 写天级锚点 + 事件日志 + 移出手动顺序，记入 dirty 待同步回传。
 
-function rvGetCandidates(library) {
-  const protectedFolderIds = new Set(
+let rvMonth = null; // 当前显示的月份（当月 1 号）
+let rvSelectedKey = ''; // 当前查看的那一天
+
+// 手机端字段名与 PC 不同（资源列表叫 resources），装配参数时映射一次。
+function rvGetSource(library) {
+  const review = library.review || {};
+  return {
+    notes: library.notes || [],
+    resourceFiles: library.resources || [],
+    dayReminders: review.reminders || [],
+    dayReviewLog: review.log || []
+  };
+}
+
+// 回顾面板只列复习文件；密码保护目录的内容本来就不上手机，这里再挡一层。
+function rvGetDayMap(library) {
+  const protectedIds = new Set(
     (library.folders || []).filter((folder) => folder.isProtected).map((folder) => folder.id)
   );
-  const pendingDayKeys = new Set(
-    (library.review?.reminders || [])
-      .filter((reminder) => !reminder.done && reminder.dayKey)
-      .map((reminder) => reminder.dayKey)
-  );
-  const dayMap = new Map();
-  const add = (item, kind) => {
-    // 镜像 PC getDailyReviewCandidates：只回顾 .study_notice 里的复习文件，不是全库。
-    if (!item.isReviewFile) {
-      return;
-    }
-    if (kind === 'file' && item.canOpen === false) {
-      return;
-    }
-    if (protectedFolderIds.has(item.folderId || null)) {
-      return;
-    }
-    const dayKey = NoticeNoteStore.getItemDayKey(item);
-    if (!dayKey || pendingDayKeys.has(dayKey)) {
-      return;
-    }
-    if (!dayMap.has(dayKey)) {
-      dayMap.set(dayKey, { key: `day:${dayKey}`, dayKey, notes: [], files: [] });
-    }
-    const day = dayMap.get(dayKey);
-    if (kind === 'note') {
-      day.notes.push(item);
-    } else {
-      day.files.push(item);
-    }
-  };
-  for (const note of library.notes || []) {
-    add(note, 'note');
-  }
-  for (const file of library.resources || []) {
-    add(file, 'file');
-  }
-  return [...dayMap.values()];
+  const visible = (item) => !protectedIds.has(item.folderId || null);
+  const source = rvGetSource(library);
+  return toReviewDayMap(buildDayIndex({
+    notes: source.notes.filter(visible),
+    resourceFiles: source.resourceFiles.filter(visible)
+  }));
 }
 
-function rvGetSortedQueue(library) {
-  const review = library.review || {};
-  return NoticeNoteReviewQueue.sortReviewQueue(rvGetCandidates(library), {
-    order: review.order || [],
-    history: review.history || {}
-  });
+// 与 PC formatReviewDayShort 同款：2026-08-12 -> 8月12日
+function rvFormatDayShort(dayKey) {
+  if (!dayKey) {
+    return '未归天';
+  }
+  const [, month, day] = String(dayKey).split('-');
+  return `${Number(month)} 月 ${Number(day)} 日`;
 }
 
-function rvIsWeekend(now = Date.now()) {
-  const weekday = new Date(now).getDay();
-  return weekday === 0 || weekday === 6;
+function rvFormatDayTitle(dayKey) {
+  const [year, month, day] = String(dayKey).split('-').map(Number);
+  const date = new Date(year, month - 1, day);
+  const weekdays = ['日', '一', '二', '三', '四', '五', '六'];
+  return `${year} 年 ${month} 月 ${day} 日 · 周${weekdays[date.getDay()]}`;
+}
+
+function rvParseDayKey(dayKey) {
+  const [year, month, day] = String(dayKey).split('-').map(Number);
+  return new Date(year, month - 1, day);
+}
+
+function rvDayTotal(day) {
+  return (day ? day.notes.length : 0) + (day ? day.files.length : 0);
 }
 
 // 完成回顾 / 标记已看过：与 PC handleDailyReview(complete) 同语义。
@@ -86,10 +82,21 @@ function rvCompleteDay(dayKey) {
     });
 }
 
+// 文件卡片：笔记按修改时间倒序在前，资料接在后面（与 PC 回顾面板同序）。
 function rvRenderFileList(container, day) {
+  if (!day || rvDayTotal(day) === 0) {
+    const empty = document.createElement('p');
+    empty.className = 'cal-day-empty';
+    empty.textContent = '这一天还没有回顾文件。';
+    container.append(empty);
+    return;
+  }
   const list = document.createElement('div');
   list.className = 'note-list rv-file-list';
-  for (const note of day.notes) {
+  const notes = [...day.notes].sort(
+    (a, b) => Date.parse(b.updatedAt || 0) - Date.parse(a.updatedAt || 0)
+  );
+  for (const note of notes) {
     list.append(renderNoteCard(note, true));
   }
   for (const file of day.files) {
@@ -109,6 +116,189 @@ function rvRenderFileList(container, day) {
   container.append(list);
 }
 
+// 月历：与 PC 回顾面板同口径（周一起始，有文件的天挂小圆点，空白天也能点开看）。
+// 复用日历 Tab 的 .cal-* 样式，两个 Tab 的月历视觉保持一致。
+function rvRenderCalendar(dayMap, todayKey) {
+  const wrap = document.createElement('div');
+  wrap.className = 'rv-calendar';
+
+  const header = document.createElement('div');
+  header.className = 'cal-header';
+  const prevButton = document.createElement('button');
+  prevButton.type = 'button';
+  prevButton.className = 'cal-nav';
+  prevButton.textContent = '‹';
+  prevButton.setAttribute('aria-label', '上一月');
+  prevButton.addEventListener('click', () => {
+    rvMonth = new Date(rvMonth.getFullYear(), rvMonth.getMonth() - 1, 1);
+    rvRender();
+  });
+  const title = document.createElement('strong');
+  title.className = 'cal-title';
+  title.textContent = `${rvMonth.getFullYear()} 年 ${rvMonth.getMonth() + 1} 月`;
+  const nextButton = document.createElement('button');
+  nextButton.type = 'button';
+  nextButton.className = 'cal-nav';
+  nextButton.textContent = '›';
+  nextButton.setAttribute('aria-label', '下一月');
+  nextButton.addEventListener('click', () => {
+    rvMonth = new Date(rvMonth.getFullYear(), rvMonth.getMonth() + 1, 1);
+    rvRender();
+  });
+  const todayButton = document.createElement('button');
+  todayButton.type = 'button';
+  todayButton.className = 'cal-today';
+  todayButton.textContent = '今天';
+  todayButton.addEventListener('click', () => {
+    const now = new Date();
+    rvMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+    rvSelectedKey = todayKey;
+    rvRender();
+  });
+  header.append(prevButton, title, nextButton, todayButton);
+  wrap.append(header);
+
+  const grid = document.createElement('div');
+  grid.className = 'cal-grid';
+  for (const label of ['一', '二', '三', '四', '五', '六', '日']) {
+    const cell = document.createElement('div');
+    cell.className = 'cal-week';
+    cell.textContent = label;
+    grid.append(cell);
+  }
+  const firstWeekday = (rvMonth.getDay() + 6) % 7;
+  for (let i = 0; i < firstWeekday; i += 1) {
+    const blank = document.createElement('div');
+    blank.className = 'cal-day is-blank';
+    grid.append(blank);
+  }
+  const daysInMonth = new Date(rvMonth.getFullYear(), rvMonth.getMonth() + 1, 0).getDate();
+  for (let day = 1; day <= daysInMonth; day += 1) {
+    const date = new Date(rvMonth.getFullYear(), rvMonth.getMonth(), day);
+    const dayKey = NoticeNoteDateUtils.toLocalDateKey(date);
+    const total = rvDayTotal(dayMap.get(dayKey));
+    const cell = document.createElement('button');
+    cell.type = 'button';
+    cell.className = 'cal-day';
+    cell.dataset.dayKey = dayKey;
+    cell.classList.toggle('has-files', total > 0);
+    if (dayKey === todayKey) {
+      cell.classList.add('is-today');
+    }
+    if (dayKey === rvSelectedKey) {
+      cell.classList.add('is-selected');
+    }
+    const number = document.createElement('span');
+    number.textContent = String(day);
+    cell.append(number);
+    cell.setAttribute('aria-label', total > 0 ? `${dayKey}，${total} 个文件` : `${dayKey}，没有文件`);
+    cell.addEventListener('click', () => {
+      rvSelectedKey = dayKey;
+      rvRender();
+    });
+    grid.append(cell);
+  }
+  wrap.append(grid);
+
+  const legend = document.createElement('p');
+  legend.className = 'cal-legend';
+  const item = document.createElement('span');
+  item.className = 'cal-legend-item';
+  const swatch = document.createElement('i');
+  swatch.className = 'cal-legend-swatch is-files';
+  swatch.setAttribute('aria-hidden', 'true');
+  const text = document.createElement('span');
+  text.textContent = '有文件';
+  item.append(swatch, text);
+  legend.append(item);
+  wrap.append(legend);
+
+  return wrap;
+}
+
+// 日期条：‹ 11月12日 › + 第 N/M 天 · X 个文件。只有「有文件的日期」之间跳，空白天不占位。
+function rvRenderDayBar(dayMap, dayKeys) {
+  const bar = document.createElement('div');
+  bar.className = 'rv-day-bar';
+
+  const index = dayKeys.indexOf(rvSelectedKey);
+  const prevKey = dayKeys.filter((key) => key < rvSelectedKey).pop() || '';
+  const nextKey = dayKeys.find((key) => key > rvSelectedKey) || '';
+
+  const prevButton = document.createElement('button');
+  prevButton.type = 'button';
+  prevButton.className = 'cal-nav';
+  prevButton.textContent = '‹';
+  prevButton.title = '上一个有文件的日期';
+  prevButton.setAttribute('aria-label', '上一个有文件的日期');
+  prevButton.disabled = !prevKey;
+  prevButton.addEventListener('click', () => {
+    rvSelectedKey = prevKey;
+    rvMonth = new Date(rvParseDayKey(prevKey).getFullYear(), rvParseDayKey(prevKey).getMonth(), 1);
+    rvRender();
+  });
+
+  const info = document.createElement('div');
+  info.className = 'rv-day-info';
+  const title = document.createElement('strong');
+  title.textContent = rvFormatDayShort(rvSelectedKey);
+  title.title = rvFormatDayTitle(rvSelectedKey);
+  const meta = document.createElement('span');
+  const total = rvDayTotal(dayMap.get(rvSelectedKey));
+  meta.textContent = index >= 0
+    ? `第 ${index + 1} / ${dayKeys.length} 天 · ${total} 个文件`
+    : '空白日 · 没有回顾文件';
+  info.append(title, meta);
+
+  const nextButton = document.createElement('button');
+  nextButton.type = 'button';
+  nextButton.className = 'cal-nav';
+  nextButton.textContent = '›';
+  nextButton.title = '下一个有文件的日期';
+  nextButton.setAttribute('aria-label', '下一个有文件的日期');
+  nextButton.disabled = !nextKey;
+  nextButton.addEventListener('click', () => {
+    rvSelectedKey = nextKey;
+    rvMonth = new Date(rvParseDayKey(nextKey).getFullYear(), rvParseDayKey(nextKey).getMonth(), 1);
+    rvRender();
+  });
+
+  bar.append(prevButton, info, nextButton);
+  return bar;
+}
+
+// 当天操作：今天要回顾的那一套给主按钮，其他有内容的天给弱化按钮（与 PC 两级入口一致）。
+// 空白日不挂按钮——没有可回顾的内容，留个灰按钮会让人误以为系统在催。
+function rvRenderCompleteBar(day, history) {
+  if (!day || rvDayTotal(day) === 0) {
+    return null;
+  }
+  const dayKey = rvSelectedKey;
+  const isTodayReviewDay = [...day.notes, ...day.files].some((item) => item.isDailyReview);
+  const viewedAt = history[`day:${dayKey}`];
+
+  const bar = document.createElement('div');
+  bar.className = 'rv-complete-bar';
+  const button = document.createElement('button');
+  button.type = 'button';
+  if (isTodayReviewDay) {
+    button.className = 'primary-action';
+    button.textContent = viewedAt ? '✓ 今天已看过 · 再看一遍' : '✓ 完成回顾';
+  } else {
+    button.className = 'secondary-action';
+    button.textContent = viewedAt ? '再次标记已看过' : '标记这一天已看过';
+  }
+  button.title = isTodayReviewDay
+    ? '把今天这一套标记为已回顾，自动回顾会换到下一套'
+    : '这一套不是今天要回顾的内容；标记后它会排到自动回顾的队尾';
+  button.addEventListener('click', () => {
+    rvCompleteDay(dayKey);
+    rvRender();
+  });
+  bar.append(button);
+  return bar;
+}
+
 function rvRender() {
   const panel = document.querySelector('#reviewPanel');
   if (!panel) {
@@ -124,12 +314,18 @@ function rvRender() {
     return;
   }
 
-  const queue = rvGetSortedQueue(library);
-  const review = library.review || {};
-  const history = review.history || {};
   const todayKey = NoticeNoteDateUtils.toLocalDateKey(new Date());
-  const weekend = rvIsWeekend();
-  const autoEnabled = review.enabled !== false;
+  if (!rvMonth) {
+    const now = new Date();
+    rvMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+  }
+  if (!rvSelectedKey) {
+    rvSelectedKey = todayKey;
+  }
+
+  const dayMap = rvGetDayMap(library);
+  const dayKeys = [...dayMap.keys()];
+  const history = (library.review || {}).history || {};
 
   const heading = document.createElement('div');
   heading.className = 'rv-heading';
@@ -145,83 +341,17 @@ function rvRender() {
   }
   panel.append(heading);
 
-  if (queue.length === 0) {
-    const empty = document.createElement('div');
-    empty.className = 'empty-state';
-    empty.textContent = '没有可回顾的内容天。复习文件归档后会自动出现在这里。';
-    panel.append(empty);
-    return;
-  }
+  panel.append(rvRenderCalendar(dayMap, todayKey));
 
-  // 今日推荐：周末或关闭自动回顾时不推，但队列仍可手动标记
-  const todayCard = document.createElement('section');
-  todayCard.className = 'rv-today-card';
-  if (weekend && autoEnabled) {
-    const notice = document.createElement('p');
-    notice.className = 'rv-weekend';
-    notice.textContent = '今天是周末，自动回顾休息。想复习的话可以在下方或日历里手动标记。';
-    todayCard.append(notice);
-  } else if (!autoEnabled) {
-    const notice = document.createElement('p');
-    notice.className = 'rv-weekend';
-    notice.textContent = '电脑端已关闭每日回顾，这里只保留手动标记。';
-    todayCard.append(notice);
-  } else {
-    const pick = queue[0];
-    const viewedAt = history[pick.key];
-    const label = document.createElement('p');
-    label.className = 'rv-today-label';
-    label.textContent = `今日推荐 · ${pick.dayKey} · ${pick.notes.length + pick.files.length} 个文件`;
-    todayCard.append(label);
-    rvRenderFileList(todayCard, pick);
-    const actions = document.createElement('div');
-    actions.className = 'rv-actions';
-    const completeButton = document.createElement('button');
-    completeButton.type = 'button';
-    completeButton.className = 'primary-action';
-    completeButton.textContent = viewedAt ? '✓ 今天已看过 · 再看一遍' : '✓ 完成回顾';
-    completeButton.addEventListener('click', () => {
-      rvCompleteDay(pick.dayKey);
-      rvRender();
-    });
-    actions.append(completeButton);
-    todayCard.append(actions);
+  const card = document.createElement('section');
+  card.className = 'cal-day-panel rv-day-panel';
+  card.append(rvRenderDayBar(dayMap, dayKeys));
+  const completeBar = rvRenderCompleteBar(dayMap.get(rvSelectedKey), history);
+  if (completeBar) {
+    card.append(completeBar);
   }
-  panel.append(todayCard);
-
-  // 队列预览：其余候选天，可手动标记已看过（排到队尾）
-  const rest = queue.slice(1, 8);
-  if (rest.length > 0) {
-    const queueTitle = document.createElement('h3');
-    queueTitle.className = 'rv-queue-title';
-    queueTitle.textContent = '回顾队列';
-    panel.append(queueTitle);
-    const list = document.createElement('div');
-    list.className = 'rv-queue';
-    for (const day of rest) {
-      const row = document.createElement('div');
-      row.className = 'rv-queue-row';
-      const info = document.createElement('div');
-      info.className = 'rv-queue-info';
-      const date = document.createElement('strong');
-      date.textContent = day.dayKey;
-      const meta = document.createElement('span');
-      const viewedAt = history[day.key];
-      meta.textContent = `${day.notes.length + day.files.length} 个文件${viewedAt ? ` · 看过 ${formatDateTime(viewedAt)}` : ' · 没看过'}`;
-      info.append(date, meta);
-      const markButton = document.createElement('button');
-      markButton.type = 'button';
-      markButton.className = 'secondary-action';
-      markButton.textContent = '标记已看过';
-      markButton.addEventListener('click', () => {
-        rvCompleteDay(day.dayKey);
-        rvRender();
-      });
-      row.append(info, markButton);
-      list.append(row);
-    }
-    panel.append(list);
-  }
+  rvRenderFileList(card, dayMap.get(rvSelectedKey));
+  panel.append(card);
 
   const hint = document.createElement('p');
   hint.className = 'rv-hint';

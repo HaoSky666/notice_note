@@ -11,7 +11,7 @@ const APP_SRC = path.join(ROOT, 'notice_note_client_app/src');
 
 // 手机端页面脚本（经典脚本，共享全局）；lib 下的 UMD 不参与重名检查
 const APP_CLASSIC_SCRIPTS = [
-  'app.js', 'store.js', 'sync-client.js', 'calendar.js',
+  'themes.js', 'app.js', 'store.js', 'sync-client.js', 'calendar.js',
   'review.js', 'memory.js', 'msettings.js', 'tabs.js'
 ];
 

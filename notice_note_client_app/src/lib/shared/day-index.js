@@ -1,6 +1,10 @@
+// 【自动复制】源头：notice_note_client_pc/src/lib/day-index.js
+// 请勿直接编辑本文件；修改源头后运行 npm run sync:libs 重新生成。
 /* 日历 / 回顾共用的「天」索引（UMD + 浏览器全局）
  * 以前 sidebar.js 的 getCalendarReminderEntries 与 review-browser.js 的 getReviewDayMap
  * 各自组装数据，同一天在两处可能显示不同数量/状态。这里把 dayKey -> 内容 收敛成唯一来源。
+ * 手机端日历同样跑这一份（经 scripts/sync-mobile-libs.js 复制到 src/lib/shared/），
+ * 装配参数时注意字段名不同：手机端资源列表叫 resources，这里收 resourceFiles。
  * Node 侧 module.exports 供 tests/day-index.test.js 直接测试。
  */
 (function (root, factory) {
@@ -108,6 +112,11 @@
         if (record.date) {
           entries.push({ date: record.date, dayKey, kind: 'reminder', done: Boolean(record.done) });
         }
+      }
+      // 内容已经不在的天（笔记删除或移出回顾目录）不再显示「已回顾」：
+      // 日志是追加型事件流，不设这道闸，孤儿条目会永远挂在 reviewedAt 那一天。
+      if (day.notes.length === 0 && day.files.length === 0) {
+        continue;
       }
       for (const event of day.reviewEvents) {
         const reviewedAt = event.reviewedAt ? new Date(event.reviewedAt) : null;

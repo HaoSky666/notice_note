@@ -13,12 +13,16 @@ const msetAiModelInput = document.querySelector('#msetAiModelInput');
 const msetAiKeyInput = document.querySelector('#msetAiKeyInput');
 const msetAiSaveButton = document.querySelector('#msetAiSaveButton');
 const msetAiStatus = document.querySelector('#msetAiStatus');
+const msetThemeList = document.querySelector('#msetThemeList');
 const closeMsettingsButton = document.querySelector('#closeMsettingsButton');
 const syncProgress = document.querySelector('#syncProgress');
 const syncProgressText = document.querySelector('#syncProgressText');
 const syncProgressCloseButton = document.querySelector('#syncProgressCloseButton');
 
 function msetRender() {
+  // 主题卡片每次都按当前选择重画，点击后立即换色并更新「✓ 当前应用」
+  NoticeNoteThemes.renderPicker(msetThemeList);
+
   const connection = NoticeNoteStore.getConnection();
   if (msetSyncStatus) {
     msetSyncStatus.textContent = connection
@@ -185,3 +189,6 @@ closeMsettingsButton?.addEventListener('click', () => {
 });
 
 syncProgressCloseButton?.addEventListener('click', msetHideProgress);
+
+// 设置面板第一次打开前就把主题卡片铺好：renderPicker 只动主题区，不依赖同步状态
+NoticeNoteThemes.renderPicker(msetThemeList);

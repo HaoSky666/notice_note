@@ -15,6 +15,7 @@ const SHARED_LIBS = [
   'memory-card-store.js',
   'ai-judge.js',
   'review-queue.js',
+  'day-index.js',
   'sync-merge.js'
 ];
 

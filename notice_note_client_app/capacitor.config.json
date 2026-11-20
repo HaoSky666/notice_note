@@ -1,5 +1,8 @@
 {
   "appId": "com.notice.note",
   "appName": "Notice Note",
-  "webDir": "src"
+  "webDir": "src",
+  "android": {
+    "allowMixedContent": true
+  }
 }

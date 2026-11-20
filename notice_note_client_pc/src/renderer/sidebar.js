@@ -428,7 +428,7 @@ function getCalendarReminderEntries() {
     toLocalDateKey(new Date()),
   );
 }
-function renderReminderCalendar() {
+function renderReminderCalendar(restoreScrollTop = 0) {
   const entries = getCalendarReminderEntries();
   const entriesByDate = new Map();
   for (const entry of entries) {
@@ -436,6 +436,12 @@ function renderReminderCalendar() {
     current.push(entry);
     entriesByDate.set(entry.date, current);
   }
+  // 抽屉里的内容来自共享索引：与回顾面板同源，不再单独算一套。
+  const dayMap = getReviewDayMap();
+  // 只要这套内容历史上被回顾过，按钮就换成「再次标记」
+  const reviewedDayKeys = new Set(
+    entries.filter((entry) => entry.kind === "reviewed").map((entry) => entry.dayKey),
+  );
 
   const calendar = document.createElement("section");
   calendar.className = "reminder-calendar";
@@ -460,6 +466,7 @@ function renderReminderCalendar() {
       1,
     );
     selectedReminderDate = toLocalDateKey(reminderCalendarMonth);
+    reminderExpandedEntry = "";
     renderNoteList();
   });
   nextButton.addEventListener("click", () => {
@@ -469,6 +476,7 @@ function renderReminderCalendar() {
       1,
     );
     selectedReminderDate = toLocalDateKey(reminderCalendarMonth);
+    reminderExpandedEntry = "";
     renderNoteList();
   });
   header.append(previousButton, monthTitle, nextButton);
@@ -525,6 +533,7 @@ function renderReminderCalendar() {
     }
     dayButton.addEventListener("click", () => {
       selectedReminderDate = dateKey;
+      reminderExpandedEntry = "";
       renderNoteList();
     });
     grid.append(dayButton);
@@ -538,6 +547,7 @@ function renderReminderCalendar() {
     const today = new Date();
     reminderCalendarMonth = new Date(today.getFullYear(), today.getMonth(), 1);
     selectedReminderDate = toLocalDateKey(today);
+    reminderExpandedEntry = "";
     renderNoteList();
   });
   calendar.append(header, weekdays, grid, todayButton);
@@ -559,39 +569,182 @@ function renderReminderCalendar() {
     empty.textContent = "当天没有提醒或回顾";
     details.append(empty);
   } else {
+    const entryList = document.createElement("div");
+    entryList.className = "reminder-calendar-entries";
     for (const entry of selectedEntries) {
-      const item = document.createElement("button");
-      item.className = `reminder-calendar-entry${entry.kind === "today" ? " is-daily-review" : ""}`;
-      item.type = "button";
-
-      const title = document.createElement("strong");
-      title.textContent = `${formatReviewDayShort(entry.dayKey)} 那一套`;
-
-      const folderPath = document.createElement("span");
-      folderPath.textContent = "回顾面板 · 一整天内容";
-
-      const meta = document.createElement("span");
-      if (entry.kind === "today") {
-        meta.className = "daily-review-calendar-meta";
-        meta.textContent = "今日回顾";
-      } else if (entry.kind === "reviewed") {
-        meta.className = "is-done";
-        meta.textContent = `已回顾 · ${formatListDateTime(entry.reviewedAt)}`;
-      } else {
-        meta.className = entry.done ? "is-done" : "";
-        meta.textContent = entry.done ? "已提醒" : "待提醒";
+      entryList.append(createReminderEntry(entry));
+      if (reminderExpandedEntry === reminderEntryId(entry)) {
+        entryList.append(createReminderEntryDrawer(entry, dayMap, reviewedDayKeys));
       }
-
-      item.append(title, folderPath, meta);
-      item.addEventListener("click", () => {
-        // 提醒与回顾在日历里同版式、同落点：都定位到回顾面板的那一天
-        activateReviewBrowser();
-        selectReviewDay(entry.dayKey);
-      });
-      details.append(item);
     }
+    details.append(entryList);
   }
   noteList.append(details);
+
+  // 原地展开不该让侧边栏跳回顶部：还原原来的滚动位置，再把抽屉带进视口
+  noteList.scrollTop = restoreScrollTop;
+  revealExpandedReminderEntry();
+}
+
+function reminderEntryId(entry) {
+  return `${entry.date}|${entry.kind}|${entry.dayKey}`;
+}
+
+// 条目 = 一行「哪一套 + 状态」，点击原地展开抽屉（与手机端同一套交互）。
+// 不再跳到回顾面板：换视图会丢掉日历上下文，来回翻月份很烦。
+function createReminderEntry(entry) {
+  const entryId = reminderEntryId(entry);
+  const isOpen = reminderExpandedEntry === entryId;
+  const item = document.createElement("button");
+  item.className = `reminder-calendar-entry${entry.kind === "today" ? " is-daily-review" : ""}`;
+  item.type = "button";
+  item.classList.toggle("is-open", isOpen);
+  item.setAttribute("aria-expanded", String(isOpen));
+
+  const head = document.createElement("div");
+  head.className = "reminder-calendar-entry-head";
+  const title = document.createElement("strong");
+  title.textContent = `${formatReviewDayShort(entry.dayKey)} 那一套`;
+  const chevron = document.createElement("i");
+  chevron.className = "reminder-calendar-entry-chevron";
+  chevron.setAttribute("aria-hidden", "true");
+  head.append(title, chevron);
+
+  const folderPath = document.createElement("span");
+  folderPath.textContent = "回顾面板 · 一整天内容";
+
+  const meta = document.createElement("span");
+  if (entry.kind === "today") {
+    meta.className = "daily-review-calendar-meta";
+    meta.textContent = "今日回顾";
+  } else if (entry.kind === "reviewed") {
+    meta.className = "is-done";
+    meta.textContent = `已回顾 · ${formatListDateTime(entry.reviewedAt)}`;
+  } else {
+    meta.className = entry.done ? "is-done" : "";
+    meta.textContent = entry.done ? "已提醒" : "待提醒";
+  }
+
+  item.append(head, folderPath, meta);
+  item.addEventListener("click", () => {
+    reminderExpandedEntry = isOpen ? "" : entryId;
+    renderNoteList();
+  });
+  return item;
+}
+
+// 抽屉内容 = 这一套的具体文件（与回顾面板当天列表同一批卡片）
+function createReminderEntryDrawer(entry, dayMap, reviewedDayKeys) {
+  const drawer = document.createElement("div");
+  drawer.className = "reminder-calendar-entry-drawer";
+
+  const day = dayMap.get(entry.dayKey);
+  const dayNotes = day ? day.notes : [];
+  const dayFiles = day ? day.files : [];
+  if (dayNotes.length === 0 && dayFiles.length === 0) {
+    const empty = document.createElement("p");
+    empty.className = "reminder-calendar-entry-empty";
+    empty.textContent = "这一套的内容已经不在了。";
+    drawer.append(empty);
+    return drawer;
+  }
+
+  const count = document.createElement("p");
+  count.className = "reminder-calendar-entry-count";
+  count.textContent = `${dayNotes.length} 篇笔记 · ${dayFiles.length} 个资料`;
+  drawer.append(count);
+
+  const ordered = sortReviewDayEntries(
+    [
+      ...[...dayNotes]
+        .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt))
+        .map((note) => ({ key: `note:${note.id}`, type: "note", item: note })),
+      ...dayFiles.map((file) => ({ key: `file:${file.id}`, type: "file", item: file })),
+    ],
+    appSettings?.reviewDayOrder?.[entry.dayKey],
+  );
+
+  const fileList = document.createElement("div");
+  fileList.className = "reminder-calendar-entry-files";
+  for (const entryItem of ordered) {
+    if (entryItem.type === "note") {
+      const note = entryItem.item;
+      fileList.append(
+        createReviewDayItem({
+          label: note.title || "未命名笔记",
+          meta: `修改 ${formatListDateTime(note.updatedAt)}`,
+          badge: (note.fileType || "md").toUpperCase(),
+          active: note.id === activeNoteId,
+          isDailyReview: note.isDailyReview,
+          onClick: () => selectNote(note.id).catch((error) => window.showErrorToast?.(error, "操作失败")),
+          entry: { type: "note", id: note.id },
+        }),
+      );
+    } else {
+      const file = entryItem.item;
+      fileList.append(
+        createReviewDayItem({
+          label: file.name,
+          meta: `${formatFileSize(file.size)} · 修改 ${formatListDateTime(file.updatedAt)}`,
+          badge: file.typeLabel,
+          active: file.id === activeResourceId || file.id === activePdfId,
+          onClick: file.canOpen
+            ? () => selectResourceFile(file.id).catch((error) => window.showErrorToast?.(error, "操作失败"))
+            : null,
+          entry: { type: "file", id: file.id },
+        }),
+      );
+    }
+  }
+  drawer.append(fileList);
+
+  const actions = document.createElement("div");
+  actions.className = "reminder-calendar-entry-actions";
+  const isTodayReview = entry.kind === "today";
+  const markButton = document.createElement("button");
+  markButton.type = "button";
+  // 与回顾面板同一套分级：今日回顾日给主按钮，其他日子弱化成「已看过」
+  markButton.className = isTodayReview
+    ? "review-panel-complete-button"
+    : "review-panel-complete-button is-secondary";
+  if (isTodayReview) {
+    markButton.textContent = "✓ 完成回顾";
+  } else {
+    markButton.textContent = reviewedDayKeys.has(entry.dayKey)
+      ? "再次标记已看过"
+      : "标记这一天已看过";
+  }
+  markButton.addEventListener("click", async () => {
+    markButton.disabled = true;
+    try {
+      await window.noticeNote.handleDailyReview(entry.dayKey, "complete");
+      appSettings = await window.noticeNote.getSettings();
+      renderNoteList();
+      window.showToast?.(
+        isTodayReview ? "已标记完成回顾" : "已标记这一天看过了",
+        "success",
+      );
+    } catch (error) {
+      window.showErrorToast?.(error, "标记失败");
+      markButton.disabled = false;
+    }
+  });
+  actions.append(markButton);
+  drawer.append(actions);
+  return drawer;
+}
+
+function revealExpandedReminderEntry() {
+  if (!reminderExpandedEntry) {
+    return;
+  }
+  const drawer = noteList.querySelector(".reminder-calendar-entry-drawer");
+  if (!drawer || typeof drawer.scrollIntoView !== "function") {
+    return;
+  }
+  requestAnimationFrame(() => {
+    drawer.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  });
 }
 function createDailyReviewLastTime(target) {
   const lastTime = document.createElement("span");
@@ -724,10 +877,12 @@ function renderNoteList() {
   const filteredNotes = getFilteredNotes();
   const filteredResources = getFilteredResources();
 
+  // 日历在重绘时要保住滚动位置（展开抽屉常发生在下半屏），其他视图不需要
+  const restoreScrollTop = sidebarViewMode === "calendar" ? noteList.scrollTop : 0;
   noteList.innerHTML = "";
 
   if (sidebarViewMode === "calendar") {
-    renderReminderCalendar();
+    renderReminderCalendar(restoreScrollTop);
     return;
   }
 

@@ -425,17 +425,26 @@ function renderReviewPanelReminders() {
     );
   });
 
-  head.append(label, input, addBtn, autoBtn);
-  box.append(head);
-
-  const chips = document.createElement("div");
-  chips.className = "review-panel-reminders-chips";
+  // 空状态并入标题行：没有复习日时不留一行空白，整块只有两行
+  head.append(label);
   if (records.length === 0) {
-    const empty = document.createElement("span");
-    empty.className = "review-panel-reminders-empty";
-    empty.textContent = "还没排复习日";
-    chips.append(empty);
-  } else {
+    const hint = document.createElement("span");
+    hint.className = "review-panel-reminders-empty";
+    hint.textContent = "还没排复习日";
+    head.append(hint);
+  }
+  head.append(autoBtn);
+
+  // 日期 + 提交放在同一行：head 只放标题与次级动作，避免窄侧栏里挤成三行
+  const row = document.createElement("div");
+  row.className = "review-panel-reminders-row";
+  row.append(input, addBtn);
+
+  box.append(head, row);
+
+  if (records.length > 0) {
+    const chips = document.createElement("div");
+    chips.className = "review-panel-reminders-chips";
     for (const record of records) {
       const chip = document.createElement("span");
       chip.className = `review-reminder-chip${record.done ? " is-done" : ""}`;
@@ -456,8 +465,8 @@ function renderReviewPanelReminders() {
       chip.append(remove);
       chips.append(chip);
     }
+    box.append(chips);
   }
-  box.append(chips);
   return box;
 }
 

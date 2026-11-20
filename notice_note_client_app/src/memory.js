@@ -317,7 +317,7 @@ function memRenderStudy() {
       const textarea = document.createElement('textarea');
       textarea.id = 'memAnswerInput';
       textarea.className = 'mem-answer-input';
-      textarea.rows = 3;
+      textarea.rows = 6;
       textarea.placeholder = '用自己的话复述答案，AI 会判定掌握程度';
       textarea.value = session.answer || '';
       area.append(textarea);
@@ -427,6 +427,14 @@ function memRender() {
 
   const snapshot = memGetSnapshot();
   const stats = snapshot.stats;
+
+  // 页面标题：没有它时四格统计直接贴顶，看着像内容被截了一段。
+  const heading = document.createElement('div');
+  heading.className = 'tab-heading';
+  const headingTitle = document.createElement('h2');
+  headingTitle.textContent = '记忆卡片';
+  heading.append(headingTitle);
+  panel.append(heading);
 
   const statsRow = document.createElement('div');
   statsRow.className = 'mem-stats';

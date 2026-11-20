@@ -4,7 +4,9 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Notice Note Mobile</title>
-  <link rel="stylesheet" href="./styles.css?v=13">
+  <link rel="stylesheet" href="./styles.css?v=21">
+  <!-- 主题要在首屏前套上 <html data-theme>，否则会先白/先米一下再切 -->
+  <script src="./themes.js?v=1"></script>
 </head>
 <body>
   <main class="app-shell">
@@ -70,6 +72,12 @@
       <h2>设置</h2>
       <button id="closeMsettingsButton" class="image-lightbox-control" type="button" aria-label="关闭设置">×</button>
     </div>
+
+    <section class="msettings-section">
+      <h3>界面主题</h3>
+      <p class="msettings-status">只改手机端配色，和电脑端各自记住各自的选择。</p>
+      <div id="msetThemeList" class="mset-theme-list"></div>
+    </section>
 
     <section class="msettings-section">
       <h3>局域网同步</h3>
@@ -141,15 +149,16 @@
   <script src="./lib/shared/memory-card-store.js?v=1"></script>
   <script src="./lib/shared/ai-judge.js?v=1"></script>
   <script src="./lib/shared/review-queue.js?v=1"></script>
+  <script src="./lib/shared/day-index.js?v=2"></script>
   <script src="./lib/shared/sync-merge.js?v=1"></script>
   <script src="./lib/sync-plan.js?v=1"></script>
   <script src="./store.js?v=1"></script>
   <script src="./sync-client.js?v=1"></script>
-  <script src="./app.js?v=14"></script>
-  <script src="./calendar.js?v=2"></script>
-  <script src="./review.js?v=2"></script>
+  <script src="./app.js?v=17"></script>
+  <script src="./calendar.js?v=6"></script>
+  <script src="./review.js?v=3"></script>
   <script src="./memory.js?v=2"></script>
-  <script src="./msettings.js?v=1"></script>
-  <script src="./tabs.js?v=1"></script>
+  <script src="./msettings.js?v=2"></script>
+  <script src="./tabs.js?v=4"></script>
 </body>
 </html>

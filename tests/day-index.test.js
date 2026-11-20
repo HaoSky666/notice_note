@@ -6,7 +6,7 @@ const {
   buildDayIndex,
   toReviewDayMap,
   buildCalendarEntries
-} = require('../notice_note_client_pc/src/renderer/day-index');
+} = require('../notice_note_client_pc/src/lib/day-index');
 
 function source(overrides = {}) {
   return {
@@ -76,6 +76,25 @@ test('P2-24 回归：日历与回顾面板从同一份索引取数，数量一�
   assert.deepEqual(entries.map((item) => item.kind).sort(), ['reminder', 'reminder', 'reviewed', 'today']);
   assert.equal(entries.find((item) => item.kind === 'reviewed').date, '2026-11-14');
   assert.equal(entries.find((item) => item.kind === 'today').date, '2026-11-12');
+});
+
+test('2026-11-19 脏数据回归：内容已删除的天不再显示「已回顾」', () => {
+  // 真实数据里出现过：dayReviewLog 留着 2019-12-16 的一条回顾事件，
+  // 但回顾目录里已经没有任何内容天，结果日历在 reviewedAt 那天挂了一条空条目。
+  const entries = buildCalendarEntries(source({
+    notes: [{ id: 'n1', isReviewFile: true, reviewDate: '2026-08-12' }],
+    dayReviewLog: [{ dayKey: '2019-12-16', reviewedAt: '2026-11-18T03:17:34.077Z' }]
+  }), '2026-11-19');
+
+  assert.equal(entries.filter((item) => item.kind === 'reviewed').length, 0);
+  assert.equal(entries.some((item) => item.dayKey === '2019-12-16'), false);
+
+  // 内容还在的那天，已回顾照常显示
+  const kept = buildCalendarEntries(source({
+    notes: [{ id: 'n1', isReviewFile: true, reviewDate: '2019-12-16' }],
+    dayReviewLog: [{ dayKey: '2019-12-16', reviewedAt: '2026-11-18T03:17:34.077Z' }]
+  }), '2026-11-19');
+  assert.equal(kept.filter((item) => item.kind === 'reviewed').length, 1);
 });
 
 test('空数据与脏数据不会抛错', () => {
