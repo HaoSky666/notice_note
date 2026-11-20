@@ -129,6 +129,9 @@
   color: var(--nn-ink-900);
   background: var(--nn-canvas);
   font-family: "Microsoft YaHei", "Segoe UI", sans-serif;
+
+  /* 原生控件（日期选择器等）的明暗方案：深色主题在自己的块里覆盖成 dark */
+  --theme-scheme: light;
 }
 
 * {
@@ -594,95 +597,167 @@ display: none;
 }
 
 .review-panel-reminders {
+  display: grid;
+  gap: 7px;
   border: 1px solid var(--theme-border, var(--nn-line-200));
   border-radius: 12px;
-  padding: 8px 10px;
+  padding: 9px 10px 10px;
   background: var(--theme-card, var(--nn-surface-100));
   box-shadow: 0 1px 3px var(--nn-shadow-sepia);
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
 }
 
+/* 标题行：左边说明，右边次级动作（自动排期），两者都不抢主操作 */
 .review-panel-reminders-head {
   display: flex;
   align-items: center;
-  gap: 5px;
-  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 20px;
 }
 
 .review-panel-reminders-label {
   flex: 0 0 auto;
-  font-size: 11px;
-  color: var(--nn-ink-400);
+  color: var(--theme-muted, var(--nn-ink-400));
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+
+/* 主操作行：日期输入占满剩余宽度，提交按钮定宽，两者等高 */
+.review-panel-reminders-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
 .review-reminder-date-input {
-  flex: 1 1 96px;
-  min-width: 92px;
-  border: 1px solid var(--nn-line-200);
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 26px;
+  padding: 0 6px;
+  border: 1px solid var(--theme-border, var(--nn-line-200));
   border-radius: 7px;
-  padding: 2px 4px;
+  background: var(--theme-surface, var(--nn-surface-100));
+  color: var(--theme-text, var(--nn-ink-600));
+  color-scheme: var(--theme-scheme, light);
   font-size: 11px;
-  background: var(--nn-surface-100);
-  color: var(--nn-ink-600);
+  line-height: 1;
 }
 
-.review-reminder-add,
+.review-reminder-date-input:hover {
+  border-color: var(--theme-accent, var(--nn-line-300));
+}
+
+.review-reminder-date-input:focus {
+  outline: none;
+  border-color: var(--theme-accent, var(--nn-accent));
+  box-shadow: 0 0 0 2px var(--theme-accent-soft, var(--nn-accent-soft));
+}
+
+/* 主按钮：与面板里「+ 新建」同族（描边 + 强调色文字），但字重更高 */
+.review-reminder-add {
+  flex: 0 0 auto;
+  height: 26px;
+  padding: 0 10px;
+  border: 1px solid color-mix(in srgb, var(--theme-accent, var(--nn-accent)) 42%, transparent);
+  border-radius: 7px;
+  background: transparent;
+  color: var(--theme-accent, var(--nn-accent));
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+
+.review-reminder-add:hover:not(:disabled) {
+  border-color: var(--theme-accent, var(--nn-accent));
+  background: var(--theme-accent-soft, var(--nn-accent-soft));
+}
+
+/* 次级动作：轻描边小胶囊，比「+ 提醒」弱一档但仍看得出可点 */
 .review-reminder-auto {
   flex: 0 0 auto;
-  border: 1px solid var(--nn-line-200);
-  border-radius: 7px;
-  padding: 3px 8px;
-  font-size: 11px;
-  background: var(--nn-surface-100);
-  color: var(--nn-accent);
+  height: 20px;
+  padding: 0 7px;
+  border: 1px solid var(--theme-border, var(--nn-line-200));
+  border-radius: 6px;
+  background: transparent;
+  color: var(--theme-muted, var(--nn-ink-400));
+  font-size: 10.5px;
+  white-space: nowrap;
   cursor: pointer;
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
 }
 
-.review-reminder-add:hover,
-.review-reminder-auto:hover {
-  border-color: var(--nn-accent);
-  background: var(--nn-accent-soft);
+.review-reminder-auto:hover:not(:disabled) {
+  border-color: var(--theme-accent, var(--nn-accent));
+  background: var(--theme-accent-soft, var(--nn-accent-soft));
+  color: var(--theme-accent, var(--nn-accent));
+}
+
+.review-reminder-add:disabled,
+.review-reminder-auto:disabled {
+  opacity: 0.45;
+  cursor: default;
 }
 
 .review-panel-reminders-chips {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   gap: 5px;
+  min-height: 20px;
 }
 
 .review-panel-reminders-empty {
+  margin-right: auto;
+  color: var(--theme-muted, var(--nn-ink-400));
   font-size: 10.5px;
-  color: var(--nn-ink-400);
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.review-panel-reminders-empty::before {
+  content: "·";
+  margin: 0 5px;
+  opacity: 0.6;
 }
 
 .review-reminder-chip {
   display: inline-flex;
   align-items: center;
-  gap: 3px;
-  border: 1px solid var(--nn-accent);
+  gap: 2px;
+  padding: 1px 5px 1px 8px;
+  border: 1px solid color-mix(in srgb, var(--theme-accent, var(--nn-accent)) 26%, transparent);
   border-radius: 999px;
-  padding: 1px 4px 1px 7px;
+  background: var(--theme-accent-soft, var(--nn-accent-soft));
+  color: var(--theme-accent, var(--nn-accent));
   font-size: 10.5px;
-  color: var(--nn-accent);
-  background: var(--nn-accent-soft);
+  line-height: 1.5;
 }
 
 .review-reminder-chip.is-done {
-  border-color: var(--nn-line-200);
-  color: var(--nn-ink-400);
+  border-color: var(--theme-border, var(--nn-line-200));
   background: transparent;
+  color: var(--theme-muted, var(--nn-ink-400));
 }
 
 .review-reminder-chip-remove {
   border: none;
+  border-radius: 50%;
   background: transparent;
-  cursor: pointer;
-  font-size: 12px;
-  line-height: 1;
-  padding: 0 2px;
   color: inherit;
+  opacity: 0.55;
+  cursor: pointer;
+  font-size: 11px;
+  line-height: 1;
+  padding: 1px 2px;
+  transition: opacity 0.12s;
+}
+
+.review-reminder-chip-remove:hover {
+  opacity: 1;
 }
 
 .review-panel-files {
@@ -1002,6 +1077,111 @@ display: none;
 .reminder-calendar-entry span.daily-review-calendar-meta {
   color: var(--nn-accent);
   font-weight: 700;
+}
+
+/* ---- 提醒日历条目：原地展开抽屉（与手机端同一套交互） ---- */
+.reminder-calendar-entries {
+  display: grid;
+  gap: 7px;
+}
+
+/* 条目首行：标题 + 展开箭头（CSS 画的，不用 ▾ 这类可能缺字的符号） */
+.reminder-calendar-entry-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  width: 100%;
+}
+
+.reminder-calendar-entry-chevron {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  margin-top: -3px;
+  border: solid var(--nn-ink-300);
+  border-width: 0 1.5px 1.5px 0;
+  transform: rotate(45deg);
+  transition: transform 0.18s ease, margin-top 0.18s ease;
+}
+
+.reminder-calendar-entry.is-open .reminder-calendar-entry-chevron {
+  margin-top: 2px;
+  transform: rotate(-135deg);
+}
+
+/* 展开时条目底部与抽屉连成一块：同底色 + 左侧竖线贯通 */
+.reminder-calendar-entry.is-open {
+  border-bottom-color: transparent;
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+  background: #fff6e5;
+  box-shadow: inset 3px 0 0 rgba(185, 139, 67, 0.45);
+}
+
+.reminder-calendar-entry.is-daily-review.is-open {
+  border-bottom-color: transparent;
+  background: #e8f3ed;
+  box-shadow: inset 3px 0 0 rgba(132, 170, 152, 0.55);
+}
+
+.reminder-calendar-entry-drawer {
+  display: grid;
+  gap: 7px;
+  /* 抵消 .reminder-calendar-entries 的 gap，让抽屉贴住上面的条目 */
+  margin-top: -7px;
+  padding: 9px;
+  border: 1px solid var(--nn-line-100);
+  border-top: none;
+  border-radius: 0 0 10px 10px;
+  background: #fff6e5;
+  box-shadow: inset 3px 0 0 rgba(185, 139, 67, 0.45);
+  animation: reminder-drawer-in 0.18s ease;
+}
+
+.reminder-calendar-entry.is-daily-review + .reminder-calendar-entry-drawer {
+  border-color: #b8d0c4;
+  background: #e8f3ed;
+  box-shadow: inset 3px 0 0 rgba(132, 170, 152, 0.55);
+}
+
+@keyframes reminder-drawer-in {
+  from {
+    opacity: 0;
+    transform: translateY(-3px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.reminder-calendar-entry-count,
+.reminder-calendar-entry-empty {
+  margin: 0;
+  color: var(--nn-ink-400);
+  font-size: 11px;
+}
+
+/* 抽屉里的文件卡片比侧栏列表更紧凑：外层已经有边框和底色 */
+.reminder-calendar-entry-files {
+  display: grid;
+  gap: 6px;
+}
+
+.reminder-calendar-entry-files .note-item {
+  margin-bottom: 0;
+  border-radius: 8px;
+  padding: 8px 9px;
+}
+
+.reminder-calendar-entry-actions {
+  display: flex;
+}
+
+.reminder-calendar-entry-actions .review-panel-complete-button {
+  width: 100%;
 }
 
 .reminder-calendar-empty {
@@ -4777,6 +4957,7 @@ body[data-theme="mint"] {
 }
 
 body[data-theme="dark"] {
+  --theme-scheme: dark;
   --theme-background: #16181d;
   --theme-canvas: #1b1e24;
   --theme-sidebar: #131519;
@@ -4811,6 +4992,7 @@ body[data-theme="miku"] {
 }
 
 body[data-theme="sakura"] {
+  --theme-scheme: dark;
   --theme-background: #1a1420;
   --theme-canvas: #211929;
   --theme-sidebar: #16101c;
@@ -4845,6 +5027,7 @@ body[data-theme="violet"] {
 }
 
 body[data-theme="cyberpunk"] {
+  --theme-scheme: dark;
   --theme-background: #120e24;
   --theme-canvas: #191433;
   --theme-sidebar: #0d0a1c;
@@ -4879,6 +5062,7 @@ body[data-theme="pixel"] {
 }
 
 body[data-theme="nte_city"] {
+  --theme-scheme: dark;
   --theme-background: #0f0d1b;
   --theme-canvas: #161328;
   --theme-sidebar: #0a0814;
@@ -4913,6 +5097,7 @@ body[data-theme="nte_mint"] {
 }
 
 body[data-theme="nte_anomaly"] {
+  --theme-scheme: dark;
   --theme-background: #161519;
   --theme-canvas: #1e1d23;
   --theme-sidebar: #111014;
@@ -5017,6 +5202,7 @@ body[data-theme="nte_eloi"] .editor-empty-state {
 }
 
 body[data-theme="crimson"] {
+  --theme-scheme: dark;
   --theme-background: #170e0f;
   --theme-canvas: #1f1214;
   --theme-sidebar: #120a0b;
@@ -5053,6 +5239,7 @@ body[data-theme="deepseek"] {
 
 /* DeepSeek Harness 深色壁纸：复刻 DSH 设计系统深色令牌（近黑底色） */
 body[data-theme="deepseek_dark"] {
+  --theme-scheme: dark;
   --theme-background: #151517;
   --theme-canvas: #1b1b1c;
   --theme-sidebar: #1b1b1c;
@@ -5557,6 +5744,42 @@ body[data-theme] .reminder-calendar-today:hover {
 body[data-theme] .reminder-calendar-entry.is-daily-review,
 body[data-theme] .reminder-calendar-entry.is-daily-review:hover {
   border-color: var(--theme-accent);
+}
+
+/* 展开态与抽屉：跟着主题走，别用暖米色常量（深色主题下会瞎眼） */
+body[data-theme] .reminder-calendar-entry.is-open,
+body[data-theme] .reminder-calendar-entry.is-open:hover {
+  border-bottom-color: transparent;
+  background: var(--theme-surface-soft);
+  box-shadow: inset 3px 0 0 color-mix(in srgb, var(--theme-accent) 40%, transparent);
+}
+
+body[data-theme] .reminder-calendar-entry.is-daily-review.is-open,
+body[data-theme] .reminder-calendar-entry.is-daily-review.is-open:hover {
+  border-bottom-color: transparent;
+  background: var(--theme-accent-soft);
+  box-shadow: inset 3px 0 0 color-mix(in srgb, var(--theme-accent) 40%, transparent);
+}
+
+body[data-theme] .reminder-calendar-entry-drawer,
+body[data-theme] .reminder-calendar-entry.is-daily-review + .reminder-calendar-entry-drawer {
+  border-color: var(--theme-border);
+  border-top: none;
+  background: var(--theme-surface-soft);
+  box-shadow: inset 3px 0 0 color-mix(in srgb, var(--theme-accent) 40%, transparent);
+}
+
+body[data-theme] .reminder-calendar-entry.is-daily-review + .reminder-calendar-entry-drawer {
+  background: var(--theme-accent-soft);
+}
+
+body[data-theme] .reminder-calendar-entry-chevron {
+  border-color: var(--theme-muted);
+}
+
+body[data-theme] .reminder-calendar-entry-count,
+body[data-theme] .reminder-calendar-entry-empty {
+  color: var(--theme-muted);
 }
 
 body[data-theme] .note-title-row strong,
@@ -6610,7 +6833,9 @@ body[data-theme="nte_eloi"] .workspace-tab.is-active {
    ============================================================ */
 .memory-view,
 .memory-sidebar-header,
-.memory-sidebar-list {
+.memory-sidebar-list,
+/* 快速建卡弹框挂在 body 下、不在 .memory-view 里，令牌在这里一起注入 */
+.memory-quick-dialog {
   --mv-bg: var(--theme-canvas, var(--nn-canvas));
   --mv-surface: var(--theme-surface, var(--nn-surface-100));
   --mv-soft: var(--theme-surface-soft, var(--nn-surface-soft));
@@ -7091,8 +7316,9 @@ body[data-theme="nte_eloi"] .workspace-tab.is-active {
 
 .memory-answer-input {
   width: 100%;
-  min-height: 74px;
-  max-height: 180px;
+  /* 作答经常是三五行，默认 3 行写长答案要一直滚；6 行起步，还能自己往下拖。 */
+  min-height: 126px;
+  max-height: 340px;
   padding: 10px 12px;
   border: 1px solid var(--mv-border);
   border-radius: 9px;
@@ -7821,6 +8047,93 @@ body[data-theme="nte_eloi"] .workspace-tab.is-active {
   .memory-settings-grid {
     grid-template-columns: minmax(0, 1fr);
   }
+}
+
+/* ---------- 从笔记右键快速建卡 ---------- */
+.memory-quick-dialog {
+  width: min(680px, calc(100vw - 36px));
+}
+
+.memory-quick-card {
+  display: flex;
+  flex-direction: column;
+  max-height: min(760px, calc(100vh - 48px));
+  border: 1px solid var(--mv-border);
+  border-radius: 16px;
+  background: var(--mv-surface);
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.25);
+  overflow: hidden;
+}
+
+.memory-quick-heading {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  padding: 16px 22px;
+  border-bottom: 1px solid var(--mv-border);
+  background: var(--mv-soft);
+}
+
+.memory-quick-heading-copy {
+  flex: 1;
+  min-width: 0;
+}
+
+.memory-quick-heading h2 {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 700;
+  color: var(--mv-text);
+}
+
+.memory-quick-heading p {
+  margin: 4px 0 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12.5px;
+  color: var(--mv-muted);
+}
+
+.memory-quick-body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 18px 22px;
+  overflow: auto;
+}
+
+/* 弹框里的 textarea 不复用编辑器的 180px 下限：正面只要两行，背面按内容长 */
+.memory-quick-body .memory-field textarea {
+  min-height: 0;
+}
+
+.memory-quick-body .memory-quick-front {
+  height: 64px;
+}
+
+.memory-quick-body .memory-quick-back {
+  min-height: 220px;
+}
+
+.memory-quick-body .memory-type-field {
+  margin-top: 0;
+}
+
+.memory-quick-hint {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--mv-muted);
+}
+
+.memory-quick-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 14px 22px;
+  border-top: 1px solid var(--mv-border);
+  background: var(--mv-soft);
 }
 
 /* ---- 设置：局域网同步 ---- */

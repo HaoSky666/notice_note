@@ -299,7 +299,7 @@ function renderMemoryAnswerZone(card) {
     memoryAnswerInput.disabled = judging;
     memoryAnswerInput.placeholder = judging
       ? "正在等模型判断…"
-      : "先别翻答案，用自己的话回忆一遍。回车提交后才会看到答案。";
+      : "先别翻答案，用自己的话回忆一遍。Shift + Enter 提交后才会看到答案。";
   }
   if (memoryAnswerSubmitButton) {
     memoryAnswerSubmitButton.disabled = judging;
@@ -308,13 +308,13 @@ function renderMemoryAnswerZone(card) {
   if (memoryAnswerHint) {
     memoryAnswerHint.textContent = judging
       ? "通常需要 1–4 秒"
-      : "Enter 提交 · Shift + Enter 换行 · 完全不会就写「不会」";
+      : "Shift + Enter 提交 · Enter 换行 · 完全不会就写「不会」";
     memoryAnswerHint.classList.remove("is-error");
     memoryAnswerHint.hidden = false;
   }
 }
 
-// 新卡进来就把光标放进作答框：整条流程是「敲字 → 回车 → 看答案 → 回车下一张」，
+// 新卡进来就把光标放进作答框：整条流程是「敲字 → Shift + Enter → 看答案 → 回车下一张」，
 // 中间不该有必须动鼠标的地方。
 function focusMemoryAnswerInput() {
   if (!isMemoryAiReady() || memoryRevealed || memoryViewMode !== "study") {
@@ -389,7 +389,7 @@ function renderMemoryStudyHint() {
     memoryStudyHint.textContent = "模型没判成，直接选一档 · E 编辑";
     return;
   }
-  memoryStudyHint.textContent = "写完整答案按 Enter 提交 · 提交后答案才翻开 · E 编辑";
+  memoryStudyHint.textContent = "写完整答案按 Shift + Enter 提交 · 提交后答案才翻开 · E 编辑";
 }
 
 function formatMemoryAnswerTime(value) {
@@ -1113,6 +1113,220 @@ function handleMemoryKeydown(event) {
   }
 }
 
+// ---- 从笔记右键快速建卡 ------------------------------------------------
+// 入口在 context-menu.js：「制作成记忆卡片」→ openMemoryQuickCreate(noteId)。
+// 字段和记忆视图的编辑器一样（正面 / 背面 / 类型），但状态各自独立：
+// memoryQuickTypes 不复用 memoryEditorTypes，免得一边编辑卡片一边右键把草稿冲掉。
+//
+// 卡片结构由 sm2-scheduler 的 normalizeCard 固定（front/back/types + 调度字段），
+// 多写的字段会被丢掉，所以这里不做「来源笔记」关联。
+
+// 背面预填上限：整篇笔记原样塞进去就当不了卡片，超出按段落截断并提示。
+const MEMORY_QUICK_BACK_LIMIT = 4000;
+
+// 卡片正文是纯文本（renderMemoryStudyPanel 用 textContent），markdown 标记会原样显出来，
+// 所以预填时把图片、链接语法、标题井号这类纯噪音清掉，正文本身不动。
+function memoryQuickStripMarkdown(raw) {
+  return String(raw || "")
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, "")
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
+    .replace(/<!--[\s\S]*?-->/g, "")
+    .replace(/`([^`\n]+)`/g, "$1")
+    // 只去成对的双星号（粗体）：单星号在 glob / 正则里太常见，动了容易误伤
+    .replace(/\*\*([^*\n]+)\*\*/g, "$1")
+    .replace(/^[ \t]{0,3}#{1,6}[ \t]+/gm, "")
+    .replace(/^[ \t]{0,3}>[ \t]?/gm, "")
+    .replace(/^[ \t]{0,3}([-*_])(?:[ \t]*\1){2,}[ \t]*$/gm, "")
+    .replace(/[ \t]+$/gm, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+function buildMemoryQuickBack(content) {
+  const text = memoryQuickStripMarkdown(content);
+  if (text.length <= MEMORY_QUICK_BACK_LIMIT) {
+    return { text, truncated: false };
+  }
+  const slice = text.slice(0, MEMORY_QUICK_BACK_LIMIT);
+  // 尽量在段落或句子边界断开，别把一句话劈成两半
+  const boundary = Math.max(
+    slice.lastIndexOf("\n\n"),
+    slice.lastIndexOf("。"),
+    slice.lastIndexOf("！"),
+    slice.lastIndexOf("？"),
+    slice.lastIndexOf("\n"),
+  );
+  const keep = boundary > MEMORY_QUICK_BACK_LIMIT * 0.6 ? boundary + 1 : MEMORY_QUICK_BACK_LIMIT;
+  return { text: slice.slice(0, keep).trim(), truncated: true };
+}
+
+async function openMemoryQuickCreate(noteId) {
+  const note = (notes || []).find((item) => item.id === noteId);
+  if (!note) {
+    window.showToast?.("这篇笔记不在当前列表里，刷新后再试", "warning");
+    return;
+  }
+  // 类型建议来自快照；没进过记忆视图时顺手拉一次，失败也不挡建卡。
+  try {
+    await ensureMemorySnapshot();
+  } catch (error) {
+    console.error("读取记忆卡快照失败:", error);
+  }
+
+  memoryQuickNoteId = noteId;
+  memoryQuickTypes = [];
+  const back = buildMemoryQuickBack(note.content);
+  memoryQuickFront.value = note.title || "";
+  memoryQuickBack.value = back.text;
+  memoryQuickSource.textContent = `来自《${note.title || "未命名笔记"}》`;
+  memoryQuickHint.textContent = back.truncated
+    ? `原笔记较长，背面只预填了前 ${back.text.length} 字，可按需删减。Ctrl + Enter 保存。`
+    : "加入后按间隔重复复习，原笔记不会改动。Ctrl + Enter 保存。";
+  memoryQuickTypeInput.value = "";
+  renderMemoryQuickTypes();
+
+  if (memoryQuickDialog.open) {
+    memoryQuickDialog.close();
+  }
+  memoryQuickDialog.showModal();
+  // 正面预填的是标题，整段选中方便直接替换
+  window.setTimeout(() => {
+    memoryQuickFront.focus();
+    memoryQuickFront.select();
+  }, 0);
+}
+
+function renderMemoryQuickTypes() {
+  if (!memoryQuickTypeChips) {
+    return;
+  }
+  memoryQuickTypeChips.innerHTML = "";
+  for (const name of memoryQuickTypes) {
+    const chip = document.createElement("span");
+    chip.className = "memory-type-chip is-selected";
+    const label = document.createElement("span");
+    label.textContent = name;
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "memory-type-chip-remove";
+    remove.textContent = "×";
+    remove.title = `移除「${name}」`;
+    remove.setAttribute("aria-label", `移除类型 ${name}`);
+    remove.addEventListener("click", () => {
+      memoryQuickTypes = memoryQuickTypes.filter((item) => item !== name);
+      renderMemoryQuickTypes();
+    });
+    chip.append(label, remove);
+    memoryQuickTypeChips.append(chip);
+  }
+  if (memoryQuickTypes.length === 0) {
+    const hint = document.createElement("span");
+    hint.className = "memory-type-empty";
+    hint.textContent = "还没有类型";
+    memoryQuickTypeChips.append(hint);
+  }
+  renderMemoryQuickTypeSuggestions();
+}
+
+// 已有类型候选：规则与记忆视图编辑器一致（去重不分大小写、最多 12 个）。
+function renderMemoryQuickTypeSuggestions() {
+  if (!memoryQuickTypeSuggestions) {
+    return;
+  }
+  const query = normalizeMemoryTypeName(memoryQuickTypeInput?.value || "").toLowerCase();
+  const selected = new Set(memoryQuickTypes.map((name) => name.toLowerCase()));
+  const options = (memorySnapshot?.types || []).filter((item) => {
+    const key = item.name.toLowerCase();
+    return !selected.has(key) && (!query || key.includes(query));
+  });
+  memoryQuickTypeSuggestions.innerHTML = "";
+  memoryQuickTypeSuggestions.hidden = options.length === 0;
+  if (options.length === 0) {
+    return;
+  }
+  const label = document.createElement("span");
+  label.className = "memory-type-suggestions-label";
+  label.textContent = "已有类型";
+  memoryQuickTypeSuggestions.append(label);
+  for (const item of options) {
+    const chip = document.createElement("button");
+    chip.type = "button";
+    chip.className = "memory-type-chip is-ghost";
+    chip.textContent = item.name;
+    chip.addEventListener("click", () => addMemoryQuickTypes(item.name));
+    memoryQuickTypeSuggestions.append(chip);
+  }
+}
+
+function addMemoryQuickTypes(raw) {
+  // 一次贴/敲多个：逗号、顿号、分号、换行都当分隔符
+  const names = String(raw == null ? "" : raw).split(/[,，、;；\n]/);
+  let added = false;
+  for (const item of names) {
+    const name = normalizeMemoryTypeName(item);
+    if (!name) {
+      continue;
+    }
+    if (memoryQuickTypes.some((existing) => existing.toLowerCase() === name.toLowerCase())) {
+      continue;
+    }
+    if (memoryQuickTypes.length >= MEMORY_TYPE_MAX_COUNT) {
+      window.showToast?.(`一张卡最多 ${MEMORY_TYPE_MAX_COUNT} 个类型`, "warning");
+      break;
+    }
+    memoryQuickTypes = [...memoryQuickTypes, name];
+    added = true;
+  }
+  memoryQuickTypeInput.value = "";
+  if (added) {
+    renderMemoryQuickTypes();
+  } else {
+    renderMemoryQuickTypeSuggestions();
+  }
+}
+
+async function saveMemoryQuickCardFromDialog() {
+  // 输入框里还没回车的类型也算数
+  const pending = memoryQuickTypeInput?.value || "";
+  if (pending.trim()) {
+    addMemoryQuickTypes(pending);
+  }
+  const front = memoryQuickFront.value.trim();
+  const back = memoryQuickBack.value.trim();
+  if (!front && !back) {
+    window.showToast?.("正面或背面至少填一个", "warning");
+    memoryQuickFront.focus();
+    return;
+  }
+  const types = [...memoryQuickTypes];
+  memoryQuickSaveButton.disabled = true;
+  try {
+    const before = new Set((memorySnapshot?.cards || []).map((card) => card.id));
+    applyMemorySnapshot(await window.noticeNote.createMemoryCard({ front, back, types }));
+    const added = (memorySnapshot?.cards || []).find((card) => !before.has(card.id));
+    memoryQuickDialog.close();
+    // 已经在记忆视图里，就把新卡设为当前卡：切过去直接看到刚建的那张
+    if (memoryView && !memoryView.hidden) {
+      memoryCurrentCardId = added?.id || memoryCurrentCardId;
+      memoryViewMode = "study";
+      memoryRevealed = false;
+      renderNoteList();
+      renderMemoryView();
+    } else if (sidebarViewMode === "memory") {
+      renderNoteList();
+    }
+    window.showToast?.(
+      types.length ? `已加入记忆卡片 · ${types.join(" / ")}` : "已加入记忆卡片",
+      "success",
+    );
+  } catch (error) {
+    console.error("加入记忆卡片失败:", error);
+    window.showErrorToast?.(error, "加入记忆卡片失败");
+  } finally {
+    memoryQuickSaveButton.disabled = false;
+  }
+}
+
 function bindMemoryCardEvents() {
   memoryNewCardButton?.addEventListener("click", () => openMemoryEditor(null));
   memoryEmptyCreateButton?.addEventListener("click", () => openMemoryEditor(null));
@@ -1140,7 +1354,9 @@ function bindMemoryCardEvents() {
       memoryAnswerInput.blur();
       return;
     }
-    if (event.key === "Enter" && !event.shiftKey) {
+    // Enter 换行、Shift + Enter 提交：写长答案时回车几乎都是想换行，
+    // 用组合键提交才不会边写边误提交。
+    if (event.key === "Enter" && event.shiftKey) {
       event.preventDefault();
       submitMemoryAnswer();
     }
@@ -1212,6 +1428,50 @@ function bindMemoryCardEvents() {
     }
     if (memoryView && !memoryView.hidden) {
       renderMemoryView();
+    }
+  });
+  // 快速建卡弹框：笔记右键进入，字段与编辑器同款但状态独立（见上方 memoryQuick* 一组）。
+  memoryQuickCloseButton?.addEventListener("click", () => memoryQuickDialog?.close());
+  memoryQuickCancelButton?.addEventListener("click", () => memoryQuickDialog?.close());
+  memoryQuickSaveButton?.addEventListener("click", saveMemoryQuickCardFromDialog);
+  memoryQuickDialog?.addEventListener("close", () => {
+    // 关掉即清场，下次打开从新笔记重新预填，不残留上一篇的类型
+    memoryQuickNoteId = null;
+    memoryQuickTypes = [];
+    if (memoryQuickTypeInput) {
+      memoryQuickTypeInput.value = "";
+    }
+  });
+  memoryQuickDialog?.addEventListener("keydown", (event) => {
+    if (event.isComposing || event.keyCode === 229) {
+      return;
+    }
+    // Ctrl / Cmd + Enter 保存；纯 Enter 留给 textarea 换行
+    if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
+      event.preventDefault();
+      saveMemoryQuickCardFromDialog();
+    }
+  });
+  memoryQuickTypeInput?.addEventListener("keydown", (event) => {
+    if (event.isComposing || event.keyCode === 229) {
+      return;
+    }
+    if (event.key === "Enter" || event.key === "," || event.key === "，" || event.key === "、") {
+      event.preventDefault();
+      addMemoryQuickTypes(memoryQuickTypeInput.value);
+      return;
+    }
+    if (event.key === "Backspace" && !memoryQuickTypeInput.value && memoryQuickTypes.length > 0) {
+      event.preventDefault();
+      memoryQuickTypes = memoryQuickTypes.slice(0, -1);
+      renderMemoryQuickTypes();
+    }
+  });
+  memoryQuickTypeInput?.addEventListener("input", renderMemoryQuickTypeSuggestions);
+  memoryQuickTypeInput?.addEventListener("blur", () => {
+    // 切换窗口造成的 blur 不算，否则输入一半的类型被 Alt+Tab 切成 chip
+    if (document.hasFocus() && memoryQuickTypeInput.value.trim()) {
+      addMemoryQuickTypes(memoryQuickTypeInput.value);
     }
   });
   document.addEventListener("keydown", handleMemoryKeydown);

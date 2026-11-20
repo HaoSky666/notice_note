@@ -227,3 +227,15 @@ const memoryCancelSettingsButton = document.querySelector("#memoryCancelSettings
 const memorySaveSettingsButton = document.querySelector("#memorySaveSettingsButton");
 const memoryEmptyState = document.querySelector("#memoryEmptyState");
 const memoryEmptyCreateButton = document.querySelector("#memoryEmptyCreateButton");
+// 笔记右键「制作成记忆卡片」弹出的快速建卡框（与记忆视图的编辑器共用样式，状态各自独立）
+const memoryQuickDialog = document.querySelector("#memoryQuickDialog");
+const memoryQuickSource = document.querySelector("#memoryQuickSource");
+const memoryQuickFront = document.querySelector("#memoryQuickFront");
+const memoryQuickBack = document.querySelector("#memoryQuickBack");
+const memoryQuickTypeChips = document.querySelector("#memoryQuickTypeChips");
+const memoryQuickTypeInput = document.querySelector("#memoryQuickTypeInput");
+const memoryQuickTypeSuggestions = document.querySelector("#memoryQuickTypeSuggestions");
+const memoryQuickHint = document.querySelector("#memoryQuickHint");
+const memoryQuickCloseButton = document.querySelector("#memoryQuickCloseButton");
+const memoryQuickCancelButton = document.querySelector("#memoryQuickCancelButton");
+const memoryQuickSaveButton = document.querySelector("#memoryQuickSaveButton");

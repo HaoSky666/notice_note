@@ -209,6 +209,17 @@ function showContextMenu(x, y, entry = null) {
         window.noticeNote.copyEntryPath(entry).catch((error) => window.showErrorToast?.(error, "操作失败"));
       }),
     );
+    // 回顾 / 日历 / 文件列表里的笔记都能直接做成记忆卡。
+    // 卡片只存正面、背面纯文本，资料文件（file）没有正文可读，所以不提供这一项。
+    if (entry.type === "note") {
+      contextMenu.append(
+        createContextMenuItem("制作成记忆卡片", () => {
+          openMemoryQuickCreate(entry.id).catch((error) => {
+            window.showErrorToast?.(error, "打开记忆卡片弹框失败");
+          });
+        }),
+      );
+    }
     if (entry.type === "folder") {
       const folder = folders.find((item) => item.id === entry.id);
       if (folder) {

@@ -297,9 +297,9 @@
               <div class="memory-stage-foot">
                 <button id="memoryRevealButton" class="primary-button memory-reveal-button" type="button">显示答案</button>
                 <div id="memoryAnswerZone" class="memory-answer-zone" hidden>
-                  <textarea id="memoryAnswerInput" class="memory-answer-input" rows="3" placeholder="先别翻答案，用自己的话回忆一遍。回车提交后才会看到答案。"></textarea>
+                  <textarea id="memoryAnswerInput" class="memory-answer-input" rows="6" placeholder="先别翻答案，用自己的话回忆一遍。Shift + Enter 提交后才会看到答案。"></textarea>
                   <div class="memory-answer-actions">
-                    <span id="memoryAnswerHint" class="memory-answer-hint">Enter 提交 · Shift + Enter 换行 · 完全不会就写「不会」</span>
+                    <span id="memoryAnswerHint" class="memory-answer-hint">Shift + Enter 提交 · Enter 换行 · 完全不会就写「不会」</span>
                     <button id="memoryAnswerSubmitButton" class="primary-button memory-answer-submit" type="button">提交判定</button>
                   </div>
                 </div>
@@ -338,7 +338,7 @@
               <ul id="memoryAnswerHistoryList" class="memory-history-list" hidden></ul>
             </section>
           </div>
-          <p id="memoryStudyHint" class="memory-hint">写完整答案按 Enter 提交 · 提交后答案才翻开 · E 编辑</p>
+          <p id="memoryStudyHint" class="memory-hint">写完整答案按 Shift + Enter 提交 · 提交后答案才翻开 · E 编辑</p>
         </section>
 
         <section id="memoryEditorPanel" class="memory-panel" hidden>
@@ -702,6 +702,42 @@
         </footer>
       </div>
     </dialog>
+    <dialog id="memoryQuickDialog" class="reminder-dialog memory-quick-dialog" aria-labelledby="memoryQuickTitle">
+      <div class="memory-quick-card">
+        <header class="memory-quick-heading">
+          <div class="memory-quick-heading-copy">
+            <h2 id="memoryQuickTitle">制作记忆卡片</h2>
+            <p id="memoryQuickSource">来自当前笔记</p>
+          </div>
+          <button id="memoryQuickCloseButton" class="reminder-manager-close" type="button" title="关闭" aria-label="关闭">×</button>
+        </header>
+
+        <div class="memory-quick-body">
+          <label class="memory-field">
+            <span class="memory-field-label">正面（问题）</span>
+            <textarea id="memoryQuickFront" class="memory-quick-front" rows="2" placeholder="这张卡要问自己什么？"></textarea>
+          </label>
+          <label class="memory-field">
+            <span class="memory-field-label">背面（答案）</span>
+            <textarea id="memoryQuickBack" class="memory-quick-back" rows="8" placeholder="答案写在这里"></textarea>
+          </label>
+          <div class="memory-type-field">
+            <span class="memory-field-label">类型</span>
+            <div class="memory-type-editor">
+              <div id="memoryQuickTypeChips" class="memory-type-chips"></div>
+              <input id="memoryQuickTypeInput" class="memory-type-input" type="text" maxlength="24" autocomplete="off" placeholder="输入类型后回车，可加多个">
+            </div>
+            <div id="memoryQuickTypeSuggestions" class="memory-type-suggestions" hidden></div>
+          </div>
+          <p id="memoryQuickHint" class="memory-quick-hint">加入后按间隔重复复习，原笔记不会改动。Ctrl + Enter 保存。</p>
+        </div>
+
+        <footer class="memory-quick-actions">
+          <button id="memoryQuickCancelButton" class="secondary-button" type="button">取消</button>
+          <button id="memoryQuickSaveButton" class="primary-button" type="button">加入记忆卡片</button>
+        </footer>
+      </div>
+    </dialog>
     <div id="imageLightbox" class="image-lightbox" role="dialog" aria-modal="true" aria-label="图片预览" hidden>
       <div class="image-lightbox-zoom-controls" aria-label="图片缩放">
         <button id="zoomOutImageLightboxButton" class="image-lightbox-control" type="button" title="缩小" aria-label="缩小图片">−</button>
@@ -718,7 +754,7 @@
     <script src="./renderer/dom.js"></script>
     <script src="./renderer/toast.js"></script>
     <script src="./renderer/utils.js"></script>
-    <script src="./renderer/day-index.js"></script>
+    <script src="./lib/day-index.js"></script>
     <script src="./renderer/notifications.js"></script>
     <script src="./renderer/state.js"></script>
     <script src="./renderer/themes.js"></script>

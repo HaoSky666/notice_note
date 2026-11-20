@@ -18,6 +18,8 @@ const appState = {
     1,
   ),
   selectedReminderDate: toLocalDateKey(new Date()),
+  // 提醒日历里展开的那个安排条目（`日期|kind|dayKey`）。空串 = 全部收起。
+  reminderExpandedEntry: "",
   noteRecoveryLogCache: null,
   storageInfo: null,
   appSettings: null,
@@ -72,6 +74,10 @@ const appState = {
   memoryTypeFilter: null,
   // 编辑器里正在编辑的类型列表，保存时随卡面一起提交。
   memoryEditorTypes: [],
+  // 从笔记右键「制作成记忆卡片」弹出的快速建卡框：来源笔记 id 与已选类型。
+  // 与 memoryEditorTypes 分开存，两处互不干扰；关闭弹框即清空。
+  memoryQuickNoteId: null,
+  memoryQuickTypes: [],
   // AI 判定：作答草稿、判定状态机、最近一次判定结果、当前卡的作答历史。
   // 草稿带 cardId：切卡才清空，后台重渲染不能把正在敲的内容冲掉。
   memoryAnswerDraft: "",
