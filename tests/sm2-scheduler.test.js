@@ -282,7 +282,8 @@ test('getCardDayKey 用本地日期归档', () => {
 });
 
 test('晚上毕业的卡第二天一早就进待复习队列', () => {
-  const evening = Date.parse('2026-11-17T20:11:00+08:00');
+  // 时间一律用本地构造：调度按「本地日切」算，写成 +08:00 字面量在 UTC 的 CI 上会算错一天。
+  const evening = new Date(2026, 10, 17, 20, 11, 0, 0).getTime();
   const learning = createCard({}, evening - 20 * MINUTE_MS);
   const step2 = scheduleCard(learning, 'good', SETTINGS, evening - 20 * MINUTE_MS);
   const graduated = scheduleCard(step2, 'good', SETTINGS, evening - 10 * MINUTE_MS);
@@ -290,19 +291,19 @@ test('晚上毕业的卡第二天一早就进待复习队列', () => {
   assert.equal(graduated.interval, 1);
 
   // 毕业当晚还算「未到期」。
-  assert.equal(getStats([graduated], Date.parse('2026-11-17T23:30:00+08:00')).dueCount, 0);
+  assert.equal(getStats([graduated], new Date(2026, 10, 17, 23, 30, 0, 0).getTime()).dueCount, 0);
   // 第二天早上 8 点就在待复习里，不用等到晚上 20 点。
-  const morning = Date.parse('2026-11-18T08:00:00+08:00');
+  const morning = new Date(2026, 10, 18, 8, 0, 0, 0).getTime();
   assert.equal(getStats([graduated], morning).dueCount, 1);
   assert.deepEqual(getQueue([graduated], morning).due.map((card) => card.id), [graduated.id]);
 });
 
 test('逾期天数按整天算，半夜到期的卡第二天算逾期 0 天', () => {
-  const dueToday = reviewCard({ dueAt: new Date(Date.parse('2026-11-17T00:00:00+08:00')).toISOString() });
-  const sameDay = scheduleCard(dueToday, 'good', SETTINGS, Date.parse('2026-11-17T17:00:00+08:00'));
+  const dueToday = reviewCard({ dueAt: new Date(2026, 10, 17, 0, 0, 0, 0).toISOString() });
+  const sameDay = scheduleCard(dueToday, 'good', SETTINGS, new Date(2026, 10, 17, 17, 0, 0, 0).getTime());
   // 当天复习：lateDays = 0，间隔 = 10 × 2.5 = 25。
   assert.equal(sameDay.interval, 25);
-  const nextDay = scheduleCard(dueToday, 'good', SETTINGS, Date.parse('2026-11-18T09:00:00+08:00'));
+  const nextDay = scheduleCard(dueToday, 'good', SETTINGS, new Date(2026, 10, 18, 9, 0, 0, 0).getTime());
   // 隔一天复习：lateDays = 1，间隔 = (10 + 0.5) × 2.5 = 26。
   assert.equal(nextDay.interval, 26);
 });
