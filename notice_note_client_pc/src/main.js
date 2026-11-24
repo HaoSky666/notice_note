@@ -131,6 +131,7 @@ const {
   buildJudgeMessages,
   buildJudgePayload,
   parseJudgeReply,
+  normalizeAnswerReview,
   truncateAnswer,
   VALID_RATINGS
 } = require('./lib/ai-judge');
@@ -1015,10 +1016,14 @@ async function createMemoryCard(_event, input = {}) {
   await ensureMemoryCardsLoaded();
   const front = sanitizeMemoryCardText(input.front).trim();
   const back = sanitizeMemoryCardText(input.back).trim();
+  const mnemonic = sanitizeMemoryCardText(input.mnemonic).trim();
   if (!front && !back) {
     throw new Error('卡片内容不能为空');
   }
-  const card = createMemoryCardRecord({ front, back, types: normalizeCardTypes(input.types) }, Date.now());
+  const card = createMemoryCardRecord(
+    { front, back, mnemonic, types: normalizeCardTypes(input.types) },
+    Date.now()
+  );
   memoryCards = [...memoryCards, card];
   await saveMemoryCards();
   return getMemoryCardSnapshot();
@@ -1038,6 +1043,10 @@ async function updateMemoryCard(_event, input = {}) {
   const back = input.back === undefined
     ? memoryCards[index].back
     : sanitizeMemoryCardText(input.back).trim();
+  // 助记不传 = 保持原样；传空串才是清空（和 types 同一个约定）。
+  const mnemonic = input.mnemonic === undefined
+    ? (memoryCards[index].mnemonic || '')
+    : sanitizeMemoryCardText(input.mnemonic).trim();
   // types 不传 = 保持原样；传空数组才是清空类型。
   const types = input.types === undefined
     ? (memoryCards[index].types || [])
@@ -1046,10 +1055,16 @@ async function updateMemoryCard(_event, input = {}) {
     ...memoryCards[index],
     front,
     back,
+    mnemonic,
     types,
     updatedAt: new Date().toISOString()
   };
+  // 只有背面真的改了，之前那条「建议答案」才过期。改助记/类型不该把提示清掉。
+  const backChanged = back !== memoryCards[index].back;
   memoryCards = memoryCards.map((card, i) => (i === index ? updated : card));
+  if (backChanged && lastMemoryJudge && lastMemoryJudge.cardId === id) {
+    lastMemoryJudge = { ...lastMemoryJudge, answerVerdict: 'ok', answerNote: '', suggestedBack: '' };
+  }
   await saveMemoryCards();
   return getMemoryCardSnapshot();
 }
@@ -1213,6 +1228,9 @@ async function judgeMemoryAnswer(_event, input = {}) {
     history
   });
   const judgment = await requestAiJudge(messages);
+  // 模型顺带审了卡片背面：有错或不全时给一版替换答案。
+  // 只回给渲染层做提示，绝不自动改卡——改不改由用户自己决定。
+  const answerReview = normalizeAnswerReview(judgment, card.back);
 
   const cardBefore = { ...card };
   const next = scheduleMemoryCard(cardBefore, judgment.rating, memorySettings, Date.now());
@@ -1229,7 +1247,7 @@ async function judgeMemoryAnswer(_event, input = {}) {
     source: 'ai',
     createdAt: new Date().toISOString()
   }, Date.now());
-  lastMemoryJudge = { cardId, cardBefore, entryId };
+  lastMemoryJudge = { cardId, cardBefore, entryId, ...answerReview };
 
   await Promise.all([saveMemoryCards(), saveMemoryAnswers()]);
   sendMemoryChanged();
@@ -1241,7 +1259,8 @@ async function judgeMemoryAnswer(_event, input = {}) {
       rating: judgment.rating,
       reason: judgment.reason,
       answer,
-      source: 'ai'
+      source: 'ai',
+      ...answerReview
     }
   };
 }
@@ -1282,7 +1301,12 @@ async function rejudgeMemoryAnswer(_event, input = {}) {
       createdAt: new Date().toISOString()
     }, Date.now());
   }
-  lastMemoryJudge = { cardId, cardBefore: base, entryId };
+  // 改判只换档位，背面审阅的结论照旧带出来：否则一按改判，
+  // 「这张卡的答案有误」的提示就凭空消失，用户以为已经修好了。
+  const answerReview = context
+    ? normalizeAnswerReview(context, card.back)
+    : normalizeAnswerReview({}, card.back);
+  lastMemoryJudge = { cardId, cardBefore: base, entryId, ...answerReview };
 
   await Promise.all([saveMemoryCards(), saveMemoryAnswers()]);
   sendMemoryChanged();
@@ -1293,7 +1317,8 @@ async function rejudgeMemoryAnswer(_event, input = {}) {
       entryId,
       rating,
       reason: input.reason || '',
-      source: 'manual'
+      source: 'manual',
+      ...answerReview
     }
   };
 }

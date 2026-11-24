@@ -285,6 +285,7 @@
                 <span id="memoryCardMeta" class="memory-card-meta"></span>
                 <span class="memory-stage-head-actions">
                   <span id="memoryStageProgress" class="memory-stage-progress"></span>
+                  <button id="memoryMnemonicButton" class="memory-stage-edit" type="button" title="给这张卡写一条助记">助记</button>
                   <button id="memoryEditCardButton" class="memory-stage-edit" type="button" title="编辑这张卡的正面和背面（E）">编辑</button>
                 </span>
               </div>
@@ -292,14 +293,18 @@
                 <div class="memory-card-inner">
                   <div id="memoryCardFront" class="memory-card-front"></div>
                   <div id="memoryCardBack" class="memory-card-back" hidden></div>
+                  <div id="memoryCardMnemonic" class="memory-card-mnemonic" hidden>
+                    <span class="memory-card-mnemonic-label">助记</span>
+                    <p id="memoryCardMnemonicText" class="memory-card-mnemonic-text"></p>
+                  </div>
                 </div>
               </div>
               <div class="memory-stage-foot">
                 <button id="memoryRevealButton" class="primary-button memory-reveal-button" type="button">显示答案</button>
                 <div id="memoryAnswerZone" class="memory-answer-zone" hidden>
-                  <textarea id="memoryAnswerInput" class="memory-answer-input" rows="6" placeholder="先别翻答案，用自己的话回忆一遍。Shift + Enter 提交后才会看到答案。"></textarea>
+                  <textarea id="memoryAnswerInput" class="memory-answer-input" rows="6" placeholder="先别翻答案，用自己的话回忆一遍。点「提交判定」后才会看到答案。"></textarea>
                   <div class="memory-answer-actions">
-                    <span id="memoryAnswerHint" class="memory-answer-hint">Shift + Enter 提交 · Enter 换行 · 完全不会就写「不会」</span>
+                    <span id="memoryAnswerHint" class="memory-answer-hint">点「提交判定」提交 · Enter 换行 · 完全不会就写「不会」</span>
                     <button id="memoryAnswerSubmitButton" class="primary-button memory-answer-submit" type="button">提交判定</button>
                   </div>
                 </div>
@@ -329,6 +334,20 @@
                 </div>
               </div>
             </article>
+            <!-- 背面审阅放在卡片外面：它可能很长，塞进 stage 会把答案区挤成一条缝，
+                 放到滚动区里就只是往下排，卡片尺寸不受影响。 -->
+            <div id="memoryAnswerReview" class="memory-answer-review" hidden>
+              <div class="memory-answer-review-head">
+                <span id="memoryAnswerReviewBadge" class="memory-answer-review-badge"></span>
+                <span id="memoryAnswerReviewNote" class="memory-answer-review-note"></span>
+              </div>
+              <div id="memoryAnswerReviewText" class="memory-answer-review-text"></div>
+              <div class="memory-answer-review-actions">
+                <span class="memory-answer-review-hint">只提示，不会自动改卡</span>
+                <button id="memoryAnswerReviewCopy" class="memory-stage-edit" type="button">复制建议答案</button>
+                <button id="memoryAnswerReviewEdit" class="memory-stage-edit" type="button" title="把建议答案填进编辑器的背面，确认无误后自己点保存">填入编辑器</button>
+              </div>
+            </div>
             <section id="memoryAnswerHistory" class="memory-answer-history" hidden>
               <button id="memoryAnswerHistoryToggle" class="memory-history-toggle" type="button" aria-expanded="false">
                 <span class="memory-history-title">作答历史</span>
@@ -338,7 +357,7 @@
               <ul id="memoryAnswerHistoryList" class="memory-history-list" hidden></ul>
             </section>
           </div>
-          <p id="memoryStudyHint" class="memory-hint">写完整答案按 Shift + Enter 提交 · 提交后答案才翻开 · E 编辑</p>
+          <p id="memoryStudyHint" class="memory-hint">写完整答案点「提交判定」· 提交后答案才翻开 · E 编辑</p>
         </section>
 
         <section id="memoryEditorPanel" class="memory-panel" hidden>
@@ -356,6 +375,10 @@
               <textarea id="memoryBackInput" rows="7" placeholder="例如：2.5（界面显示 250%）"></textarea>
             </label>
           </div>
+          <label class="memory-field memory-mnemonic-field">
+            <span class="memory-field-label">助记（可选）</span>
+            <textarea id="memoryMnemonicInput" rows="3" placeholder="谐音、口诀、联想画面……复习时显示在答案下面"></textarea>
+          </label>
           <div class="memory-type-field">
             <span class="memory-field-label">类型</span>
             <div class="memory-type-editor">
@@ -377,6 +400,22 @@
             <h2>算法参数</h2>
             <p>对应 Anki legacy 的 SM-2 调度器。改完只影响之后的复习，已有间隔不会被改写。</p>
           </div>
+
+          <section class="memory-settings-group">
+            <h3>学习偏好</h3>
+            <div class="memory-settings-grid">
+              <label class="memory-setting-field">
+                <span class="memory-setting-label">学习顺序</span>
+                <span class="memory-setting-control">
+                  <select id="memorySettingStudyOrder">
+                    <option value="sequential">按添加顺序</option>
+                    <option value="random">按随机顺序</option>
+                  </select>
+                </span>
+                <small>只影响同一批卡内部的先后：仍然先学当天的复习卡，再学新卡。随机顺序当天固定，隔天换一套。</small>
+              </label>
+            </div>
+          </section>
 
           <section class="memory-settings-group">
             <h3>新卡</h3>
@@ -721,6 +760,10 @@
             <span class="memory-field-label">背面（答案）</span>
             <textarea id="memoryQuickBack" class="memory-quick-back" rows="8" placeholder="答案写在这里"></textarea>
           </label>
+          <label class="memory-field">
+            <span class="memory-field-label">助记（可选）</span>
+            <textarea id="memoryQuickMnemonic" class="memory-quick-mnemonic" rows="3" placeholder="谐音、口诀、联想画面……复习时显示在答案下面"></textarea>
+          </label>
           <div class="memory-type-field">
             <span class="memory-field-label">类型</span>
             <div class="memory-type-editor">
@@ -735,6 +778,28 @@
         <footer class="memory-quick-actions">
           <button id="memoryQuickCancelButton" class="secondary-button" type="button">取消</button>
           <button id="memoryQuickSaveButton" class="primary-button" type="button">加入记忆卡片</button>
+        </footer>
+      </div>
+    </dialog>
+    <dialog id="memoryMnemonicDialog" class="reminder-dialog memory-quick-dialog" aria-labelledby="memoryMnemonicTitle">
+      <div class="memory-quick-card">
+        <header class="memory-quick-heading">
+          <div class="memory-quick-heading-copy">
+            <h2 id="memoryMnemonicTitle">助记</h2>
+            <p id="memoryMnemonicSource">写一条帮助自己回忆的线索，只在答案面显示</p>
+          </div>
+          <button id="memoryMnemonicCloseButton" class="reminder-manager-close" type="button" title="关闭" aria-label="关闭">×</button>
+        </header>
+        <div class="memory-quick-body">
+          <label class="memory-field">
+            <span class="memory-field-label">助记内容</span>
+            <textarea id="memoryMnemonicTextarea" class="memory-quick-mnemonic" rows="4" placeholder="例如：「阻塞」记成把路口堵上——线程停在原地等锁"></textarea>
+          </label>
+          <p id="memoryMnemonicHint" class="memory-quick-hint">Ctrl + Enter 保存，Esc 取消。清空内容再保存就是删除助记。</p>
+        </div>
+        <footer class="memory-quick-actions">
+          <button id="memoryMnemonicCancelButton" class="secondary-button" type="button">取消</button>
+          <button id="memoryMnemonicSaveButton" class="primary-button" type="button">保存助记</button>
         </footer>
       </div>
     </dialog>

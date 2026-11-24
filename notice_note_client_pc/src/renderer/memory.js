@@ -37,6 +37,7 @@ const MEMORY_TYPE_MAX_LENGTH = 24;
 const MEMORY_TYPE_MAX_COUNT = 12;
 
 const MEMORY_DEFAULT_SETTINGS_INPUT = {
+  studyOrder: "sequential",
   learningSteps: "1 10",
   graduatingInterval: 1,
   easyInterval: 4,
@@ -129,6 +130,10 @@ function closeMemoryView() {
     return;
   }
   memoryView.hidden = true;
+  // 模态框挂在 body 上，不跟着视图隐藏，得显式收掉。
+  if (memoryMnemonicDialog?.open) {
+    memoryMnemonicDialog.close();
+  }
   memoryViewMode = "study";
   memoryRevealed = false;
   resetMemoryJudgeState();
@@ -250,6 +255,13 @@ function renderMemoryStudyPanel() {
   memoryCardFront.textContent = card.front || "（正面为空）";
   memoryCardBack.textContent = card.back || "（背面为空）";
   memoryCardBack.hidden = !memoryRevealed;
+  // 助记只在答案面出现：问题面先看到线索，回忆就变成抄答案了。
+  // 「助记」按钮一起收：光一个按钮留在问题面，本身就是「这题有线索」的暗示。
+  const mnemonic = String(card.mnemonic || "").trim();
+  memoryCardMnemonic.hidden = !memoryRevealed || !mnemonic;
+  memoryCardMnemonicText.textContent = mnemonic;
+  memoryMnemonicButton.hidden = !memoryRevealed;
+  memoryMnemonicButton.title = mnemonic ? "编辑这张卡的助记" : "给这张卡写一条助记";
 
   const preview = card.preview || {};
   memoryPreviewAgain.textContent = preview.again?.label || "";
@@ -299,7 +311,7 @@ function renderMemoryAnswerZone(card) {
     memoryAnswerInput.disabled = judging;
     memoryAnswerInput.placeholder = judging
       ? "正在等模型判断…"
-      : "先别翻答案，用自己的话回忆一遍。Shift + Enter 提交后才会看到答案。";
+      : "先别翻答案，用自己的话回忆一遍。点「提交判定」后才会看到答案。";
   }
   if (memoryAnswerSubmitButton) {
     memoryAnswerSubmitButton.disabled = judging;
@@ -308,14 +320,14 @@ function renderMemoryAnswerZone(card) {
   if (memoryAnswerHint) {
     memoryAnswerHint.textContent = judging
       ? "通常需要 1–4 秒"
-      : "Shift + Enter 提交 · Enter 换行 · 完全不会就写「不会」";
+      : "点「提交判定」提交 · Enter 换行 · 完全不会就写「不会」";
     memoryAnswerHint.classList.remove("is-error");
     memoryAnswerHint.hidden = false;
   }
 }
 
-// 新卡进来就把光标放进作答框：整条流程是「敲字 → Shift + Enter → 看答案 → 回车下一张」，
-// 中间不该有必须动鼠标的地方。
+// 新卡进来就把光标放进作答框：敲字不用先点一下。提交走「提交判定」按钮，
+// 键盘只负责输入，避免写长答案时误触提交。
 function focusMemoryAnswerInput() {
   if (!isMemoryAiReady() || memoryRevealed || memoryViewMode !== "study") {
     return;
@@ -348,6 +360,7 @@ function renderMemoryJudgeResultBar() {
     for (const button of document.querySelectorAll("[data-memory-rating]")) {
       button.classList.remove("is-current");
     }
+    renderMemoryAnswerReview();
     return;
   }
   const result = memoryJudgeResult || {};
@@ -371,6 +384,94 @@ function renderMemoryJudgeResultBar() {
       && result.rating === button.dataset.memoryRating;
     button.classList.toggle("is-current", isCurrent);
   }
+  renderMemoryAnswerReview();
+}
+
+// 背面审阅：只有模型明确说「卡片答案有误 / 不全」并且给了替换答案时才出现。
+// 这里不做任何自动改写，只提供「复制」和「填入编辑器」两条路，
+// 是否落盘仍然由用户在编辑器里点「保存修改」决定。
+function renderMemoryAnswerReview() {
+  if (!memoryAnswerReview) {
+    return;
+  }
+  const result = memoryJudgeResult || {};
+  const verdict = result.answerVerdict === "wrong" || result.answerVerdict === "partial"
+    ? result.answerVerdict
+    : "";
+  const suggestion = String(result.suggestedBack || "").trim();
+  const visible = Boolean(verdict && suggestion) && memoryJudgeState !== "error";
+  const wasHidden = memoryAnswerReview.hidden;
+  memoryAnswerReview.hidden = !visible;
+  if (!visible) {
+    memoryAnswerReviewBadge.textContent = "";
+    memoryAnswerReviewBadge.dataset.verdict = "";
+    memoryAnswerReviewNote.textContent = "";
+    memoryAnswerReviewText.textContent = "";
+    return;
+  }
+  memoryAnswerReviewBadge.dataset.verdict = verdict;
+  memoryAnswerReviewBadge.textContent = verdict === "wrong" ? "卡片答案有误" : "卡片答案不全";
+  memoryAnswerReviewNote.textContent = String(result.answerNote || "").trim();
+  memoryAnswerReviewText.textContent = suggestion;
+  // 这块在卡片外面（避免挤扁答案区），判定完可能落在可视区下方。
+  // 只在「刚出现」时滚一下，用 nearest 保证已经看得见就不动。
+  if (wasHidden) {
+    window.setTimeout(() => {
+      memoryAnswerReview?.scrollIntoView({ block: "nearest" });
+    }, 0);
+  }
+}
+
+async function writeMemoryClipboard(text) {
+  // 焦点不在窗口、或权限被拒时 writeText 会 reject，不能直接当失败：
+  // 退回 textarea + execCommand 这条路，Electron 里更稳。
+  if (navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return;
+    } catch {
+      // 继续走兜底
+    }
+  }
+  const ok = (() => {
+    const area = document.createElement("textarea");
+    area.value = text;
+    area.setAttribute("readonly", "");
+    area.style.position = "fixed";
+    area.style.opacity = "0";
+    document.body.append(area);
+    area.select();
+    const copied = document.execCommand("copy");
+    area.remove();
+    return copied;
+  })();
+  if (!ok) {
+    throw new Error("copy failed");
+  }
+}
+
+async function copyMemorySuggestedAnswer() {
+  const text = String(memoryJudgeResult?.suggestedBack || "").trim();
+  if (!text) {
+    return;
+  }
+  try {
+    await writeMemoryClipboard(text);
+    window.showToast?.("建议答案已复制，点「编辑」替换背面");
+  } catch {
+    window.showToast?.("复制失败，请手动选中文字", "warning");
+  }
+}
+
+// 只把建议填进编辑器的背面输入框，不写盘：用户看一眼、确认后再自己保存。
+function editMemoryCardWithSuggestedAnswer() {
+  const card = getMemoryCardById(memoryCurrentCardId);
+  const suggestion = String(memoryJudgeResult?.suggestedBack || "").trim();
+  if (!card || !suggestion) {
+    return;
+  }
+  memoryEditorPrefillBack = suggestion;
+  openMemoryEditor(card.id);
 }
 
 function renderMemoryStudyHint() {
@@ -389,7 +490,7 @@ function renderMemoryStudyHint() {
     memoryStudyHint.textContent = "模型没判成，直接选一档 · E 编辑";
     return;
   }
-  memoryStudyHint.textContent = "写完整答案按 Shift + Enter 提交 · 提交后答案才翻开 · E 编辑";
+  memoryStudyHint.textContent = "写完整答案点「提交判定」· 提交后答案才翻开 · E 编辑";
 }
 
 function formatMemoryAnswerTime(value) {
@@ -488,6 +589,13 @@ function renderMemoryEditorPanel() {
   memoryTypeInput.value = "";
   memoryFrontInput.value = card ? card.front : "";
   memoryBackInput.value = card ? card.back : "";
+  // 从「建议答案」进来的话，背面先填模型给的版本；用户确认后才保存。
+  const prefillBack = memoryEditorPrefillBack;
+  memoryEditorPrefillBack = "";
+  if (prefillBack) {
+    memoryBackInput.value = prefillBack;
+  }
+  memoryMnemonicInput.value = card ? (card.mnemonic || "") : "";
   renderMemoryTypeChips();
   window.setTimeout(() => memoryFrontInput.focus(), 0);
 }
@@ -602,6 +710,7 @@ function renderMemorySettingsPanel() {
   if (!settings) {
     return;
   }
+  memorySettingStudyOrder.value = settings.studyOrder === "random" ? "random" : "sequential";
   memorySettingLearningSteps.value = formatSteps(settings.learningSteps);
   memorySettingGraduatingInterval.value = String(settings.graduatingInterval);
   memorySettingEasyInterval.value = String(settings.easyInterval);
@@ -860,6 +969,7 @@ async function saveMemoryCardFromEditor() {
   commitMemoryTypeInput();
   const front = memoryFrontInput.value.trim();
   const back = memoryBackInput.value.trim();
+  const mnemonic = memoryMnemonicInput.value.trim();
   const types = [...memoryEditorTypes];
   if (!front && !back) {
     window.showToast?.("正面或背面至少填一个", "warning");
@@ -869,11 +979,24 @@ async function saveMemoryCardFromEditor() {
   memorySaveCardButton.disabled = true;
   try {
     const before = new Set((memorySnapshot?.cards || []).map((card) => card.id));
+    // 背面的原值要在快照刷新前抓：只有真改了才收起「建议答案」提示，
+    // 和主进程 updateMemoryCard 的判断保持一致。
+    const previousBack = memoryEditingCardId ? (getMemoryCardById(memoryEditingCardId)?.back ?? null) : null;
     const result = memoryEditingCardId
-      ? await window.noticeNote.updateMemoryCard({ id: memoryEditingCardId, front, back, types })
-      : await window.noticeNote.createMemoryCard({ front, back, types });
+      ? await window.noticeNote.updateMemoryCard({ id: memoryEditingCardId, front, back, mnemonic, types })
+      : await window.noticeNote.createMemoryCard({ front, back, mnemonic, types });
     applyMemorySnapshot(result);
     const added = memorySnapshot.cards.find((card) => !before.has(card.id));
+    const savedId = memoryEditingCardId || added?.id || null;
+    const backChanged = previousBack === null || previousBack !== back;
+    if (backChanged && savedId && memoryJudgeResult?.cardId === savedId) {
+      memoryJudgeResult = {
+        ...memoryJudgeResult,
+        answerVerdict: "ok",
+        answerNote: "",
+        suggestedBack: ""
+      };
+    }
     memoryCurrentCardId = memoryEditingCardId || added?.id || memoryCurrentCardId;
     memoryEditingCardId = null;
     memoryViewMode = "study";
@@ -885,6 +1008,56 @@ async function saveMemoryCardFromEditor() {
     window.showErrorToast?.(error, "保存记忆卡失败");
   } finally {
     memorySaveCardButton.disabled = false;
+  }
+}
+
+// 学习页「助记」按钮：就地写/改当前卡的助记，不必进编辑面板。
+// 保存走 updateMemoryCard 只带 mnemonic 一条，正反面和类型保持原样。
+function openMemoryMnemonicEditor() {
+  const card = getMemoryCardById(memoryCurrentCardId);
+  if (!card) {
+    return;
+  }
+  memoryMnemonicTextarea.value = card.mnemonic || "";
+  const preview = String(card.front || "").trim().replace(/\s+/g, " ").slice(0, 40);
+  memoryMnemonicSource.textContent = preview
+    ? `「${preview}${String(card.front || "").trim().length > 40 ? "…" : ""}」的记忆线索`
+    : "写一条帮助自己回忆的线索，只在答案面显示";
+  // 重复打开时先收起再弹出：同一个 dialog 连续 showModal 会抛错。
+  if (memoryMnemonicDialog.open) {
+    memoryMnemonicDialog.close();
+  }
+  memoryMnemonicDialog.showModal();
+  window.setTimeout(() => {
+    memoryMnemonicTextarea.focus();
+    const end = memoryMnemonicTextarea.value.length;
+    memoryMnemonicTextarea.setSelectionRange(end, end);
+  }, 0);
+}
+
+async function saveMemoryMnemonicFromDialog() {
+  const card = getMemoryCardById(memoryCurrentCardId);
+  if (!card) {
+    memoryMnemonicDialog?.close();
+    return;
+  }
+  const mnemonic = memoryMnemonicTextarea.value.trim();
+  // 没改动就别写盘：updateMemoryCard 会刷新 updatedAt，同步时白推一次。
+  if (mnemonic === String(card.mnemonic || "").trim()) {
+    memoryMnemonicDialog?.close();
+    return;
+  }
+  memoryMnemonicSaveButton.disabled = true;
+  try {
+    applyMemorySnapshot(await window.noticeNote.updateMemoryCard({ id: card.id, mnemonic }));
+    memoryMnemonicDialog?.close();
+    renderMemoryView();
+    window.showToast?.(mnemonic ? "助记已保存" : "助记已删除");
+  } catch (error) {
+    console.error("保存助记失败:", error);
+    window.showErrorToast?.(error, "保存助记失败");
+  } finally {
+    memoryMnemonicSaveButton.disabled = false;
   }
 }
 
@@ -914,6 +1087,7 @@ function readMemorySettingsFromPanel() {
   // 避免 10% 这类小值被调度器的「>10 视为百分数」兼容逻辑误判成 10 倍。
   const percent = (value) => Number(value) / 100;
   return {
+    studyOrder: memorySettingStudyOrder.value === "random" ? "random" : "sequential",
     learningSteps: memorySettingLearningSteps.value,
     graduatingInterval: Number(memorySettingGraduatingInterval.value),
     easyInterval: Number(memorySettingEasyInterval.value),
@@ -946,6 +1120,7 @@ async function saveMemorySettingsFromPanel() {
 
 function resetMemorySettingsInputs() {
   const defaults = MEMORY_DEFAULT_SETTINGS_INPUT;
+  memorySettingStudyOrder.value = defaults.studyOrder;
   memorySettingLearningSteps.value = defaults.learningSteps;
   memorySettingGraduatingInterval.value = String(defaults.graduatingInterval);
   memorySettingEasyInterval.value = String(defaults.easyInterval);
@@ -1178,6 +1353,7 @@ async function openMemoryQuickCreate(noteId) {
   const back = buildMemoryQuickBack(note.content);
   memoryQuickFront.value = note.title || "";
   memoryQuickBack.value = back.text;
+  memoryQuickMnemonic.value = "";
   memoryQuickSource.textContent = `来自《${note.title || "未命名笔记"}》`;
   memoryQuickHint.textContent = back.truncated
     ? `原笔记较长，背面只预填了前 ${back.text.length} 字，可按需删减。Ctrl + Enter 保存。`
@@ -1299,10 +1475,11 @@ async function saveMemoryQuickCardFromDialog() {
     return;
   }
   const types = [...memoryQuickTypes];
+  const mnemonic = memoryQuickMnemonic.value.trim();
   memoryQuickSaveButton.disabled = true;
   try {
     const before = new Set((memorySnapshot?.cards || []).map((card) => card.id));
-    applyMemorySnapshot(await window.noticeNote.createMemoryCard({ front, back, types }));
+    applyMemorySnapshot(await window.noticeNote.createMemoryCard({ front, back, mnemonic, types }));
     const added = (memorySnapshot?.cards || []).find((card) => !before.has(card.id));
     memoryQuickDialog.close();
     // 已经在记忆视图里，就把新卡设为当前卡：切过去直接看到刚建的那张
@@ -1344,7 +1521,7 @@ function bindMemoryCardEvents() {
     memoryAnswerDraftCardId = memoryCurrentCardId;
   });
   memoryAnswerInput?.addEventListener("keydown", (event) => {
-    // 中文输入法还在拼写时按回车是「选词」，不能当成提交。
+    // 输入法还在拼写时 Esc 是取消候选，不能顺手把焦点也撤走。
     if (event.isComposing || event.keyCode === 229) {
       return;
     }
@@ -1354,17 +1531,27 @@ function bindMemoryCardEvents() {
       memoryAnswerInput.blur();
       return;
     }
-    // Enter 换行、Shift + Enter 提交：写长答案时回车几乎都是想换行，
-    // 用组合键提交才不会边写边误提交。
-    if (event.key === "Enter" && event.shiftKey) {
-      event.preventDefault();
-      submitMemoryAnswer();
-    }
+    // Enter 只换行，提交一律走「提交判定」按钮：写长答案时手滑按错组合键太容易提交半截答案。
   });
   // 卡片页里直接进编辑器：修改/删除都在那里，不用回侧边栏绕一圈。
   memoryEditCardButton?.addEventListener("click", () => {
     if (memoryCurrentCardId) {
       openMemoryEditor(memoryCurrentCardId);
+    }
+  });
+  // 助记：和编辑面板里的字段同源，都是 updateMemoryCard 的 mnemonic。
+  memoryMnemonicButton?.addEventListener("click", openMemoryMnemonicEditor);
+  memoryMnemonicCloseButton?.addEventListener("click", () => memoryMnemonicDialog?.close());
+  memoryMnemonicCancelButton?.addEventListener("click", () => memoryMnemonicDialog?.close());
+  memoryMnemonicSaveButton?.addEventListener("click", saveMemoryMnemonicFromDialog);
+  memoryMnemonicDialog?.addEventListener("keydown", (event) => {
+    if (event.isComposing || event.keyCode === 229) {
+      return;
+    }
+    // 纯 Enter 留给换行；Ctrl / Cmd + Enter 才是保存（和快速建卡一致）。
+    if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
+      event.preventDefault();
+      saveMemoryMnemonicFromDialog();
     }
   });
   memoryCancelEditButton?.addEventListener("click", () => {
@@ -1408,6 +1595,8 @@ function bindMemoryCardEvents() {
   for (const button of document.querySelectorAll("[data-memory-rating]")) {
     button.addEventListener("click", () => rateMemoryCard(button.dataset.memoryRating));
   }
+  memoryAnswerReviewCopy?.addEventListener("click", copyMemorySuggestedAnswer);
+  memoryAnswerReviewEdit?.addEventListener("click", editMemoryCardWithSuggestedAnswer);
   // 切换笔记库时主进程会整组换牌，这里跟着换快照；当前卡失效就回退到队首。
   window.noticeNote?.onMemoryChanged?.((snapshot) => {
     applyMemorySnapshot(snapshot);
@@ -1440,6 +1629,9 @@ function bindMemoryCardEvents() {
     memoryQuickTypes = [];
     if (memoryQuickTypeInput) {
       memoryQuickTypeInput.value = "";
+    }
+    if (memoryQuickMnemonic) {
+      memoryQuickMnemonic.value = "";
     }
   });
   memoryQuickDialog?.addEventListener("keydown", (event) => {

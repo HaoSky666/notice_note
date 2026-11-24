@@ -44,7 +44,8 @@ console.log(`语法检查：${TARGETS.length} 个文件，失败 ${failed} 个`)
 function collectTopLevelDeclarations(file) {
   const lines = fs.readFileSync(file, 'utf8').split('\n');
   const names = new Set();
-  const declaration = /^(?:const|let|var|function|class)\s+([A-Za-z_$][\w$]*)/;
+  // async function 也是顶层声明；漏掉它，重名检查就有一半函数看不见。
+  const declaration = /^(?:async\s+)?(?:const|let|var|function|class)\s+([A-Za-z_$][\w$]*)/;
   for (const line of lines) {
     const match = declaration.exec(line);
     if (match) {

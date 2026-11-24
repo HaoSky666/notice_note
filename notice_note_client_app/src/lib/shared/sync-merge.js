@@ -34,7 +34,8 @@
 })(typeof globalThis !== 'undefined' ? globalThis : this, function () {
   'use strict';
 
-  const CARD_CONTENT_FIELDS = ['front', 'back', 'types'];
+  // mnemonic（助记）跟正反面一样是内容：手机上只读，冲突时 PC 说了算。
+  const CARD_CONTENT_FIELDS = ['front', 'back', 'mnemonic', 'types'];
   const CARD_SCHEDULE_FIELDS = [
     'state',
     'step',
@@ -72,21 +73,36 @@
     if (!phoneCard) {
       return { card: base, scheduleFrom: 'pc', changed: false };
     }
+    const merged = { ...base };
+    let changed = false;
+
+    // 助记：手机端也能写。只有手机明确改过（mnemonicDirty 标记）才采纳，
+    // 否则手机上拿的是上次同步的旧值，会把 PC 后来改的助记顶回去。
+    // 正反面 / 类型仍然只认 PC —— 手机端没有这两个入口。
+    if (
+      phoneCard.mnemonicDirty === true
+      && typeof phoneCard.mnemonic === 'string'
+      && phoneCard.mnemonic !== base.mnemonic
+    ) {
+      merged.mnemonic = phoneCard.mnemonic;
+      changed = true;
+    }
+
+    // 调度：手机复习得更近才取手机。复习也会写 updatedAt，所以不能拿
+    // updatedAt 判断「谁改过内容」——助记靠上面的显式标记，不靠时间戳。
     const pcReviewedAt = toTime(pcCard.lastReviewedAt);
     const phoneReviewedAt = toTime(phoneCard.lastReviewedAt);
-    // 手机没复习过，或 PC 的复习更近：调度照抄 PC
-    if (!phoneReviewedAt || phoneReviewedAt <= pcReviewedAt) {
-      return { card: base, scheduleFrom: 'pc', changed: false };
+    const scheduleFrom = phoneReviewedAt > 0 && phoneReviewedAt > pcReviewedAt ? 'phone' : 'pc';
+    if (scheduleFrom === 'phone') {
+      Object.assign(merged, pickFields(phoneCard, CARD_SCHEDULE_FIELDS));
+      changed = true;
     }
-    const merged = {
-      ...base,
-      ...pickFields(phoneCard, CARD_SCHEDULE_FIELDS)
-    };
+
     // updatedAt 取两端较晚的，避免同步完又被当成「旧数据」
-    if (toTime(phoneCard.updatedAt) > toTime(pcCard.updatedAt)) {
+    if (changed && toTime(phoneCard.updatedAt) > toTime(merged.updatedAt)) {
       merged.updatedAt = phoneCard.updatedAt;
     }
-    return { card: merged, scheduleFrom: 'phone', changed: true };
+    return { card: merged, scheduleFrom, changed };
   }
 
   // 牌组合并。pcCards 是权威集合，顺序也以 PC 为准（列表排序不因同步而跳动）。

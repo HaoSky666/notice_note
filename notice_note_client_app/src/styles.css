@@ -1510,6 +1510,130 @@ body.is-keyboard-open .app-shell {
   padding: 3px 9px;
 }
 
+/* 助记：答案下面的一条线索，左侧色条跟答案区分开。 */
+.mem-mnemonic {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px;
+  border-left: 3px solid var(--accent);
+  border-radius: 0 10px 10px 0;
+  background: var(--highlight-soft);
+}
+
+.mem-mnemonic-label {
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  color: var(--accent);
+}
+
+.mem-mnemonic p {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 14px;
+  line-height: 1.7;
+  color: var(--text);
+}
+
+/* 助记编辑入口：有内容时挂在块头右侧，没有时是一条弱化的虚线按钮。
+   手机端没有卡片编辑器，助记是唯一能在手机上改的内容字段。 */
+.mem-mnemonic-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.mem-mnemonic-edit,
+.mem-mnemonic-add {
+  flex: 0 0 auto;
+  padding: 3px 10px;
+  border: 1px solid var(--muted-soft);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.mem-mnemonic-add {
+  align-self: flex-start;
+  border-style: dashed;
+}
+
+.mem-mnemonic-edit:active,
+.mem-mnemonic-add:active {
+  background: var(--highlight-soft);
+  color: var(--accent);
+  border-color: var(--highlight-line);
+}
+
+/* 助记编辑弹框：走可用的主题令牌，不用 :root 里那批自引用的 --line / --overlay。 */
+.mem-mnemonic-dialog {
+  width: min(92vw, 460px);
+  max-height: 86vh;
+  overflow: auto;
+  padding: 18px;
+  border: 1px solid var(--muted-soft);
+  border-radius: 18px;
+  background: var(--paper-strong);
+  color: var(--text);
+  box-shadow: var(--shadow);
+}
+
+.mem-mnemonic-dialog::backdrop {
+  background: rgba(0, 0, 0, 0.45);
+}
+
+.mem-mnemonic-dialog h3 {
+  margin: 0 0 6px;
+  font-size: 17px;
+}
+
+.mem-mnemonic-hint {
+  margin: 0 0 12px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.mem-mnemonic-input {
+  width: 100%;
+  min-height: 120px;
+  padding: 10px 12px;
+  border: 1px solid var(--muted-soft);
+  border-radius: 12px;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 14px;
+  line-height: 1.7;
+  resize: vertical;
+}
+
+.mem-mnemonic-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--highlight-soft);
+}
+
+.mem-mnemonic-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.mem-mnemonic-spacer {
+  flex: 1;
+}
+
+.mem-mnemonic-delete {
+  padding: 6px 14px;
+  font-size: 13px;
+}
+
 .mem-answer-input {
   width: 100%;
   /* 默认 3 行写长答案要一直滚，抬到 6 行起步；触屏上没法拖拽，靠 min-height 兜底。 */
@@ -1557,6 +1681,93 @@ body.is-keyboard-open .app-shell {
   color: var(--warn-text);
   font-size: 13px;
   line-height: 1.6;
+}
+
+/* 背面审阅：AI 认为卡片自己的答案有误/不全。
+   左侧竖线是标记，提示「这不是评分理由，是卡片本身要改」。
+   注意这里不用 --line / --warn-*：这几组在 :root 里是自引用（无效），
+   paper 主题下会退化成无边框、无底色。 */
+.mem-answer-review {
+  display: grid;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--highlight-line);
+  border-left: 3px solid var(--accent);
+  border-radius: 12px;
+  background: var(--paper);
+}
+
+.mem-answer-review-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px 8px;
+}
+
+.mem-answer-review-badge {
+  padding: 1px 8px;
+  border: 1px solid var(--muted-soft);
+  border-radius: 999px;
+  background: var(--highlight-soft);
+  color: var(--muted);
+  font-size: 11.5px;
+  font-weight: 600;
+  line-height: 1.7;
+}
+
+/* 事实错误比「写得不全」严重：用实底徽章，比只换颜色更显眼 */
+.mem-answer-review-badge[data-verdict="wrong"] {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
+.mem-answer-review-note {
+  flex: 1 1 160px;
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.mem-answer-review-text {
+  max-height: 220px;
+  overflow: auto;
+  padding: 9px 11px;
+  border-radius: 9px;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.75;
+  white-space: pre-wrap;
+  word-break: break-word;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.mem-answer-review-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.mem-answer-review-hint {
+  color: var(--muted);
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+
+.mem-answer-review-copy {
+  flex: 0 0 auto;
+  padding: 5px 14px;
+  /* 不用 --line：它在 :root 里是自引用，paper 主题下等于没有边框 */
+  border: 1px solid var(--muted-soft);
+  border-radius: 999px;
+  background: var(--paper-strong);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
 }
 
 .mem-rating-bar {

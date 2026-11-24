@@ -74,6 +74,9 @@ const appState = {
   memoryTypeFilter: null,
   // 编辑器里正在编辑的类型列表，保存时随卡面一起提交。
   memoryEditorTypes: [],
+  // 「用 AI 建议答案修改」时的一次性预填：打开编辑器后填进背面输入框，
+  // 只是草稿，用户不点保存就不会落盘。
+  memoryEditorPrefillBack: "",
   // 从笔记右键「制作成记忆卡片」弹出的快速建卡框：来源笔记 id 与已选类型。
   // 与 memoryEditorTypes 分开存，两处互不干扰；关闭弹框即清空。
   memoryQuickNoteId: null,

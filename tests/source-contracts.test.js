@@ -393,7 +393,124 @@ test('记忆卡模块：SM-2 调度与 .memory_card 落盘接线', () => {
   assert.match(pc('renderer/context-menu.js'), /if \(entry\.type === "note"\) \{\s*\n\s*contextMenu\.append\(\s*\n\s*createContextMenuItem\("制作成记忆卡片"/);
   assert.match(memory, /async function openMemoryQuickCreate\(noteId\)/);
   assert.match(memory, /memoryQuickTypes = \[\];/);
-  assert.match(memory, /await window\.noticeNote\.createMemoryCard\(\{ front, back, types \}\);/);
+  // 编辑器保存卡片（带助记）与右键快速建卡（也带助记）是两条独立的调用
+  assert.match(memory, /: await window\.noticeNote\.createMemoryCard\(\{ front, back, mnemonic, types \}\);/);
+  assert.match(
+    memory,
+    /applyMemorySnapshot\(await window\.noticeNote\.createMemoryCard\(\{ front, back, mnemonic, types \}\)\)/
+  );
+});
+
+test('记忆卡学习顺序：默认按顺序、可切随机，并随同步清单带到手机端', () => {
+  const sm2 = pc('lib/sm2-scheduler.js');
+  const store = pc('lib/memory-card-store.js');
+  const main = pc('main.js');
+  const index = pc('index.html');
+  const dom = pc('renderer/dom.js');
+  const memory = pc('renderer/memory.js');
+
+  // 设置项归属牌组设置：默认值 + 归一化白名单，非法值不能把队列排成别的样
+  assert.match(sm2, /const STUDY_ORDERS = \['sequential', 'random'\];/);
+  assert.match(sm2, /studyOrder: 'sequential',/);
+  assert.match(sm2, /studyOrder: STUDY_ORDERS\.includes\(input\.studyOrder\)/);
+  // 队列构建必须把 settings 传进 getQueue，否则面板改了不生效
+  assert.match(store, /const queue = getQueue\(cards, now, settings\);/);
+  assert.match(sm2, /function getQueue\(cards, now = Date\.now\(\), options = \{\}\)/);
+
+  // 面板：HTML 下拉 → dom 引用 → 回填 / 读取 / 恢复默认
+  assert.match(index, /id="memorySettingStudyOrder"/);
+  assert.match(index, /<option value="sequential">按添加顺序<\/option>/);
+  assert.match(index, /<option value="random">按随机顺序<\/option>/);
+  assert.match(dom, /const memorySettingStudyOrder = document\.querySelector\("#memorySettingStudyOrder"\);/);
+  assert.match(memory, /memorySettingStudyOrder\.value = settings\.studyOrder === "random" \? "random" : "sequential";/);
+  assert.match(memory, /studyOrder: memorySettingStudyOrder\.value === "random" \? "random" : "sequential",/);
+  assert.match(memory, /memorySettingStudyOrder\.value = defaults\.studyOrder;/);
+  assert.match(memory, /studyOrder: "sequential",/);
+
+  // 同步：设置跟着 /api/manifest 的 memory.settings 走，手机端读同一份
+  assert.match(
+    main,
+    /memory: \{\s*\n\s*cards: memoryCards,\s*\n\s*settings: memorySettings\s*\n\s*\}/
+  );
+  assert.match(
+    app('lib/shared/memory-card-store.js'),
+    /const queue = getQueue\(cards, now, settings\);/,
+    '手机端共享库要跟着同步（npm run sync:libs）'
+  );
+  assert.match(
+    app('memory.js'),
+    /library\?\.memory\?\.settings \|\| \{\}/,
+    '手机端队列必须读同步下来的 settings'
+  );
+});
+
+test('记忆卡助记：PC 与手机都能写，只在答案面出现', () => {
+  const sm2 = pc('lib/sm2-scheduler.js');
+  const main = pc('main.js');
+  const index = pc('index.html');
+  const dom = pc('renderer/dom.js');
+  const memory = pc('renderer/memory.js');
+
+  // 数据字段：新建补默认值，老数据读回来是空串
+  assert.match(sm2, /mnemonic: typeof input\.mnemonic === 'string' \? input\.mnemonic : '',/);
+
+  // 主进程：新建走白名单截断；更新时「不传 = 保持原样」，与 types 同约定
+  assert.match(main, /const mnemonic = sanitizeMemoryCardText\(input\.mnemonic\)\.trim\(\);/);
+  assert.match(
+    main,
+    /input\.mnemonic === undefined\s*\n\s*\? \(memoryCards\[index\]\.mnemonic \|\| ''\)/
+  );
+  assert.match(main, /front,\s*\n\s*back,\s*\n\s*mnemonic,\s*\n\s*types,/);
+
+  // 面板三条入口：编辑面板字段、学习页按钮、就地编辑弹框；右键快速建卡也能写
+  assert.match(index, /id="memoryMnemonicInput"/);
+  assert.match(index, /id="memoryMnemonicButton"/);
+  assert.match(index, /id="memoryCardMnemonic"/);
+  assert.match(index, /id="memoryMnemonicDialog"/);
+  assert.match(index, /id="memoryQuickMnemonic"/);
+  assert.match(memory, /const mnemonic = memoryQuickMnemonic\.value\.trim\(\);/);
+  assert.match(dom, /const memoryCardMnemonic = document\.querySelector\("#memoryCardMnemonic"\);/);
+  assert.match(dom, /const memoryMnemonicTextarea = document\.querySelector\("#memoryMnemonicTextarea"\);/);
+  // 问题面不给线索：助记只在答案翻开后出现
+  assert.match(memory, /memoryCardMnemonic\.hidden = !memoryRevealed \|\| !mnemonic;/);
+  // 学习页那个「助记」按钮同理：问题面连入口都不露，翻面后才出现
+  assert.match(memory, /memoryMnemonicButton\.hidden = !memoryRevealed;/);
+  assert.match(memory, /const mnemonic = memoryMnemonicInput\.value\.trim\(\);/);
+  assert.match(memory, /async function saveMemoryMnemonicFromDialog\(\)/);
+  assert.match(memory, /await window\.noticeNote\.updateMemoryCard\(\{ id: card\.id, mnemonic \}\)/);
+
+  // 手机端：答案面展示 + 就地编辑
+  const mobileMemory = app('memory.js');
+  assert.match(mobileMemory, /const mnemonic = String\(card\.mnemonic \|\| ''\)\.trim\(\);/);
+  assert.match(mobileMemory, /note\.className = 'mem-mnemonic';/);
+  assert.match(app('styles.css'), /\.mem-mnemonic \{/);
+  // 编辑入口：有内容时是「编辑」，没有时是「＋ 写助记」，两者都开同一个弹框
+  assert.match(app('index.html'), /id="memMnemonicDialog"/);
+  assert.match(app('index.html'), /id="memMnemonicInput"/);
+  assert.match(mobileMemory, /function memOpenMnemonicDialog\(cardId\)/);
+  assert.match(mobileMemory, /edit\.className = 'mem-mnemonic-edit';/);
+  assert.match(mobileMemory, /add\.className = 'mem-mnemonic-add';/);
+  // 保存必须打 mnemonicDirty 并标脏卡片，否则同步时会被 PC 的旧值盖回去
+  assert.match(mobileMemory, /mnemonicDirty: true/);
+  assert.match(mobileMemory, /NoticeNoteStore\.addToDirty\('cardIds', cardId\);/);
+  assert.match(mobileMemory, /function memSaveMnemonic\(value\)/);
+  assert.match(mobileMemory, /memSaveMnemonic\(''\);/);
+  // 评分回写：内容取当前卡，且 scheduleCard 的 normalizeCard 洗掉标记后要补回来
+  assert.match(mobileMemory, /mnemonic: cards\[index\]\.mnemonic,/);
+  assert.match(mobileMemory, /next\.mnemonicDirty = true;/);
+  // 合并只认显式标记，旧快照（没标记）不能覆盖 PC
+  const merge = pc('lib/sync-merge.js');
+  assert.match(merge, /phoneCard\.mnemonicDirty === true/);
+  assert.match(
+    app('lib/shared/sync-merge.js'),
+    /phoneCard\.mnemonicDirty === true/,
+    '手机端共享库要跟着同步（npm run sync:libs）'
+  );
+  assert.match(
+    app('lib/shared/sm2-scheduler.js'),
+    /mnemonic: typeof input\.mnemonic === 'string' \? input\.mnemonic : '',/,
+    '手机端共享库要跟着同步（npm run sync:libs）'
+  );
 });
 
 test('记忆卡类型：多类型落盘、按类型学习、筛选由主进程统一持有', () => {
@@ -429,7 +546,7 @@ test('记忆卡类型：多类型落盘、按类型学习、筛选由主进程�
   assert.match(memory, /async function setMemoryTypeFilter\(typeName\)/);
   assert.match(memory, /window\.noticeNote\.filterMemoryCards\(\{ type: typeName \|\| null \}\)/);
   assert.match(memory, /const types = \[\.\.\.memoryEditorTypes\];/);
-  assert.match(memory, /updateMemoryCard\(\{ id: memoryEditingCardId, front, back, types \}\)/);
+  assert.match(memory, /updateMemoryCard\(\{ id: memoryEditingCardId, front, back, mnemonic, types \}\)/);
 });
 
 test('记忆卡天级间隔按本地日切，不是 24 小时整', () => {
@@ -503,7 +620,7 @@ test('记忆卡 AI 判定：作答 → 模型 → 落盘调度的接线', () => 
 
   // 改判要用评分前的卡片状态重算，否则连点两次会把间隔乘两次
   assert.match(main, /let lastMemoryJudge = null;/);
-  assert.match(main, /lastMemoryJudge = \{ cardId, cardBefore, entryId \};/);
+  assert.match(main, /lastMemoryJudge = \{ cardId, cardBefore, entryId, \.\.\.answerReview \};/);
   assert.match(main, /const base = context \? context\.cardBefore : card;/);
 
   // 历史跟卡片同目录，删卡片要连带清理孤儿条目
@@ -853,24 +970,91 @@ test('手机端键盘弹出时底部 Tab 要让位，不能顶在键盘上沿', 
   );
 });
 
-test('PC 作答框：Enter 换行，Shift + Enter 才提交', () => {
+test('PC 作答框：Enter 只换行，提交只走按钮', () => {
   const memory = pc('renderer/memory.js');
   const html = pc('index.html');
 
-  // 写长答案时回车几乎都是想换行；只用 Enter 提交会边写边误提交。
-  assert.match(
-    memory,
-    /if \(event\.key === "Enter" && event\.shiftKey\) \{\s*event\.preventDefault\(\);\s*submitMemoryAnswer\(\);/,
-    'Shift + Enter 要提交',
-  );
-  assert.doesNotMatch(
-    memory,
-    /event\.key === "Enter" && !event\.shiftKey\) \{\s*event\.preventDefault\(\);\s*submitMemoryAnswer\(\);/,
-    '光回车不能再提交',
-  );
+  // 写长答案时回车几乎都是想换行；组合键提交还会手滑交上半截答案。
+  const inputKeydownStart = memory.indexOf('memoryAnswerInput?.addEventListener("keydown"');
+  assert.ok(inputKeydownStart > -1, '作答框要有 keydown 处理器（只为 Esc 交还键盘）');
+  const inputKeydownBlock = memory.slice(inputKeydownStart, memory.indexOf("\n  });", inputKeydownStart));
+  assert.doesNotMatch(inputKeydownBlock, /submitMemoryAnswer/, '作答框里任何 Enter 组合都不该触发提交');
+  assert.match(memory, /memoryAnswerSubmitButton\?\.addEventListener\("click", submitMemoryAnswer\)/, '提交按钮要绑定提交');
+  assert.doesNotMatch(memory, /Shift \+ Enter 提交/, '渲染文案不能再提 Shift + Enter');
 
   // 提示文案必须和实际按键一致，否则用户按提示操作会当场踩坑
-  assert.match(html, /Shift \+ Enter 提交 · Enter 换行/, 'index.html 的提示要更新');
-  assert.match(memory, /"Shift \+ Enter 提交 · Enter 换行 · 完全不会就写「不会」"/, '渲染时的提示也要更新');
+  assert.match(html, /点「提交判定」提交 · Enter 换行/, 'index.html 的提示要更新');
+  assert.match(memory, /"点「提交判定」提交 · Enter 换行 · 完全不会就写「不会」"/, '渲染时的提示也要更新');
+  assert.doesNotMatch(html, /Shift \+ Enter/, 'index.html 不能再残留 Shift + Enter');
   assert.doesNotMatch(html, /回车提交后才会看到答案/, '占位文案不能还写「回车提交」');
+});
+
+test('记忆卡 AI 判定：背面有误/不全时给替换答案，只提示不自动改卡', () => {
+  const main = pc('main.js');
+  const index = pc('index.html');
+  const dom = pc('renderer/dom.js');
+  const memory = pc('renderer/memory.js');
+  const mobile = app('memory.js');
+
+  // 主进程：解析后按卡片原文过一道去重（建议和原文一样就别提），随判定结果回传
+  assert.match(main, /const answerReview = normalizeAnswerReview\(judgment, card\.back\);/);
+  assert.match(main, /lastMemoryJudge = \{ cardId, cardBefore, entryId, \.\.\.answerReview \};/);
+  assert.match(
+    main,
+    /source: 'ai',\s*\n\s*\.\.\.answerReview/,
+    '判定结果要把背面审阅一起回给渲染层'
+  );
+  // 只提示：判定链路绝不能自己把卡片背面改掉
+  assert.doesNotMatch(main, /back: answerReview/, '替换答案不能自动写进卡片');
+
+  // 改判只换档位，审阅结论要跟着回来，否则一按改判提示就凭空消失
+  assert.match(main, /source: 'manual',\s*\n\s*\.\.\.answerReview/);
+  assert.match(
+    main,
+    /const answerReview = context\s*\n\s*\? normalizeAnswerReview\(context, card\.back\)/,
+    '改判要用保存下来的审阅结论'
+  );
+
+  // 卡片背面一改，旧建议就过期：主进程清空，渲染层保存后也清空
+  assert.match(
+    main,
+    /lastMemoryJudge = \{ \.\.\.lastMemoryJudge, answerVerdict: 'ok', answerNote: '', suggestedBack: '' \};/
+  );
+  assert.match(
+    memory,
+    /memoryJudgeResult = \{\s*\n\s*\.\.\.memoryJudgeResult,\s*\n\s*answerVerdict: "ok",/,
+    '保存卡片后要收起过期的建议块'
+  );
+
+  // 界面：提示块 + 复制 + 填入编辑器（预填草稿，保存仍由用户点）
+  for (const id of [
+    'memoryAnswerReview',
+    'memoryAnswerReviewBadge',
+    'memoryAnswerReviewText',
+    'memoryAnswerReviewCopy',
+    'memoryAnswerReviewEdit'
+  ]) {
+    assert.match(index, new RegExp(`id="${id}"`), `index.html 缺 #${id}`);
+  }
+  assert.match(dom, /const memoryAnswerReviewCopy = document\.querySelector\("#memoryAnswerReviewCopy"\);/);
+  assert.match(
+    memory,
+    /const visible = Boolean\(verdict && suggestion\) && memoryJudgeState !== "error";/,
+    '只有「有结论 + 有替换答案」才显示'
+  );
+  assert.match(memory, /memoryAnswerReviewCopy\?\.addEventListener\("click", copyMemorySuggestedAnswer\);/);
+  assert.match(memory, /memoryAnswerReviewEdit\?\.addEventListener\("click", editMemoryCardWithSuggestedAnswer\);/);
+  // 「填入编辑器」只写草稿变量，不直接调 updateMemoryCard
+  assert.match(memory, /memoryEditorPrefillBack = suggestion;\s*\n\s*openMemoryEditor\(card\.id\);/);
+  assert.match(memory, /const prefillBack = memoryEditorPrefillBack;/);
+
+  // 手机端：同一份共享库 + 只读展示，编辑仍回 PC
+  assert.match(mobile, /return \{ \.\.\.parsed, \.\.\.NoticeNoteAiJudge\.normalizeAnswerReview\(parsed, card\.back\) \};/);
+  assert.match(mobile, /memRenderAnswerReview\(area, session\.judgeResult\);/);
+  assert.match(mobile, /到电脑端改这张卡的背面/);
+  assert.match(
+    app('lib/shared/ai-judge.js'),
+    /suggestedBack/,
+    '手机端共享库要跟着同步（npm run sync:libs）'
+  );
 });

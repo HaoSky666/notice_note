@@ -124,6 +124,18 @@
     <p class="msettings-note">同步与离线包内容均为明文，密码目录在手机端没有密码保护。</p>
   </dialog>
 
+  <dialog id="memMnemonicDialog" class="mem-mnemonic-dialog" aria-label="编辑助记">
+    <h3 id="memMnemonicTitle">助记</h3>
+    <p class="mem-mnemonic-hint">只在答案面显示，写给自己看的回忆线索。</p>
+    <textarea id="memMnemonicInput" class="mem-mnemonic-input" rows="5" placeholder="例如：先定位三者 → 再讲各自实现 → 最后怎么配合"></textarea>
+    <div class="mem-mnemonic-actions">
+      <button id="memMnemonicDelete" class="secondary-action mem-mnemonic-delete" type="button" hidden>删除</button>
+      <span class="mem-mnemonic-spacer"></span>
+      <button id="memMnemonicCancel" class="secondary-action" type="button">取消</button>
+      <button id="memMnemonicSave" class="primary-action" type="button">保存</button>
+    </div>
+  </dialog>
+
   <div id="syncProgress" class="sync-progress" role="status" aria-live="polite" hidden>
     <div class="sync-progress-card">
       <p id="syncProgressText">正在同步...</p>

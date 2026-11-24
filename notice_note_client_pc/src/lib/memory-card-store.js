@@ -94,9 +94,10 @@
   }
 
   // 一次学习会话：学习中的优先，其次到期复习，最后才是新卡（且受日限额约束）。
+  // studyOrder 只影响每组内部的先后（见 sm2-scheduler 的 getQueue）。
   function buildStudyQueue(cards, settingsInput = {}, now = Date.now()) {
     const settings = normalizeMemorySettings(settingsInput);
-    const queue = getQueue(cards, now);
+    const queue = getQueue(cards, now, settings);
     const quota = getNewCardQuota(cards, settings, now);
     return {
       learning: queue.learning,
@@ -104,7 +105,7 @@
       newCards: queue.newCards.slice(0, quota),
       scheduled: queue.scheduled,
       quota,
-      stats: getStats(cards, now)
+      stats: getStats(cards, now, settings)
     };
   }
 

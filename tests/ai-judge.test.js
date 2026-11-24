@@ -10,6 +10,8 @@ const {
   AI_JUDGE_MAX_TIMEOUT_MS,
   AI_JUDGE_ANSWER_MAX_LENGTH,
   AI_JUDGE_REASON_MAX_LENGTH,
+  AI_JUDGE_SUGGESTION_MAX_LENGTH,
+  AI_JUDGE_BACK_NOTE_MAX_LENGTH,
   VALID_RATINGS,
   AiJudgeParseError,
   normalizeAiJudgeConfig,
@@ -18,6 +20,7 @@ const {
   buildJudgeMessages,
   buildJudgePayload,
   parseJudgeReply,
+  normalizeAnswerReview,
   truncateAnswer
 } = require('../notice_note_client_pc/src/lib/ai-judge');
 
@@ -121,7 +124,7 @@ test('buildJudgePayload 关闭 thinking 并带 json_object', () => {
   assert.equal(payload.temperature, 0);
   assert.deepEqual(payload.thinking, { type: 'disabled' });
   assert.deepEqual(payload.response_format, { type: 'json_object' });
-  assert.ok(payload.max_tokens >= 800, '推理模型会吃 token，上限不能太小');
+  assert.ok(payload.max_tokens >= 2000, '要留出写整版替换答案的空间，1200 会被截成半个 JSON');
 
   const open = buildJudgePayload({ apiKey: 'k', model: 'm', disableThinking: false }, []);
   assert.equal(open.thinking, undefined, '不关思考时不能带 thinking 参数，否则部分端点 400');
@@ -136,10 +139,112 @@ test('truncateAnswer 超长截断并加省略号', () => {
   assert.equal(truncateAnswer(null), '');
 });
 
-test('parseJudgeReply 解析标准 JSON', () => {
+test('parseJudgeReply 标准 JSON', () => {
   const result = parseJudgeReply('{"rating":"good","reason":"核心点答对"}');
   assert.equal(result.rating, 'good');
   assert.equal(result.reason, '核心点答对');
+  // 老 prompt / 老模型只回两字段时，背面审阅必须是「没问题」，不能渲染空块
+  assert.equal(result.answerVerdict, 'ok');
+  assert.equal(result.answerNote, '');
+  assert.equal(result.suggestedBack, '');
+});
+
+test('buildJudgeMessages 要求模型顺手审卡片背面，并给出替换答案的字段', () => {
+  const system = buildJudgeMessages({ front: 'q', back: 'a', answer: 'x' })[0].content;
+  assert.match(system, /审阅这张卡的「背面（标准答案）」本身/);
+  assert.match(system, /answerVerdict/);
+  assert.match(system, /suggestedBack/);
+  // 没有真问题就必须闭嘴：否则每次判定都会塞一条「建议润色」
+  assert.match(system, /宁可漏报，也不要硬找问题/);
+  // 背面写错而用户答对时，不能因为「跟背面不一致」扣分
+  assert.match(system, /不要因为和背面不一致就扣分/);
+});
+
+test('parseJudgeReply 解析背面有误与替换答案', () => {
+  const raw = JSON.stringify({
+    rating: 'good',
+    reason: '答对了要点',
+    answerVerdict: 'wrong',
+    answerNote: '把 429 说成了 503',
+    suggestedBack: '降级返回 429 + Retry-After'
+  });
+  const result = parseJudgeReply(raw);
+  assert.equal(result.rating, 'good');
+  assert.equal(result.answerVerdict, 'wrong');
+  assert.equal(result.answerNote, '把 429 说成了 503');
+  assert.equal(result.suggestedBack, '降级返回 429 + Retry-After');
+});
+
+test('parseJudgeReply 接受中文 verdict 与同义字段名', () => {
+  const partial = parseJudgeReply(JSON.stringify({
+    rating: 'hard', reason: '漏了开关', answerVerdict: '不全', answerNote: '少了两种落地方式', suggestedBack: '完整版'
+  }));
+  assert.equal(partial.answerVerdict, 'partial');
+  assert.equal(partial.suggestedBack, '完整版');
+
+  const nested = parseJudgeReply(JSON.stringify({
+    rating: 'hard',
+    reason: '漏了',
+    answerReview: { verdict: '错误', note: '事实有误', suggested: '修正版' }
+  }));
+  assert.equal(nested.answerVerdict, 'wrong');
+  assert.equal(nested.answerNote, '事实有误');
+  assert.equal(nested.suggestedBack, '修正版');
+});
+
+test('只有说有问题、却给不出替换答案的，一律当没问题', () => {
+  // 只留一句抱怨最烦人：用户没法动手，结果条还常驻
+  const noSuggestion = parseJudgeReply(JSON.stringify({
+    rating: 'good', reason: 'ok', answerVerdict: 'partial', answerNote: '写得不全'
+  }));
+  assert.equal(noSuggestion.answerVerdict, 'ok');
+  assert.equal(noSuggestion.answerNote, '');
+
+  const noVerdict = parseJudgeReply(JSON.stringify({
+    rating: 'good', reason: 'ok', suggestedBack: '一版新答案'
+  }));
+  assert.equal(noVerdict.answerVerdict, 'ok', '没说有问题就不该提示');
+  assert.equal(noVerdict.suggestedBack, '');
+});
+
+test('建议答案去掉代码围栏、超长截断，note 单独限长', () => {
+  const fenced = parseJudgeReply(JSON.stringify({
+    rating: 'good',
+    reason: 'ok',
+    answerVerdict: 'partial',
+    answerNote: '补两点',
+    suggestedBack: '```markdown\n第一点\n第二点\n```'
+  }));
+  assert.equal(fenced.suggestedBack, '第一点\n第二点');
+
+  const longBack = 'x'.repeat(AI_JUDGE_SUGGESTION_MAX_LENGTH + 100);
+  const longNote = 'y'.repeat(AI_JUDGE_BACK_NOTE_MAX_LENGTH + 50);
+  const truncated = parseJudgeReply(JSON.stringify({
+    rating: 'good', reason: 'ok', answerVerdict: 'partial', answerNote: longNote, suggestedBack: longBack
+  }));
+  assert.equal(truncated.suggestedBack.length, AI_JUDGE_SUGGESTION_MAX_LENGTH);
+  assert.equal(truncated.answerNote.length, AI_JUDGE_BACK_NOTE_MAX_LENGTH);
+});
+
+test('normalizeAnswerReview：建议与卡片背面相同就当没提', () => {
+  const back = '降级返回 429';
+  const same = normalizeAnswerReview({
+    answerVerdict: 'partial', answerNote: '补一下', suggestedBack: `  ${back}  `
+  }, back);
+  assert.equal(same.answerVerdict, 'ok', '一字不差的「改写」不该弹提示');
+  assert.equal(same.suggestedBack, '');
+
+  const changed = normalizeAnswerReview({
+    answerVerdict: 'partial', answerNote: '补一下', suggestedBack: '降级返回 429 + Retry-After'
+  }, back);
+  assert.equal(changed.answerVerdict, 'partial');
+  assert.equal(changed.suggestedBack, '降级返回 429 + Retry-After');
+});
+
+test('纯文本回复走兜底时，不虚构背面审阅结果', () => {
+  const result = parseJudgeReply('这个回答只能算 hard，因为漏了核心点。');
+  assert.equal(result.answerVerdict, 'ok');
+  assert.equal(result.suggestedBack, '');
 });
 
 test('parseJudgeReply 容忍 markdown 围栏与前后废话', () => {

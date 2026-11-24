@@ -25,8 +25,14 @@
   const AI_JUDGE_ANSWER_MAX_LENGTH = 4000;
   const AI_JUDGE_REASON_MAX_LENGTH = 200;
   const AI_JUDGE_HISTORY_LIMIT = 3;
+  // 背面审阅：模型给出的一版替换答案。按卡面常用规模限长，
+  // 避免它把「补一句」写成一篇教程，把结果条撑开。
+  const AI_JUDGE_SUGGESTION_MAX_LENGTH = 2000;
+  const AI_JUDGE_BACK_NOTE_MAX_LENGTH = 200;
 
   const VALID_RATINGS = ['again', 'hard', 'good', 'easy'];
+  // 卡片背面自身的状况：ok = 没问题，partial = 说法片面/漏要点，wrong = 事实有错。
+  const ANSWER_VERDICTS = ['ok', 'partial', 'wrong'];
 
   const RATING_LABELS = {
     again: '重来',
@@ -45,6 +51,33 @@
     困难: 'hard',
     良好: 'good',
     简单: 'easy'
+  };
+
+  // 同样要容错：模型常常把枚举写成中文或同义词。
+  const ANSWER_VERDICT_ALIASES = {
+    ok: 'ok',
+    fine: 'ok',
+    correct: 'ok',
+    none: 'ok',
+    valid: 'ok',
+    正确: 'ok',
+    没问题: 'ok',
+    无误: 'ok',
+    partial: 'partial',
+    incomplete: 'partial',
+    lacking: 'partial',
+    incomplete_answer: 'partial',
+    部分: 'partial',
+    不全: 'partial',
+    片面: 'partial',
+    不够: 'partial',
+    wrong: 'wrong',
+    incorrect: 'wrong',
+    error: 'wrong',
+    false: 'wrong',
+    错误: 'wrong',
+    有误: 'wrong',
+    不对: 'wrong'
   };
 
   const AI_JUDGE_DEFAULTS = {
@@ -134,8 +167,20 @@
     '判断要严格：结论正确但复述中暴露误解的，判 hard 或 again。',
     '不要因为用户语气自信就放松标准，也不要因为表述口语化就扣分。',
     '',
+    '另外，请顺手审阅这张卡的「背面（标准答案）」本身。这一项与上面的评分互相独立：',
+    '',
+    '- 背面有事实错误、自相矛盾，或漏掉了问题要求的核心点 → answerVerdict 给 wrong（有错）或 partial（不全）',
+    '- 背面没问题 → answerVerdict 给 ok，answerNote 和 suggestedBack 都留空字符串',
+    '',
+    'answerVerdict 不是 ok 时，suggestedBack 给一版可以直接替换背面的完整答案：',
+    '沿用原来的结构与详略，只修正错误、补齐缺口；不要扩写成教程，不要加「修改后：」这类前缀，不要用代码围栏。',
+    '只是能写得更漂亮、更详细、多举几个例子，不算问题，不要提，直接给 ok——宁可漏报，也不要硬找问题。',
+    '背面本身有错而用户答对了，按用户的实际掌握评分，不要因为和背面不一致就扣分。',
+    '',
     '只输出一个 JSON 对象，不要 markdown 围栏，不要任何解释文字：',
-    '{"rating":"again|hard|good|easy","reason":"一句话说明依据，指出漏了什么或对了什么"}'
+    '{"rating":"again|hard|good|easy","reason":"一句话说明依据，指出漏了什么或对了什么",' +
+      '"answerVerdict":"ok|partial|wrong","answerNote":"背面的问题，一句话；没有就空字符串",' +
+      '"suggestedBack":"替换用的完整答案；answerVerdict 为 ok 时给空字符串"}'
   ].join('\n');
 
   // 历史只做背景：明确告诉模型「本次判定只看本次回答」，免得它为了体现进步而偏 easy。
@@ -179,8 +224,9 @@
       model: normalized.model,
       messages,
       temperature: 0,
-      // 关掉推理后 800 足够；万一用户关掉了 disableThinking，1200 也给推理留了余量。
-      max_tokens: 1200,
+      // 关掉推理后 800 足够；但背面审阅可能带一整版替换答案（上限 2000 字），
+      // 1200 会被截断成半个 JSON，所以统一给到 3000。
+      max_tokens: 3000,
       response_format: { type: 'json_object' }
     };
     if (normalized.disableThinking) {
@@ -246,6 +292,64 @@
     return RATING_ALIASES[key] || null;
   }
 
+  function normalizeAnswerVerdict(value) {
+    const key = typeof value === 'string' ? value.trim().toLowerCase() : '';
+    if (ANSWER_VERDICTS.includes(key)) {
+      return key;
+    }
+    return ANSWER_VERDICT_ALIASES[key] || 'ok';
+  }
+
+  // 建议答案可能被模型包在代码围栏里（让它别用，它有时还是会用）。
+  function stripAnyFence(text) {
+    const trimmed = String(text || '').trim();
+    const fenced = trimmed.match(/^```[a-zA-Z]*\s*\n?([\s\S]*?)\n?\s*```$/);
+    return fenced ? fenced[1].trim() : trimmed;
+  }
+
+  function emptyAnswerReview() {
+    return { answerVerdict: 'ok', answerNote: '', suggestedBack: '' };
+  }
+
+  // 从解析结果里取背面审阅信息。键名容忍三种写法：
+  // 平铺（answerVerdict）、嵌套（answerReview.verdict）、以及模型自造的近义词。
+  function readAnswerReview(parsed) {
+    const source = parsed && typeof parsed === 'object' ? parsed : {};
+    const nested = source.answerReview && typeof source.answerReview === 'object' && !Array.isArray(source.answerReview)
+      ? source.answerReview
+      : {};
+    const verdict = normalizeAnswerVerdict(
+      source.answerVerdict ?? source.backVerdict ?? nested.verdict ?? nested.answerVerdict
+    );
+    const note = toText(
+      source.answerNote ?? source.backNote ?? nested.note ?? nested.answerNote,
+      AI_JUDGE_BACK_NOTE_MAX_LENGTH
+    );
+    const suggested = stripAnyFence(toText(
+      source.suggestedBack ?? source.suggestedAnswer ?? nested.suggested ?? nested.suggestedBack,
+      AI_JUDGE_SUGGESTION_MAX_LENGTH
+    ));
+    // 说了有问题却没给替换答案，等于只留一句抱怨。这种一律当没提，
+    // 结果条只显示「能直接动手改」的情况。
+    if (verdict === 'ok' || !suggested) {
+      return emptyAnswerReview();
+    }
+    return { answerVerdict: verdict, answerNote: note, suggestedBack: suggested };
+  }
+
+  // 主进程拿到卡片原文后再过一道：建议和原文一字不差就没必要提示。
+  function normalizeAnswerReview(input = {}, back = '') {
+    const review = readAnswerReview(input);
+    if (review.answerVerdict === 'ok') {
+      return review;
+    }
+    const original = toText(back);
+    if (original && review.suggestedBack === original) {
+      return emptyAnswerReview();
+    }
+    return review;
+  }
+
   // 解析模型回复。三步容错：严格 JSON → 从文本里抠 JSON 对象 → 全文找档位词。
   // 任何一步都失败才抛错，由调用方转成「判定失败」让用户手选。
   function parseJudgeReply(raw) {
@@ -263,7 +367,8 @@
           if (rating) {
             return {
               rating,
-              reason: toText(parsed.reason ?? parsed.explanation ?? parsed.comment, AI_JUDGE_REASON_MAX_LENGTH)
+              reason: toText(parsed.reason ?? parsed.explanation ?? parsed.comment, AI_JUDGE_REASON_MAX_LENGTH),
+              ...readAnswerReview(parsed)
             };
           }
         }
@@ -279,7 +384,8 @@
     if (matched) {
       return {
         rating: RATING_ALIASES[matched] || matched,
-        reason: toText(text, AI_JUDGE_REASON_MAX_LENGTH)
+        reason: toText(text, AI_JUDGE_REASON_MAX_LENGTH),
+        ...emptyAnswerReview()
       };
     }
 
@@ -296,7 +402,10 @@
     AI_JUDGE_ANSWER_MAX_LENGTH,
     AI_JUDGE_REASON_MAX_LENGTH,
     AI_JUDGE_HISTORY_LIMIT,
+    AI_JUDGE_SUGGESTION_MAX_LENGTH,
+    AI_JUDGE_BACK_NOTE_MAX_LENGTH,
     VALID_RATINGS,
+    ANSWER_VERDICTS,
     RATING_LABELS,
     AiJudgeParseError,
     normalizeAiJudgeConfig,
@@ -305,6 +414,7 @@
     buildJudgeMessages,
     buildJudgePayload,
     parseJudgeReply,
+    normalizeAnswerReview,
     truncateAnswer
   };
 });

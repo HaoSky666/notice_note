@@ -63,8 +63,13 @@
   const FUZZ_RANGE = 0.05;
   const RATINGS = ['again', 'hard', 'good', 'easy'];
   const VALID_STATES = new Set(['new', 'learning', 'review', 'relearning']);
+  // 学习顺序：sequential = 按添加/到期时间排（默认，既有行为）；random = 随机。
+  // 随机只打散「同一组内部」的先后，组间仍然是 学习中 → 到期复习 → 新卡，
+  // 否则按 Again 的卡会被排到一堆新卡后面，分钟级步骤就白设了。
+  const STUDY_ORDERS = ['sequential', 'random'];
 
   const DEFAULT_SETTINGS = {
+    studyOrder: 'sequential',
     learningSteps: [1, 10],
     graduatingInterval: 1,
     easyInterval: 4,
@@ -113,6 +118,9 @@
       Math.round(toNumber(input.maximumInterval, DEFAULT_SETTINGS.maximumInterval))
     );
     return {
+      studyOrder: STUDY_ORDERS.includes(input.studyOrder)
+        ? input.studyOrder
+        : DEFAULT_SETTINGS.studyOrder,
       learningSteps: normalizeSteps(input.learningSteps, DEFAULT_SETTINGS.learningSteps),
       graduatingInterval: Math.max(1, Math.round(toNumber(input.graduatingInterval, DEFAULT_SETTINGS.graduatingInterval))),
       easyInterval: Math.max(1, Math.round(toNumber(input.easyInterval, DEFAULT_SETTINGS.easyInterval))),
@@ -134,6 +142,9 @@
       id: typeof input.id === 'string' && input.id ? input.id : randomUUID(),
       front: typeof input.front === 'string' ? input.front : '',
       back: typeof input.back === 'string' ? input.back : '',
+      // 助记：谐音、口诀、联想这类帮助回忆的线索，只显示在答案面。
+      // 不参与调度，纯内容字段（同步时按 PC 为准）。
+      mnemonic: typeof input.mnemonic === 'string' ? input.mnemonic : '',
       // 类型：一张卡可属于多个类型，只影响分组与筛选，不参与调度。
       types: normalizeCardTypes(input.types),
       state: 'new',
@@ -162,6 +173,7 @@
       ...base,
       front: typeof input.front === 'string' ? input.front : '',
       back: typeof input.back === 'string' ? input.back : '',
+      mnemonic: typeof input.mnemonic === 'string' ? input.mnemonic : '',
       state,
       step: Math.max(0, Math.round(toNumber(input.step, 0))),
       interval: Math.max(0, Math.round(toNumber(input.interval, 0))),
@@ -435,8 +447,35 @@
     return String(a.dueAt || '').localeCompare(String(b.dueAt || ''));
   }
 
+  function byCreatedAt(a, b) {
+    return String(a.createdAt).localeCompare(String(b.createdAt));
+  }
+
+  // 随机顺序的排序键：FNV-1a 哈希「本地日期 + 卡片 id」。
+  // 不用 Math.random 是有意的——同一天内每次重建快照都得到同一套顺序，
+  // 进度条的「第 x / y 张」不会因为一次后台刷新就跳；跨天自动换一套。
+  function hashOrderKey(seed, id) {
+    const text = `${seed}#${String(id || '')}`;
+    let hash = 2166136261;
+    for (let i = 0; i < text.length; i += 1) {
+      hash ^= text.charCodeAt(i);
+      hash = Math.imul(hash, 16777619);
+    }
+    return hash >>> 0;
+  }
+
+  function sortGroup(group, byTime, settings, now) {
+    if (settings.studyOrder !== 'random') {
+      return group.sort(byTime);
+    }
+    const seed = toLocalDateKey(new Date(now));
+    return group.sort((a, b) => hashOrderKey(seed, a.id) - hashOrderKey(seed, b.id));
+  }
+
   // 复习队列：新卡单独一组（由调用方决定每天放几张），学习中的和到期的分开排。
-  function getQueue(cards, now = Date.now()) {
+  // options 传的是牌组设置，只有 studyOrder 参与排序，其余字段忽略。
+  function getQueue(cards, now = Date.now(), options = {}) {
+    const settings = normalizeSettings(options);
     const list = Array.isArray(cards) ? cards.map((card) => normalizeCard(card, {}, now)) : [];
     const newCards = [];
     const learning = [];
@@ -458,16 +497,16 @@
         scheduled.push(card);
       }
     }
-    newCards.sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)));
-    learning.sort(byDueAt);
-    due.sort(byDueAt);
-    scheduled.sort(byDueAt);
+    sortGroup(newCards, byCreatedAt, settings, now);
+    sortGroup(learning, byDueAt, settings, now);
+    sortGroup(due, byDueAt, settings, now);
+    sortGroup(scheduled, byDueAt, settings, now);
     return { newCards, learning, due, scheduled };
   }
 
-  function getStats(cards, now = Date.now()) {
+  function getStats(cards, now = Date.now(), options = {}) {
     const list = Array.isArray(cards) ? cards.map((card) => normalizeCard(card, {}, now)) : [];
-    const queue = getQueue(list, now);
+    const queue = getQueue(list, now, options);
     const today = toLocalDateKey(new Date(now));
     const reviewedToday = list.filter((card) => (
       card.lastReviewedAt && toLocalDateKey(new Date(card.lastReviewedAt)) === today
@@ -496,6 +535,7 @@
     MINUTE_MS,
     DAY_MS,
     RATINGS,
+    STUDY_ORDERS,
     DEFAULT_SETTINGS,
     normalizeSettings,
     normalizeCard,

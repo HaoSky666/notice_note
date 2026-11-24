@@ -7227,6 +7227,37 @@ body[data-theme="nte_eloi"] .workspace-tab.is-active {
   color: var(--mv-muted);
 }
 
+/* 助记块：答案面下方的一条线索，用左侧色条和答案区分，不抢正文的视觉重量。 */
+.memory-card-mnemonic {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 11px 16px 13px;
+  border-left: 3px solid var(--mv-accent);
+  border-radius: 0 10px 10px 0;
+  background: var(--mv-accent-soft);
+}
+
+.memory-card-mnemonic[hidden] {
+  display: none;
+}
+
+.memory-card-mnemonic-label {
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  color: var(--mv-accent);
+}
+
+.memory-card-mnemonic-text {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 14px;
+  line-height: 1.72;
+  color: var(--mv-text);
+}
+
 .memory-stage-foot {
   display: flex;
   flex-direction: column;
@@ -7492,6 +7523,86 @@ body[data-theme="nte_eloi"] .workspace-tab.is-active {
   background: var(--mv-soft);
 }
 
+/* ---------- 背面审阅（AI 认为卡片答案有误/不全） ---------- */
+/* 只是提示和一份可复制的草稿，不做自动改写：
+   左边一道竖线把它和「判定结果」区分开，避免误读成评分理由。 */
+.memory-answer-review {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 11px 13px;
+  border: 1px solid var(--mv-border);
+  border-left: 3px solid var(--mv-muted);
+  border-radius: 10px;
+  background: var(--mv-surface);
+}
+
+.memory-answer-review[hidden] {
+  display: none;
+}
+
+.memory-answer-review-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+}
+
+.memory-answer-review-badge {
+  flex: 0 0 auto;
+  padding: 1px 9px;
+  border: 1px solid var(--mv-border);
+  border-radius: 999px;
+  background: var(--mv-soft);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.7;
+  color: var(--mv-muted);
+}
+
+/* 事实错误比「写得不全」严重，用告警色区分开 */
+.memory-answer-review-badge[data-verdict="wrong"] {
+  border-color: var(--mv-danger);
+  color: var(--mv-danger);
+}
+
+.memory-answer-review-note {
+  min-width: 0;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--mv-muted);
+}
+
+.memory-answer-review-text {
+  max-height: 240px;
+  overflow: auto;
+  padding: 10px 12px;
+  border: 1px solid var(--mv-border);
+  border-radius: 8px;
+  background: var(--mv-soft);
+  color: var(--mv-text);
+  font-size: 13px;
+  line-height: 1.75;
+  white-space: pre-wrap;
+  word-break: break-word;
+  user-select: text;
+}
+
+.memory-answer-review-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.memory-answer-review-hint {
+  margin-right: auto;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--mv-muted);
+}
+
 /* ---------- 作答历史 ---------- */
 .memory-answer-history {
   flex: 0 0 auto;
@@ -7719,6 +7830,15 @@ body[data-theme="nte_eloi"] .workspace-tab.is-active {
   line-height: 1.7;
 }
 
+/* 助记独占一行、比正反面矮：它是补充线索，不是主内容。 */
+.memory-mnemonic-field {
+  margin-top: 16px;
+}
+
+.memory-mnemonic-field textarea {
+  min-height: 88px;
+}
+
 .memory-field textarea::placeholder {
   color: var(--mv-muted);
   opacity: 0.7;
@@ -7875,7 +7995,8 @@ body[data-theme="nte_eloi"] .workspace-tab.is-active {
   box-shadow: 0 0 0 3px var(--mv-accent-soft);
 }
 
-.memory-setting-control input {
+.memory-setting-control input,
+.memory-setting-control select {
   flex: 1;
   min-width: 0;
   padding: 7px 10px;
@@ -7886,7 +8007,12 @@ body[data-theme="nte_eloi"] .workspace-tab.is-active {
   font-variant-numeric: tabular-nums;
 }
 
-.memory-setting-control input:focus {
+.memory-setting-control select {
+  cursor: pointer;
+}
+
+.memory-setting-control input:focus,
+.memory-setting-control select:focus {
   outline: none;
 }
 
@@ -8114,6 +8240,11 @@ body[data-theme="nte_eloi"] .workspace-tab.is-active {
 
 .memory-quick-body .memory-quick-back {
   min-height: 220px;
+}
+
+/* 助记弹框比建卡弹框矮：一段线索写不了几行。 */
+.memory-quick-body .memory-quick-mnemonic {
+  min-height: 120px;
 }
 
 .memory-quick-body .memory-type-field {

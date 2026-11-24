@@ -55,6 +55,76 @@ function memPersist() {
   });
 }
 
+// 助记编辑：手机端唯一能改的内容字段。
+// 保存后给卡片打 mnemonicDirty，同步合并时才会采纳手机这一版；
+// 没打标记的旧快照不会把 PC 后来改的助记顶回去。
+let memMnemonicEditingId = null;
+
+function memOpenMnemonicDialog(cardId) {
+  const card = memFindCard(cardId);
+  const dialog = document.querySelector('#memMnemonicDialog');
+  const input = document.querySelector('#memMnemonicInput');
+  const remove = document.querySelector('#memMnemonicDelete');
+  if (!card || !dialog || !input) {
+    return;
+  }
+  memMnemonicEditingId = card.id;
+  input.value = card.mnemonic || '';
+  if (remove) {
+    remove.hidden = !String(card.mnemonic || '').trim();
+  }
+  // 同一个 dialog 连续 showModal 会抛错，先收起再弹。
+  if (dialog.open) {
+    dialog.close();
+  }
+  dialog.showModal();
+  window.setTimeout(() => {
+    input.focus();
+    const end = input.value.length;
+    input.setSelectionRange(end, end);
+  }, 0);
+}
+
+function memCloseMnemonicDialog() {
+  document.querySelector('#memMnemonicDialog')?.close();
+  memMnemonicEditingId = null;
+}
+
+function memSaveMnemonic(value) {
+  const cardId = memMnemonicEditingId;
+  const library = memGetLibrary();
+  const cards = library?.memory?.cards;
+  memCloseMnemonicDialog();
+  if (!cardId || !Array.isArray(cards)) {
+    return;
+  }
+  const index = cards.findIndex((card) => card.id === cardId);
+  if (index < 0) {
+    return;
+  }
+  const next = String(value || '').trim();
+  if (next === String(cards[index].mnemonic || '').trim()) {
+    return;
+  }
+  cards[index] = {
+    ...cards[index],
+    mnemonic: next,
+    mnemonicDirty: true,
+    updatedAt: new Date().toISOString()
+  };
+  NoticeNoteStore.addToDirty('cardIds', cardId);
+  memPersist();
+  memRender();
+}
+
+function memSaveMnemonicFromDialog() {
+  memSaveMnemonic(document.querySelector('#memMnemonicInput')?.value || '');
+}
+
+function memDeleteMnemonic() {
+  memSaveMnemonic('');
+}
+
 // 评分落库：从评分前的卡状态重新调度（改判也走这里），更新/追加作答记录。
 function memApplyRating(rating, { source, reason = '', answer = '' }) {
   const library = memGetLibrary();
@@ -68,7 +138,18 @@ function memApplyRating(rating, { source, reason = '', answer = '' }) {
     return;
   }
   const preCard = session.preCard || cards[index];
-  const next = NoticeNoteSm2Scheduler.scheduleCard(preCard, rating, library.memory.settings || {}, Date.now());
+  // 会话开始后可能改过助记；评分回写的是整张卡，不带上最新内容会把助记冲回旧值。
+  // 调度仍用 preCard（改判不叠加），内容字段取当前卡。
+  const base = {
+    ...preCard,
+    mnemonic: cards[index].mnemonic,
+    mnemonicDirty: cards[index].mnemonicDirty
+  };
+  const next = NoticeNoteSm2Scheduler.scheduleCard(base, rating, library.memory.settings || {}, Date.now());
+  // scheduleCard 内部会 normalizeCard，只保留白名单字段，标记会被洗掉，这里补回来。
+  if (base.mnemonicDirty) {
+    next.mnemonicDirty = true;
+  }
   cards[index] = next;
   NoticeNoteStore.addToDirty('cardIds', next.id);
 
@@ -178,7 +259,9 @@ async function memCallAi(card, answer, history) {
   };
   const data = await memAiRequest(endpoint, headers, payload, cfg);
   const content = data?.choices?.[0]?.message?.content || '';
-  return NoticeNoteAiJudge.parseJudgeReply(content);
+  const parsed = NoticeNoteAiJudge.parseJudgeReply(content);
+  // 和 PC 同一道去重：建议跟卡片原文一字不差就不提示。
+  return { ...parsed, ...NoticeNoteAiJudge.normalizeAnswerReview(parsed, card.back) };
 }
 
 async function memSubmitAi() {
@@ -273,6 +356,88 @@ function memRenderRatingButtons(container, { compact = false } = {}) {
     bar.append(button);
   }
   container.append(bar);
+}
+
+// 背面审阅：AI 认为卡片自己的答案有误/不全时，给一版可复制的替换答案。
+// 手机端没有编辑入口（卡片只在 PC 上写），所以这里只提示 + 复制，
+// 文案要写清「去电脑端改」，否则会以为手机上能直接改。
+function memRenderAnswerReview(area, judgeResult) {
+  const verdict = judgeResult?.answerVerdict;
+  const suggestion = String(judgeResult?.suggestedBack || '').trim();
+  if ((verdict !== 'wrong' && verdict !== 'partial') || !suggestion) {
+    return;
+  }
+  const box = document.createElement('div');
+  box.className = 'mem-answer-review';
+
+  const head = document.createElement('div');
+  head.className = 'mem-answer-review-head';
+  const badge = document.createElement('strong');
+  badge.className = 'mem-answer-review-badge';
+  badge.dataset.verdict = verdict;
+  badge.textContent = verdict === 'wrong' ? '卡片答案有误' : '卡片答案不全';
+  head.append(badge);
+  const note = String(judgeResult.answerNote || '').trim();
+  if (note) {
+    const noteEl = document.createElement('p');
+    noteEl.className = 'mem-answer-review-note';
+    noteEl.textContent = note;
+    head.append(noteEl);
+  }
+
+  const text = document.createElement('div');
+  text.className = 'mem-answer-review-text';
+  text.textContent = suggestion;
+
+  const actions = document.createElement('div');
+  actions.className = 'mem-answer-review-actions';
+  const hint = document.createElement('span');
+  hint.className = 'mem-answer-review-hint';
+  hint.textContent = '到电脑端改这张卡的背面';
+  const copy = document.createElement('button');
+  copy.type = 'button';
+  copy.className = 'secondary-action mem-answer-review-copy';
+  copy.textContent = '复制';
+  copy.addEventListener('click', async () => {
+    try {
+      await memWriteClipboard(suggestion);
+      copy.textContent = '已复制';
+    } catch {
+      copy.textContent = '复制失败';
+    }
+    window.setTimeout(() => {
+      copy.textContent = '复制';
+    }, 1500);
+  });
+  actions.append(hint, copy);
+
+  box.append(head, text, actions);
+  area.append(box);
+}
+
+// WebView 里 navigator.clipboard 偶发不可用（没焦点、权限被拒、非安全上下文），
+// 这时退回 textarea + execCommand；两条都失败才报错。
+async function memWriteClipboard(text) {
+  if (navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return;
+    } catch {
+      // 继续走兜底
+    }
+  }
+  const temp = document.createElement('textarea');
+  temp.value = text;
+  temp.setAttribute('readonly', '');
+  temp.style.position = 'fixed';
+  temp.style.opacity = '0';
+  document.body.append(temp);
+  temp.select();
+  const ok = document.execCommand('copy');
+  temp.remove();
+  if (!ok) {
+    throw new Error('copy failed');
+  }
 }
 
 function memRenderStudy() {
@@ -373,6 +538,36 @@ function memRenderStudy() {
   back.innerHTML = renderMarkdown(card.back || '');
   area.append(back);
 
+  // 助记只在答案面出现，和 PC 一致；问题面给线索等于泄题。
+  // 手机端可以在答案面直接写/改，这是手机上唯一能编辑的内容字段。
+  const mnemonic = String(card.mnemonic || '').trim();
+  if (mnemonic) {
+    const note = document.createElement('div');
+    note.className = 'mem-mnemonic';
+    const head = document.createElement('div');
+    head.className = 'mem-mnemonic-head';
+    const label = document.createElement('span');
+    label.className = 'mem-mnemonic-label';
+    label.textContent = '助记';
+    const edit = document.createElement('button');
+    edit.type = 'button';
+    edit.className = 'mem-mnemonic-edit';
+    edit.textContent = '编辑';
+    edit.addEventListener('click', () => memOpenMnemonicDialog(card.id));
+    head.append(label, edit);
+    const text = document.createElement('p');
+    text.textContent = mnemonic;
+    note.append(head, text);
+    area.append(note);
+  } else {
+    const add = document.createElement('button');
+    add.type = 'button';
+    add.className = 'mem-mnemonic-add';
+    add.textContent = '＋ 写助记';
+    add.addEventListener('click', () => memOpenMnemonicDialog(card.id));
+    area.append(add);
+  }
+
   if (session.judgeResult) {
     const result = document.createElement('div');
     result.className = 'mem-judge-result';
@@ -385,6 +580,7 @@ function memRenderStudy() {
       result.append(reason);
     }
     area.append(result);
+    memRenderAnswerReview(area, session.judgeResult);
   }
   if (session.judgeError) {
     const errorBar = document.createElement('div');
@@ -547,3 +743,10 @@ function memRender() {
   hint.textContent = '评分与作答保存在手机本地，点笔记页「同步」后回传电脑。';
   panel.append(hint);
 }
+// 助记弹框只有一份，脚本在 body 末尾加载，这里绑一次即可。
+document.querySelector('#memMnemonicSave')?.addEventListener('click', memSaveMnemonicFromDialog);
+document.querySelector('#memMnemonicCancel')?.addEventListener('click', memCloseMnemonicDialog);
+document.querySelector('#memMnemonicDelete')?.addEventListener('click', memDeleteMnemonic);
+document.querySelector('#memMnemonicDialog')?.addEventListener('close', () => {
+  memMnemonicEditingId = null;
+});

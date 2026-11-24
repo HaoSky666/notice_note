@@ -79,6 +79,17 @@ test('getNewCardQuota 不会小于 0', () => {
   assert.equal(getNewCardQuota(cards, { newCardsPerDay: 1 }, NOW), 0);
 });
 
+test('mnemonic 跟着卡片落盘：新建保留，旧数据缺字段时补空串', () => {
+  const card = createCard({ id: 'm1', front: 'Q', back: 'A', mnemonic: '把路口堵上' }, NOW);
+  assert.equal(card.mnemonic, '把路口堵上');
+
+  // 老版本 cards.json 没有这个字段，读回来必须是空串而不是 undefined，
+  // 否则渲染层拼 'undefined'、同步时也会来回抖。
+  const store = normalizeCardStore([{ ...card, mnemonic: undefined }, { id: 'm2' }], {});
+  assert.equal(store.cards[0].mnemonic, '');
+  assert.equal(store.cards[1].mnemonic, '');
+});
+
 test('buildStudyQueue 按日限额截断新卡', () => {
   const cards = [
     createCard({ id: 'n1' }, NOW),
@@ -88,6 +99,62 @@ test('buildStudyQueue 按日限额截断新卡', () => {
   const queue = buildStudyQueue(cards, { newCardsPerDay: 2 }, NOW);
   assert.equal(queue.newCards.length, 2);
   assert.equal(queue.quota, 2);
+});
+
+test('studyOrder 默认按添加顺序，随机顺序只打散组内且当天固定', () => {
+  const cards = Array.from({ length: 12 }, (_, index) => (
+    createCard({ id: `n${index}` }, NOW + index * 1000)
+  ));
+
+  const byAddOrder = buildStudyQueue(cards, {}, NOW);
+  assert.deepEqual(byAddOrder.newCards.map((card) => card.id), cards.map((card) => card.id));
+
+  const random = buildStudyQueue(cards, { studyOrder: 'random' }, NOW);
+  const randomAgain = buildStudyQueue(cards, { studyOrder: 'random' }, NOW);
+  // 同一天内重建快照不能换顺序，否则「第 x / y 张」会跟着跳
+  assert.deepEqual(
+    random.newCards.map((card) => card.id),
+    randomAgain.newCards.map((card) => card.id)
+  );
+  assert.notDeepEqual(
+    random.newCards.map((card) => card.id),
+    byAddOrder.newCards.map((card) => card.id)
+  );
+
+  // 跨天自动换一套：同一天的随机只固定到当天，不变成「另一套固定顺序」
+  const tomorrow = buildStudyQueue(cards, { studyOrder: 'random' }, NOW + DAY_MS);
+  assert.notDeepEqual(
+    tomorrow.newCards.map((card) => card.id),
+    random.newCards.map((card) => card.id)
+  );
+});
+
+test('随机顺序不打乱组间优先级：学习中的卡仍然排在最前', () => {
+  const cards = [
+    createCard({ id: 'new-1' }, NOW),
+    reviewCard({ id: 'due-1', dueAt: new Date(NOW - 1000).toISOString() }),
+    reviewCard({
+      id: 'learning-1',
+      state: 'learning',
+      step: 1,
+      dueAt: new Date(NOW - 1000).toISOString()
+    })
+  ];
+  const queue = buildStudyQueue(cards, { studyOrder: 'random' }, NOW);
+  assert.equal(pickNextCard(queue).id, 'learning-1');
+  assert.equal(queue.learning.length, 1);
+  assert.equal(queue.due.length, 1);
+  assert.equal(queue.newCards.length, 1);
+});
+
+test('studyOrder 非法值回落按顺序，随机设置能透传到快照', () => {
+  assert.equal(normalizeMemorySettings({}).studyOrder, 'sequential');
+  assert.equal(normalizeMemorySettings({ studyOrder: 'random' }).studyOrder, 'random');
+  assert.equal(normalizeMemorySettings({ studyOrder: 'shuffle' }).studyOrder, 'sequential');
+
+  // 快照里的 settings 要带出去，渲染层才能回填下拉框
+  const snapshot = buildMemorySnapshot([createCard({ id: 'n1' }, NOW)], { studyOrder: 'random' }, NOW);
+  assert.equal(snapshot.settings.studyOrder, 'random');
 });
 
 test('pickNextCard 优先学习中的卡，其次是到期复习，最后新卡', () => {

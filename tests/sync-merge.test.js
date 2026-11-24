@@ -63,6 +63,42 @@ test('手机复习更近：调度取手机，内容仍取 PC', () => {
   assert.equal(merged.updatedAt, '2026-11-14T00:00:00.000Z');
 });
 
+test('手机没标记改过助记：旧快照不会盖掉 PC 的值', () => {
+  const pc = card({ mnemonic: 'PC 新写的口诀' });
+  const phone = card({
+    mnemonic: '上次同步的旧值',
+    interval: 30,
+    dueAt: '2026-12-20T00:00:00.000Z',
+    lastReviewedAt: '2026-11-14T00:00:00.000Z'
+  });
+  const { card: merged, scheduleFrom } = mergeMemoryCard(pc, phone);
+  assert.equal(scheduleFrom, 'phone', '调度仍然取手机');
+  assert.equal(merged.mnemonic, 'PC 新写的口诀', '没有 mnemonicDirty 时助记仍以 PC 为准');
+  assert.equal(merged.interval, 30);
+});
+
+test('手机改过助记：带 mnemonicDirty 就采纳，正反面仍取 PC', () => {
+  const pc = card({ mnemonic: 'PC 的旧口诀', front: '问题（PC 改过）' });
+  const phone = card({
+    front: '问题（旧）',
+    mnemonic: '手机上重写的口诀',
+    mnemonicDirty: true,
+    lastReviewedAt: null
+  });
+  const { card: merged, changed } = mergeMemoryCard(pc, phone);
+  assert.equal(merged.mnemonic, '手机上重写的口诀', '手机明确改过的助记要能回传');
+  assert.equal(merged.front, '问题（PC 改过）', '手机不能改正反面，仍取 PC');
+  assert.equal(changed, true, '只改助记也要触发落盘');
+});
+
+test('手机清空助记（mnemonicDirty + 空串）：PC 的助记被删掉', () => {
+  const pc = card({ mnemonic: '要删掉的口诀' });
+  const phone = card({ mnemonic: '', mnemonicDirty: true, lastReviewedAt: null });
+  const { card: merged, changed } = mergeMemoryCard(pc, phone);
+  assert.equal(merged.mnemonic, '');
+  assert.equal(changed, true);
+});
+
 test('PC 复习更近：整卡用 PC，手机的数据不参与', () => {
   const pc = card({ interval: 60, lastReviewedAt: '2026-11-15T00:00:00.000Z' });
   const phone = card({ interval: 30, lastReviewedAt: '2026-11-14T00:00:00.000Z' });
