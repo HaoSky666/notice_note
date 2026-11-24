@@ -2140,6 +2140,8 @@ display: none;
   border-bottom: 1px solid var(--nn-line-400);
   display: flex;
   align-items: flex-end;
+  /* tab 列表在记忆视图里会隐藏，剩余的通知铃要留在右侧。 */
+  justify-content: flex-end;
   background: var(--nn-canvas-deep);
 }
 
@@ -2150,6 +2152,11 @@ display: none;
   display: flex;
   align-items: flex-end;
   scrollbar-width: none;
+}
+
+/* 记忆视图独占主工作区时收起文件 tab 列表（文件仍保持打开）。 */
+.workspace-tabs[hidden] {
+  display: none;
 }
 
 .workspace-tabs::-webkit-scrollbar {

@@ -46,7 +46,19 @@ function syncSidebarToWorkspaceTab(tab) {
       : findSidebarEntry("[data-file-id]", "fileId", tab.id);
   target?.scrollIntoView({ behavior: "smooth", block: "nearest" });
 }
+// 记忆卡是主工作区的独占视图，记忆视图打开时文件 tab 列表整体收起。
+// 只切显示、不动 workspaceTabs 数组：文件不会关，切回其他视图原样恢复。
+function syncWorkspaceTabsVisibility() {
+  if (!workspaceTabsRoot) {
+    return;
+  }
+  const memoryViewOpen = typeof memoryView !== "undefined"
+    && Boolean(memoryView)
+    && !memoryView.hidden;
+  workspaceTabsRoot.hidden = memoryViewOpen;
+}
 function renderWorkspaceTabs() {
+  syncWorkspaceTabsVisibility();
   if (draggedWorkspaceTabKey) {
     return;
   }
@@ -434,6 +446,11 @@ function clearBlurRevealScope(scope) {
 }
 function showWorkspaceTab(tab, { deferContent = false } = {}) {
   closeViewerSearch();
+  // 记忆视图独占主工作区，不先退出的话文件会渲染在它下面、用户看不见。
+  // 通知中心、外部打开这类不经过侧栏按钮的入口都靠这里兜底。
+  if (typeof memoryView !== "undefined" && memoryView && !memoryView.hidden) {
+    closeMemoryView();
+  }
   const tabKey = getWorkspaceTabKey(tab.type, tab.id);
   if (activeWorkspaceTabKey !== tabKey) {
     saveActiveWorkspaceTabViewState();

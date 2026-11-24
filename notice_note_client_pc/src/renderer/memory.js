@@ -110,6 +110,7 @@ async function openMemoryView() {
   editorPanel.hidden = true;
   pdfViewer.hidden = true;
   fileViewer.hidden = true;
+  syncWorkspaceTabsVisibility();
   memoryViewMode = "study";
   // 每次进视图都重取一次：跨天、外部改过文件、切换笔记库后都能立刻对齐。
   await ensureMemorySnapshot(true);
@@ -129,11 +130,12 @@ function closeMemoryView() {
   if (!memoryView || memoryView.hidden) {
     return;
   }
-  memoryView.hidden = true;
   // 模态框挂在 body 上，不跟着视图隐藏，得显式收掉。
   if (memoryMnemonicDialog?.open) {
     memoryMnemonicDialog.close();
   }
+  memoryView.hidden = true;
+  syncWorkspaceTabsVisibility();
   memoryViewMode = "study";
   memoryRevealed = false;
   resetMemoryJudgeState();
